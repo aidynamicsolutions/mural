@@ -1,0 +1,8 @@
+{
+  "name": "mural-simulator-tools",
+  "private": true,
+  "description": "Pinned browser simulator tooling for MaiChat verification",
+  "dependencies": {
+    "serve-sim": "0.1.46"
+  }
+}

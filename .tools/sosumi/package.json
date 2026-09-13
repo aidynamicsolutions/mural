@@ -1,0 +1,8 @@
+{
+  "name": "mural-sosumi-cli",
+  "private": true,
+  "description": "Project-local Sosumi documentation CLI",
+  "dependencies": {
+    "@nshipster/sosumi": "github:NSHipster/sosumi.ai#be92a75846369ebe621bfb60f168ce244b830228"
+  }
+}
