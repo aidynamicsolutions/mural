@@ -1,5 +1,24 @@
 # Mural local conversation MVP: implementation plan
 
+## Phase 3 accepted: human feedback and next scope
+
+The user reports **everything in the supplied Phase 3 checklist passed** and accepts the conversation-only feasibility milestone. This is human-confirmed behavior, not agent-observed speech or a new measured benchmark. No further testing or implementation was performed in response to this feedback.
+
+- English/Vietnamese mixed speech was recognized correctly in the user's replay; exact transcripts were not supplied. No universal recognition-accuracy claim.
+- Actual local conversation worked with both Wi-Fi and cellular/4G disconnected. The user describes response speed as quite fast; exact per-turn response gaps were not supplied.
+- Initial preparation was approximately **208 seconds**; after force-quitting and reopening, approximately **6 seconds**. These are user-reported totals, not component measurements. Consistent with the earlier cached-preparation pattern; cache mechanism/lifetime is not proven and first-use cost can recur.
+- The user's overall checklist pass includes the requested English TTS/readiness and End-during-thinking/speaking checks; no separate detailed traces or outputs were supplied.
+- **Known tutor-quality limitation, explicitly deferred:** repetitive supermarket/store/carrot conversation and repeated requests to practise very similar sentences, instead of naturally progressing or varying topics. Improve conversation progression and avoid unnecessary repetition later; do not tune prompts/models now.
+- **UX TODO for Phase 4:** remove preparation, Send-to-reply and Send-to-audio timings from the ordinary Talk surface. Retain content-free diagnostics in an optional diagnostic disclosure/probe, not permanently in the conversation. Keep a clear Preparing/Ready status.
+- **UX TODO for Phase 5:** provide a discoverable way to reveal Vietnamese meaning for the completed English sentence without asking the tutor aloud. Reuse the planned on-device Meaning feature; consider sentence tap or a labeled Meaning action. Preserve word-tap lookup as a distinct interaction and ensure accessibility. Translation must stay local; do not enable the existing premium translation closure. Final interaction design remains to be decided.
+- Phase 2's accepted silence failure remains unchanged: `Để mình check lại thông tin trước khi thi.` was invented from silence, including the mostly silent capped turn. In the integrated loop it can trigger an unsolicited reply. Silence is not fixed or passed.
+- Installed build remains Release 0.1.0 (1), `com.kevintruong.mural.dev`, SHA-256 `bf0c54925e1edad9c0ebd742631df9fc9dcf78f3eaf90b618ae2f05ecdadac22`, with retained `phowhisper-cs-fp16-v1` and ANE-capable encoder. No new deployment, capture, model change, data change or subagents.
+- Evidence limits remain: no exact latency distribution, hardware placement, sustained 20-minute soak, or live premium regression established here. Prior incomplete syslog is not proof of zero network attempts. These do not change the recorded human acceptance of this milestone.
+
+**Next-session scope: Phase 4 only**, covering durable separate turns/history, mode/consent/privacy integration and safe transitions, plus the small timing-display cleanup above. Phase 5 remains local Meaning/lookup/Help/typed replies and conservative assessment. Phase 6 remains final sustained acceptance. Do not reopen Phase 3 for these additions. The user requests a fresh-session handoff to begin Phase 4. Use `mvp_implementation_prompt.md`; this session updates documentation only. Continue paired testing: agent builds/installs/launches, user tests, no duplicate agent UI/audio automation.
+
+This acceptance supersedes the PENDING HUMAN/wait-for-feedback labels in the historical deployment checkpoint below.
+
 ## Current execution workflow (user override, September 14, 2026)
 
 The user confirmed direct paired verification to reduce latency and token use. This is the active workflow for every remaining phase: the implementation agent handles engineering and deployment; the user tests real behavior on the physical phone. Do not delegate to another agent or wait for a tester report.
@@ -15,11 +34,11 @@ The user confirmed direct paired verification to reduce latency and token use. T
 
 
 
-## Current decision: Phase 2 ACCEPTED FOR MVP WITH KNOWN SILENCE FAILURE; Phase 3 NEXT
+## Current decision: Phase 2 accepted with silence exception; Phase 3 ACCEPTED; Phase 4 NEXT
 
 **Latest explicit user override:** the user accepts the retained FP16 PhoWhisper CS / ANE-capable encoder configuration for MVP progression and authorizes closing Phase 2 despite the observed silence hallucination. This is acceptance with a documented exception, not an unconditional technical pass or a claim that silence handling is fixed. It supersedes historical UNPASSED/PENDING HUMAN/Phase 3 on-hold instructions below and the original no-invented-silence prerequisite for advancing. No other privacy, lifecycle or downstream acceptance requirements are waived.
 
-**This session is documentation-only. Phase 3 has NOT started.** The next session/new agent should implement Phase 3's manual-turn local conversation loop, not resume model selection, compression, ANE optimization or a silence fix. See the rewritten `mvp_implementation_prompt.md`. Further profiling, 8-bit per-tensor compression and VAD are deferred, not prerequisites for Phase 3.
+**Phase 3 is ACCEPTED from the user's integrated-loop feedback above.** Phase 4 is the next-session implementation scope; do not resume model selection, compression, ANE optimization or a silence fix. See the rewritten `mvp_implementation_prompt.md`. Further profiling, 8-bit per-tensor compression and VAD are deferred, not prerequisites for Phase 3.
 
 ### Final Phase 2 observations and explicit exception
 
@@ -52,9 +71,26 @@ All following final phone observations are **human-reported**, not agent-driven 
 
 Deployment/previous numeric evidence: `.build/verification/local-mvp-phase-2/phowhisper/fp16-ane-compare-v1/result.md`, `fp16-gpu-profile-v1/recovered-asr.log`, and earlier versioned compression reports. Those historical reports may still say pending; **the latest human acceptance and silence exception are recorded here as the controlling state**. GPU signed rollback app is retained at `fp16-gpu-profile-v1/Mural.app`. No captures are active; do not signal historical PIDs. Instruments saw the phone offline; actual hardware trace unavailable. Device log collection ignores predicates on attached devices: the previously collected broad archive was deleted after filtered Mural extraction. Do not silently collect another broad archive.
 
+## Historical Phase 3 deployment checkpoint: then PENDING HUMAN, now accepted
+
+This deployment checkpoint predates the human acceptance recorded above. Its pending labels and wait instructions are historical, not current instructions. Preserve its evidence; proceed with Phase 4 in the next session.
+
+- Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `bf0c54925e1edad9c0ebd742631df9fc9dcf78f3eaf90b618ae2f05ecdadac22`; source base `ddfb703af15ec166793e3d0672374c001423ba81` plus uncommitted Phase 3 changes. Starting checkout was clean; prior implementation/history preserved.
+- Built using `.build/local-mvp-phase-1-device-derived-data`, installed in place and launched on rediscovered Kevq, iPhone 17/iPhone18,3, iOS 27.0 (24A435), UDID `00008150-000D25942278401C`. Agent process inspection confirmed PID 24859 after launch.
+- Retained `phowhisper-cs-fp16-v1`, manifest `7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52`, 3,101,573,848 runtime bytes, ANE-capable encoder configuration unchanged. No asset transfer, model/tokenizer/decode changes, signing changes or cache deletion. Actual ANE placement remains unverified.
+- Talk has explicit GPT-Live / On-device selection; missing preference remains premium. Local start validates English + Vietnamese settings. Prepare & start awaits the existing ASR owner, then speaks the fixed greeting. Record/Send invokes finalized ASR, a bounded Apple tutor request and completed-reply TTS. End/background cancel work and prevent restart until old workers drain. New Send-to-reply and TTS-delegate Send-to-audio timings are shown on Talk.
+- Conversation-only: local records remain in memory, latest finalized turns remain visible until reset/restart, no durable history or learning evidence. Meaning/lookup/Help/typing/themes/search and premium finish/assessment paths are guarded off for local mode. Vietnamese was added to the existing language selector only to enable this required pair; broader Phase 4 onboarding/privacy/persistence and Phase 5 features remain deferred.
+- Agent observed successful Release build/install/launch, running process, premium-default Talk and its mode menu through Device Hub. Agent did NOT select local/start preparation, record speech, invoke tutor, listen to TTS or pass the integrated gate. The user interrupted visual inspection and requested immediate handoff. Local layout, readiness and busy states remain PENDING HUMAN.
+- Build warnings: existing AVAudioSession interruption API deprecation, existing LiveTransport async-alternative warning, and no-AppIntents metadata warning. Build succeeded; no new framework/test suite or project regeneration was needed.
+- A bounded eight-second Mural-only syslog attempt returned only `[connected]`; it was stopped. No app timing/error events recovered, so this is not proof of zero network attempts. No broad device log archive collected. Device Hub quit requested before handoff; no owned capture remains active. Do not signal historical PIDs.
+- Phase 2 remains ACCEPTED FOR MVP WITH KNOWN SILENCE FAILURE: three seconds of silence produced `Để mình check lại thông tin trước khi thi.` The mostly silent capped turn produced the same text; the 30-second cap passed, silence did not. A nonempty hallucination may now cause an unsolicited tutor reply. No silence filtering/remediation added.
+- Evidence: `.build/verification/local-mvp-phase-3/` (build-final.log, install.log, launch.log, process.log, device.txt, executable.sha256, device-events.log, Talk/menu screenshots, result.md). No commits, pushes, publication, subagents, or active profiling.
+
+**Historical handoff checklist (subsequently human-accepted):** On phone: Settings > Learning language: English, Meaning language: Vietnamese; Talk > mode menu (currently GPT-Live) > On-device > Prepare & start. Wait for the fixed greeting and Ready. After preparation, End, disable Wi-Fi/cellular, relaunch, Prepare & start again. Complete ten Record/Send exchanges including `Today I went to... siêu thị. I don't know that word in English.`, a modeled English repetition, and `Tôi không hiểu câu đó.` Check useful simpler English without spoken Vietnamese quotations, no Record during thinking/playback, readiness afterward. End during thinking and speaking, checking no late speech or recording. Report exact ASR/reply/errors, preparation and displayed Send-to-reply/Send-to-audio seconds, heat/crash issues. No repeated Phase 2 suite or silence prerequisite. Offline coexistence/latency/teaching and cancellation remain PENDING HUMAN; Phase 6 soak and premium response checks have not been run.
+
 ## Historical Phase 2 execution journal (not current instructions)
 
-The following dated/superseded checkpoints preserve the investigation and failures. Their old next actions, active labels and stop gates do not override the current explicit MVP acceptance above. The implementation sequence below has been updated to resume at Phase 3.
+The following dated/superseded checkpoints preserve the investigation and failures. Their old next actions, active labels and stop gates do not override the current explicit MVP acceptance above. The implementation sequence below resumes at Phase 4; Phase 3 is human-accepted.
 
 ## Historical comparison: FP16 ANE-capable encoder installed, then PENDING HUMAN
 
@@ -226,7 +262,7 @@ MAIChat's `VoiceToTextService.swift` demonstrates reusable ASR initialization an
 
 ### Execution and paired-verification rules
 
-1. Work on one phase/checkpoint at a time. Resume at Phase 3 under the current explicit Phase 2 MVP acceptance and silence exception. Do not restart Phase 0, Phase 2 conversion/compression or the completed ASR-only checks. Keep manual Record/Send, the approved fixed candidate, Apple English TTS, bounded model sessions, and last-passage-only assessment after End. Do not add downstream features to work around a failed gate.
+1. Work on one phase/checkpoint at a time. Resume at Phase 4 under the current Phase 3 human acceptance and retained Phase 2 silence exception. Do not restart Phase 0, Phase 2 conversion/compression or the completed ASR-only checks. Keep manual Record/Send, the approved fixed candidate, Apple English TTS, bounded model sessions, and assessment disabled until Phase 5 (then last-passage-only after End). Do not add downstream features to work around a failed gate.
 2. Read `.agents/skills/verify-mural/SKILL.md` and `.agents/skills/verify-mural/features/local-conversation.md`. Follow their local paired-verification procedures directly. Do not discover, spawn, resume, or wait for a tester or any other subagent.
 3. Implement and inspect the affected code. Use the actual model/dependency APIs. For phone checkpoints, build an optimized Release app, discover the connected iPhone, install in place, launch, and inspect build/launch/device logs. Preserve the existing signed identity `com.kevintruong.mural.dev` using the documented build override, not a second install. Keep the dirty checkout and user data; no unauthorized commit/push/publication.
 4. Once that build is ready, give the user the exact entry point, selected model, button sequence, a short speech/listening checklist, expected observations, and what to report. Start with a small relevant batch, not a long replay of all earlier phases. The user should test the app, not compile it or operate development tools. Fully quit Device Hub before user microphone tests.
@@ -269,7 +305,7 @@ Read and listen to each real response. English stays short and natural; Vietname
 
 ### Phase 2: prove microphone ASR independently
 
-**Current status: ACCEPTED FOR MVP WITH A KNOWN SILENCE FAILURE by explicit user decision. Retain FP16 PhoWhisper CS with the ANE-capable encoder and advance to Phase 3 next session. See the current decision above for final human checks, cached preparation, first-attempt recognition failure, and the narrowly scoped silence waiver. Historical unpassed states below are preserved, not operative.**
+**Current status: ACCEPTED FOR MVP WITH A KNOWN SILENCE FAILURE by explicit user decision. Retain FP16 PhoWhisper CS with the ANE-capable encoder unchanged through Phase 4; Phase 3 is already human-accepted. See the current decision above for final human checks, cached preparation, first-attempt recognition failure, and the narrowly scoped silence waiver. Historical unpassed states below are preserved, not operative.**
 
 **Historical Nemotron result, September 14, 2026: FAILED.** The user confirmed preparation, recording/Send, single-language recognition, and recovery passed. In mixed speech, `siêu thị` became `Silti`, `cái từ này` became `kai too ni`, and the reverse-switch example lost `appointment` and returned `Ngày mai nói thế nào bằng tiếng Ân`. Exact human-reported outputs and log evidence are in [the Phase 2 report](.build/verification/local-mvp-phase-2/result.md). The supplied short-answer output was `Yes, then a separate no`; separate isolated Yes/No acceptance is not established by that combined output. Recording-state feedback was reported unclear and is deferred at the user's request. Source inspection confirms auto/full vocabulary/1120ms, forced prefix disabled by library default, ordered process/finish/reset; logs contain 14 finalized turns and no explicit ASR turn/preparation failures. These checks do not prove the audio path is flawless, but no concrete configuration error was found. Do not use tutor guessing, force a monolingual prompt, or add downstream integration to conceal these losses. Resolve this gate or obtain an explicit revised scope first.
 
@@ -353,7 +389,7 @@ References: [Apple compression workflow](https://apple.github.io/coremltools/doc
 
 ### Phase 3: connect the testable audio loop
 
-**NEXT SESSION: authorized next phase, NOT STARTED.** Use the retained FP16/ANE-capable recognizer. The user explicitly deferred the known silence hallucination; do not reopen Phase 2 or add a silence/VAD fix as a prerequisite. Explain that nonempty hallucinations may trigger tutor replies. Keep genuinely empty results from triggering replies. Other safety/privacy and actual integrated-loop acceptance gates remain in force.
+**ACCEPTED: user reports the supplied integrated-loop checklist passed.** Use the retained FP16/ANE-capable recognizer. The user explicitly deferred the known silence hallucination; do not reopen Phase 2 or add a silence/VAD fix as a prerequisite. Explain that nonempty hallucinations may trigger tutor replies. Keep genuinely empty results from triggering replies. Other safety/privacy and actual integrated-loop acceptance gates remain in force.
 
 ```text
 fixed greeting -> ready
@@ -373,6 +409,8 @@ user taps Record -> capture/buffer audio -> user taps Send
 **Gate:** the learner can communicate and receive useful English bridges offline without frequent lost words, misleading corrections, intolerable waits, or instability. Stop with the measured bottleneck if not; do not build around an unusable loop.
 
 ### Phase 4: integrate Mural records, mode routing, and privacy
+
+**NEXT SESSION: implement Phase 4 only.** Preserve Phase 3 acceptance and its known limitations. Include the requested small UX cleanup: move preparation and response timing numbers out of normal Talk into optional diagnostics; retain clear preparation/readiness states. Sentence-level Vietnamese Meaning and tutor repetition improvements remain deferred. Do not add hosting or claim a model download exists: the retained PhoWhisper assets are development-only local installations.
 
 Implement sections 7 and 8. Add Vietnamese, explicit mode selection, truthful consent/status, durable finalized transcripts with turn boundaries, and safe teardown. Keep premium transport essentially unchanged.
 

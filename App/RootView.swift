@@ -65,7 +65,7 @@ struct RootView: View {
                 ToolbarItem(placement: .topBarLeading) { Brand().fixedSize() }.sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Local tutor probe", systemImage: "flask") { localProbe = true }
-                        .disabled(coordinator.isRunning)
+                        .disabled(coordinator.isRunning || coordinator.localResourcesBusy)
                         .accessibilityIdentifier("local-tutor-probe")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -87,29 +87,33 @@ struct TalkView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 0) {
-                    Text(coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
+                    Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
+                        ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.menu).disabled(!coordinator.canChangeMode)
+                        .accessibilityIdentifier("conversation-mode")
+                    Text(coordinator.isLocal ? "English · Vietnamese support" : coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
                         .font(.system(.caption, design: .rounded, weight: .medium)).foregroundStyle(MuralColor.secondary)
                         .padding(.horizontal, 14).padding(.vertical, 9).background(MuralColor.butter.opacity(0.58), in: Capsule()).padding(.top, 12)
                     Spacer(minLength: 8)
-                    MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.state == .active && !coordinator.isMuted, active: coordinator.state != .closing)
+                    MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing)
                         .frame(width: typeSize.isAccessibilitySize ? 170 : 220, height: typeSize.isAccessibilitySize ? 180 : 222).padding(.vertical, 8)
-                    Text(coordinator.status).font(.system(.caption, design: .rounded)).foregroundStyle(MuralColor.secondary)
+                    Text(coordinator.status).font(.system(.caption, design: .rounded)).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                         .contentTransition(.numericText()).padding(.top, 6).padding(.bottom, 16).accessibilityAddTraits(.updatesFrequently)
                         .accessibilityIdentifier("conversation-status")
                     captionArea
                     Spacer(minLength: 12)
-                    controls
+                    if coordinator.isLocal { localControls } else { controls }
                     Text(coordinator.microphoneLabel).font(.caption2).foregroundStyle(MuralColor.secondary).padding(.top, 10)
                         .accessibilityIdentifier("microphone-status")
                     HStack(spacing: 24) {
-                        if coordinator.state == .active {
+                        if coordinator.state == .active && !coordinator.isLocal {
                             Button("Type instead", systemImage: "keyboard") { typing = true }
                             Button("A little help", systemImage: "sparkles") { coordinator.help() }
-                        } else if coordinator.session == nil {
+                        } else if coordinator.session == nil && !coordinator.isLocal {
                             Text("Reply in whichever language comes to you.").foregroundStyle(MuralColor.secondary)
-                        } else if !coordinator.isRunning {
+                        } else if !coordinator.isRunning && coordinator.session != nil {
                             Button("New conversation", systemImage: "arrow.counterclockwise") { coordinator.resetConversation() }
-                                .accessibilityIdentifier("new-conversation")
+                                .accessibilityIdentifier("new-conversation").disabled(coordinator.localResourcesBusy)
                         }
                     }.font(.caption).padding(.top, 6).padding(.bottom, 12)
                     if let notice = coordinator.notice {
@@ -130,10 +134,10 @@ struct TalkView: View {
             Text(linkedCaption).font(.system(coordinator.assistantPassage == nil ? .largeTitle : .title2, design: .rounded, weight: .medium))
                 .tracking(-0.5).multilineTextAlignment(.center).tint(MuralColor.ink)
                 .environment(\.openURL, OpenURLAction { url in
-                    guard url.scheme == "mural-word", let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let word = components.queryItems?.first?.value else { return .discarded }
+                    guard !coordinator.isLocal, url.scheme == "mural-word", let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let word = components.queryItems?.first?.value else { return .discarded }
                     lookup = WordLookup(word: word, sentence: coordinator.caption); return .handled
                 }).accessibilityIdentifier("target-caption")
-            if coordinator.store.preferences.meaningVisible {
+            if !coordinator.isLocal && coordinator.store.preferences.meaningVisible {
                 Text(coordinator.assistantPassage == nil ? MeaningLanguages.greeting(in: coordinator.store.preferences.meaningLanguage) : !coordinator.meaning.isEmpty ? coordinator.meaning : coordinator.translating ? "Finding the meaning…" : "")
                     .font(.subheadline).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                     .accessibilityIdentifier("meaning-caption")
@@ -147,7 +151,7 @@ struct TalkView: View {
             if let user = coordinator.userPassage {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("YOU").font(.system(.caption2, design: .rounded, weight: .medium))
-                    Text(String(user.text.suffix(160))).font(.caption)
+                    Text(coordinator.isLocal ? user.text : String(user.text.suffix(160))).font(.caption).textSelection(.enabled)
                 }.foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center).padding(.top, 3)
             }
             if coordinator.working { ProgressView("Checking that for you…").font(.caption).tint(MuralColor.secondary) }
@@ -162,11 +166,69 @@ struct TalkView: View {
             var part = AttributedString((i > 0 ? " " : "") + word)
             var components = URLComponents(); components.scheme = "mural-word"; components.host = "lookup"
             components.queryItems = [URLQueryItem(name: "word", value: word)]
-            if coordinator.assistantPassage != nil { part.link = components.url }
+            if !coordinator.isLocal && coordinator.assistantPassage != nil { part.link = components.url }
             part.foregroundColor = MuralColor.ink; result.append(part)
         }
         return result
     }
+    private var localControls: some View {
+        VStack(spacing: 12) {
+            if coordinator.isRunning {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { localTurnButtons }
+                    VStack(spacing: 12) { localTurnButtons }
+                }
+                if coordinator.canRetryLocalReply {
+                    Button("Retry reply") { coordinator.retryLocalReply() }.frame(minHeight: 44)
+                }
+            } else {
+                Button("Prepare & start", systemImage: "play.fill") { coordinator.start() }
+                    .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
+                    .controlSize(.large).disabled(coordinator.localResourcesBusy)
+                    .accessibilityIdentifier("local-conversation-start")
+            }
+            if let seconds = coordinator.localAudio.preparationSeconds {
+                Text("Preparation: \(seconds, specifier: "%.1f") s").font(.caption).monospacedDigit()
+            }
+            if let seconds = coordinator.localReplySeconds {
+                Text("Send to reply: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
+            }
+            if let seconds = coordinator.localAudio.sendToPlaybackSeconds {
+                Text("Send to audio: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
+                    .accessibilityIdentifier("local-response-gap")
+            }
+            DisclosureGroup("On-device feasibility build") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PhoWhisper CS FP16 → Apple tutor → English system voice. No OpenAI key or cloud inference. Tap Record only after Mural finishes speaking; tap Send when done.")
+                    Text("Silence can produce invented text and an unsolicited tutor reply. Recognition is accepted for MVP with this known limitation; silence detection is not implemented.")
+                    Text("Conversation only: no saved history, meanings, lookup, Help, typing, themes, or learning evidence. Your existing saved data is unchanged.")
+                    Text("Uses the speech assets already installed on this phone (3.10 GB plus caches). No model download source is configured. Keep the app open during preparation.")
+                    if !coordinator.localAudio.preparationDetail.isEmpty { Text(coordinator.localAudio.preparationDetail) }
+                    if let seconds = coordinator.localAudio.finalizeSeconds {
+                        Text("ASR: \(seconds, specifier: "%.2f") s")
+                    }
+                    if let seconds = coordinator.localModelSeconds {
+                        Text("Model: \(seconds, specifier: "%.2f") s")
+                    }
+                }.font(.footnote).padding(.top, 8)
+            }.font(.footnote)
+        }.foregroundStyle(MuralColor.ink)
+    }
+
+    @ViewBuilder private var localTurnButtons: some View {
+        Button(coordinator.localAudio.asrState == .recording ? "Send" : "Record",
+               systemImage: coordinator.localAudio.asrState == .recording ? "arrow.up" : "mic") {
+            if coordinator.localAudio.asrState == .recording { coordinator.sendLocal() }
+            else { coordinator.recordLocal() }
+        }.buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
+            .controlSize(.large)
+            .disabled(!coordinator.canRecordLocal && coordinator.localAudio.asrState != .recording)
+            .accessibilityIdentifier("local-conversation-record-send")
+        Button("End", systemImage: "stop.fill") { coordinator.end() }
+            .buttonStyle(.bordered).controlSize(.large)
+            .accessibilityIdentifier("local-conversation-end")
+    }
+
     private var controls: some View {
         HStack(alignment: .center, spacing: 27) {
             Button { coordinator.toggleMeaning() } label: {
@@ -338,7 +400,7 @@ private struct LocalTutorProbeView: View {
             Text("Record English, Vietnamese, or both. Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
             if audio.asrModel == .phoWhisper {
                 Text("PhoWhisper large-v2 + VI/EN code-switch LoRA · FP16 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
-                Text("Development-only local installation: 3.10 GB plus Core ML caches. No model download is configured. Prepare verifies the installed assets, then warms the models. Keep the app open. Silence can still produce invented text; phone quality is not yet accepted.").font(.footnote)
+                Text("Development-only local installation: 3.10 GB plus Core ML caches. No model download is configured. Prepare verifies the installed assets, then warms the models. Keep the app open. Recognition is accepted for MVP with a known silence hallucination; silence can still produce invented text.").font(.footnote)
             } else if audio.asrModel == .parakeet {
                 Text("Parakeet CTC 0.6B · Vietnamese–English · community Core ML conversion · 16 kHz mono. This test is limited to 15 seconds per turn; recognition starts after Send.").font(.footnote)
                 Text("Prepare on Wi-Fi: about 1.19 GB plus Core ML caches. Keep the app open during first preparation. Whisper and Nemotron's cached files are kept.").font(.footnote)

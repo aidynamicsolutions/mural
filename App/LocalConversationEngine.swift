@@ -40,6 +40,8 @@ import WhisperKit
     private var capture: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>.Continuation?
     private var generation = UUID()
     private var submittedAt: Double?
+    var lastSubmissionTime: Double? { submittedAt }
+    private(set) var sendToPlaybackSeconds: Double?
     private var variantDirectory: URL?
     private var ownsAudio = false
     private var audioRelease: Task<Void, Never>?
@@ -107,6 +109,10 @@ import WhisperKit
             guard let self, self.utterance === utterance else { return }
             self.playbackStartedAt = time
             self.playbackStartSeconds = time - self.requestedAt
+            self.sendToPlaybackSeconds = self.submittedAt.map { time - $0 }
+            if let gap = self.sendToPlaybackSeconds {
+                self.logger.notice("local_audio_started send_to_audio_seconds=\(gap, privacy: .public)")
+            }
             self.logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public)")
         }
     }
@@ -145,6 +151,32 @@ import WhisperKit
         guard ownsAudio else { return }
         ownsAudio = false
         audioRelease = Task { _ = try? await AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) }
+    }
+
+    /// Await the existing single ASR owner, including its defer cleanup, before TTS.
+    func prepareConversation() async throws {
+        try Task.checkCancellation()
+        guard canPrepare else { throw SpeechError.busy }
+        selectASR(.phoWhisper)
+        submittedAt = nil; sendToPlaybackSeconds = nil
+        prepareASR()
+        await asrTask?.value
+        try Task.checkCancellation()
+        guard canRecord, asrState == .ready else {
+            throw CaptureError.operation(asrError ?? "Speech preparation did not finish. Start again.")
+        }
+    }
+
+    func recordConversationTurn() async throws -> String {
+        try Task.checkCancellation()
+        guard canRecord else { throw SpeechError.busy }
+        record()
+        await asrTask?.value
+        try Task.checkCancellation()
+        guard asrState == .ready else {
+            throw CaptureError.operation(asrError ?? "Recording did not finish. Try Record again.")
+        }
+        return asrText
     }
 
     func selectASR(_ model: ASRModel) {
@@ -242,6 +274,7 @@ import WhisperKit
         let model = asrModel.rawValue
         let token = UUID(); generation = token
         asrText = ""; asrError = nil; asrNotice = nil; finalizeSeconds = nil; submittedAt = nil; capturedSeconds = 0
+        sendToPlaybackSeconds = nil
         asrState = .warming
         asrTask = Task { [weak self] in
             guard let self else { return }
@@ -518,7 +551,7 @@ import WhisperKit
                 skipSpecialTokens: true, windowClipTime: 0, concurrentWorkerCount: 1)
             if phoWhisper {
                 // Exact Mac parity settings: greedy, no timestamps or threshold-based
-                // turn dropping. Silence behavior remains a required human gate.
+                // turn dropping. Silence hallucination is accepted for MVP and deferred, not fixed.
                 options.temperatureFallbackCount = 0
                 options.withoutTimestamps = true
                 options.suppressBlank = true
@@ -553,9 +586,10 @@ import WhisperKit
     }
 
     private enum CaptureError: LocalizedError {
-        case microphone, format, overloaded, audioSession, tooLong
+        case microphone, format, overloaded, audioSession, tooLong, operation(String)
         var errorDescription: String? {
             switch self {
+            case .operation(let message): message
             case .microphone: "Allow microphone access in iPhone Settings > Mural, then tap Record again."
             case .format: "The microphone format is unavailable. Disconnect other audio devices and reopen the probe."
             case .overloaded: "Speech processing could not keep up. No partial turn was accepted. Try a shorter recording."

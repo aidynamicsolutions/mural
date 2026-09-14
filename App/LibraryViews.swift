@@ -16,6 +16,7 @@ struct ThemesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                if coordinator.isLocal { Text("Themes and topic search are unavailable in the on-device conversation-only build. Use Talk to record a turn.").font(.footnote) }
                 PageHeading(eyebrow: "A place to begin", title: "What’s on\nyour mind?", subtitle: "Same friend. Somewhere new.")
                 Button { choose(nil) } label: {
                     HStack { Image(systemName: "waveform"); Text("Just talk"); Spacer(); Image(systemName: "arrow.up.right") }
@@ -47,6 +48,7 @@ struct ThemesView: View {
                 if themes.isEmpty { ContentUnavailableView.search(text: search) }
             }.padding(24)
         }.foregroundStyle(MuralColor.ink)
+            .disabled(coordinator.isLocal)
             .searchable(text: $search, prompt: "Find a conversation")
             .sheet(isPresented: $current) { CurrentTopicView(coordinator: coordinator) { choose(coordinator.selectedTheme) } }
     }
@@ -300,10 +302,11 @@ struct SettingsView: View {
                     LearningLanguagePicker(coordinator: coordinator)
                     Toggle("Meaning subtitles", isOn: Binding(get: { store.preferences.meaningVisible }, set: { value in
                         if value != store.preferences.meaningVisible { coordinator.toggleMeaning() }
-                    }))
+                    })).disabled(coordinator.isLocal)
                     Picker("Meaning language", selection: Binding(get: { store.preferences.meaningLanguage }, set: { coordinator.selectMeaningLanguage($0) })) {
                         ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
                     }
+                    .disabled(coordinator.isLocal && coordinator.isRunning)
                     LabeledContent("Corrections", value: "Gently, as we talk")
                     TextField("A few things you enjoy", text: Binding(get: { store.preferences.interests }, set: { value in store.updatePreferences { $0.interests = String(value.prefix(500)) } }), axis: .vertical)
                 } header: { Text("Just your pace") } footer: { Text(coordinator.isRunning ? "End this conversation to switch languages. Each language keeps its own words and progress." : "Each language keeps its own words and progress. Mural finds your pace through conversation.") }
@@ -335,7 +338,7 @@ struct SettingsView: View {
                     } label: { Label("Use your own API key", systemImage: "key").accessibilityIdentifier("advanced-api-key") }
                     if let message { Text(message).font(.footnote).foregroundStyle(MuralColor.secondary) }
                 } header: { Text("Advanced") } footer: {
-                    if !hasKey { Text("This version uses your OpenAI API key to start a conversation.") }
+                    if !hasKey { Text("GPT-Live uses your OpenAI API key. The on-device feasibility build in Talk does not need a key.") }
                 }
                 Section {
                     Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
@@ -367,9 +370,9 @@ struct SettingsView: View {
                 } header: { Text("Help and privacy") }
                 Section {
                     Text("Mural 0.1 · Personal build").font(.footnote)
-                    Text("Voice: GPT-Live-1 · Teacher: GPT-5.6 Luna").font(.footnote)
+                    Text("GPT-Live: GPT-Live-1 voice · GPT-5.6 Luna teacher").font(.footnote)
                     Link("OpenAI data controls", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
-                    Text("Audio and selected text go to OpenAI while you practise. Requests disable provider storage where supported; abuse-monitoring retention may still apply. Raw audio is not saved by Mural.").font(.footnote)
+                    Text("In GPT-Live mode, audio and selected text go to OpenAI while you practise. Requests disable provider storage where supported; abuse-monitoring retention may still apply. Raw audio is not saved by Mural.").font(.footnote)
                     Button("Open-source notices") { notices = true }
                 }
             }.scrollContentBackground(.hidden).background(MuralColor.cream).tint(MuralColor.secondary)
