@@ -5,6 +5,10 @@ description: Verify Mural by building and launching its iOS app, using serve-sim
 
 # Verify Mural
 
+## Local MVP workflow override
+
+For local MVP work, follow `mvp_plan.md`'s current paired-verification workflow: the implementation agent builds/installs/launches directly and the user performs phone speech/listening checks. Do not spawn tester subagents. Read `features/local-conversation.md`. Local probes need no OpenAI key; the key requirement and `--verify-audio`/`--verify-meaning` helpers below are premium-only. Preserve the confirmed existing phone bundle `com.kevintruong.mural.dev` using a build override, rather than installing the public default alongside it. Discover devices; use iOS 27 and Release for local timing.
+
 ## Purpose
 
 Prove Mural through the closest practical user path. A successful build or an acknowledged tap is supporting evidence, not proof that the app works.

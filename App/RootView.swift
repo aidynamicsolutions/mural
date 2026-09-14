@@ -1,10 +1,12 @@
 import SwiftUI
+import AVFoundation
 import MuralCore
 
 struct RootView: View {
     @State private var coordinator: ConversationCoordinator
     @State private var tab = 0
     @State private var onboarding = false
+    @State private var localProbe = false
     @Environment(\.scenePhase) private var scenePhase
     init(store: LearningStore) {
         let coordinator = ConversationCoordinator(store: store)
@@ -28,6 +30,7 @@ struct RootView: View {
         }
         .tint(MuralColor.ink)
         .sheet(isPresented: $coordinator.showSettings) { SettingsView(coordinator: coordinator) }
+        .sheet(isPresented: $localProbe) { LocalTutorProbeView() }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
             AIConsentView(agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
         }
@@ -60,6 +63,11 @@ struct RootView: View {
         NavigationStack {
             content().background(MuralColor.cream).toolbar {
                 ToolbarItem(placement: .topBarLeading) { Brand().fixedSize() }.sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Local tutor probe", systemImage: "flask") { localProbe = true }
+                        .disabled(coordinator.isRunning)
+                        .accessibilityIdentifier("local-tutor-probe")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { coordinator.showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
                         .accessibilityLabel("Settings")
@@ -234,5 +242,186 @@ struct TypedReplyView: View {
             }.padding(26).foregroundStyle(MuralColor.ink).background(MuralColor.cream)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }.presentationDetents([.medium, .large]).onAppear { focused = true }
+    }
+}
+
+/// Visible feasibility entry, including optimized device builds. Not a saved conversation.
+private struct LocalTutorProbeView: View {
+    @State private var audio = LocalConversationEngine()
+    @State private var speechProbe = true
+    @State private var text = ""
+    @State private var reply = ""
+    @State private var history: [String] = []
+    @State private var worker: Task<Void, Never>?
+    @State private var timeout: Task<Void, Never>?
+    @State private var status = "Ready"
+    @State private var error: String?
+    @State private var availability = LocalTutorModel.availabilityMessage
+    @State private var locales = LocalTutorModel.localeStatus
+    @State private var timings = ""
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker("Probe", selection: $speechProbe) {
+                    Text("Speech recognition").tag(true)
+                    Text("Apple tutor").tag(false)
+                }.disabled(worker != nil || audio.asrBusy)
+                if speechProbe {
+                    speechSections
+                } else {
+                Section("Phase 1 · Apple tutor") {
+                    Text("Text → on-device Apple model → English system speech. No OpenAI key or cloud inference. This probe does not save conversations or award learning evidence.")
+                    Text(locales).font(.footnote)
+                    Text(availability ?? "Apple model available").accessibilityIdentifier("local-model-availability")
+                    Button("Check availability again") { refresh() }.disabled(worker != nil)
+                }
+                Section("Your message") {
+                    TextField("English, Vietnamese, or both", text: $text, axis: .vertical)
+                        .lineLimit(3...8).focused($focused).autocorrectionDisabled()
+                        .accessibilityIdentifier("local-probe-input")
+                    Button("Send", systemImage: "arrow.up") { send() }
+                        .disabled(worker != nil || availability != nil || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("local-probe-send")
+                }
+                Section("Actual reply") {
+                    Text(status).accessibilityIdentifier("local-probe-status")
+                    if !reply.isEmpty { Text(reply).textSelection(.enabled).accessibilityIdentifier("local-probe-reply") }
+                    if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("local-probe-error") }
+                    if !timings.isEmpty { Text(timings).font(.footnote).monospacedDigit() }
+                    Text(audio.voiceDescription).font(.footnote)
+                    if let startup = audio.playbackStartSeconds {
+                        Text("TTS delegate startup: \(startup, specifier: "%.2f") s").font(.footnote)
+                    }
+                    if let duration = audio.playbackDurationSeconds {
+                        Text("TTS delegate duration: \(duration, specifier: "%.2f") s. Confirm audible speech by listening.").font(.footnote)
+                    }
+                }
+                }
+            }
+            .navigationTitle("Local conversation probe").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { stop(); dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Stop") { stop() }.disabled(worker == nil && !audio.asrBusy && !audio.canRecord)
+                }
+            }
+        }
+        .onDisappear { stop() }
+        .onChange(of: speechProbe) { stop() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { stop() }
+            else { refresh() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { _ in stop() }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { notification in
+            if let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+               raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { stop() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange)) { _ in
+            if audio.asrState == .recording { stop() }
+        }
+    }
+
+    @ViewBuilder private var speechSections: some View {
+        Section("Phase 2 · Microphone only") {
+            Picker("Speech model", selection: Binding(get: { audio.asrModel }, set: { audio.selectASR($0) })) {
+                ForEach(LocalConversationEngine.ASRModel.allCases, id: \.self) { model in
+                    Text(model.rawValue).tag(model)
+                }
+            }.disabled(audio.asrBusy).accessibilityIdentifier("local-asr-model")
+            Text("Record English, Vietnamese, or both. Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
+            if audio.asrModel == .phoWhisper {
+                Text("PhoWhisper large-v2 + VI/EN code-switch LoRA · FP16 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
+                Text("Development-only local installation: 3.10 GB plus Core ML caches. No model download is configured. Prepare verifies the installed assets, then warms the models. Keep the app open. Silence can still produce invented text; phone quality is not yet accepted.").font(.footnote)
+            } else if audio.asrModel == .parakeet {
+                Text("Parakeet CTC 0.6B · Vietnamese–English · community Core ML conversion · 16 kHz mono. This test is limited to 15 seconds per turn; recognition starts after Send.").font(.footnote)
+                Text("Prepare on Wi-Fi: about 1.19 GB plus Core ML caches. Keep the app open during first preparation. Whisper and Nemotron's cached files are kept.").font(.footnote)
+            } else if audio.asrModel == .whisper {
+                Text("Whisper large-v3-turbo · 626 MB variant · auto language · 16 kHz mono. Recognition starts after Send; Mixed-language recognition improved in testing but can still lose words or add text.").font(.footnote)
+                Text("Prepare on Wi-Fi first: about 627 MB plus tokenizer and Core ML caches. First preparation can take several minutes. Nemotron's cached files are kept.").font(.footnote)
+            } else {
+                Text("Nemotron · full multilingual vocabulary · auto · 1120 ms · 16 kHz mono. Mixed-language recognition failed earlier tests.").font(.footnote)
+                Text("Prepare on Wi-Fi first: about 664 MB plus preparation space, or reuse cached files. Whisper's cached files are kept.").font(.footnote)
+            }
+            Text("Only one speech model is loaded at a time.").font(.footnote)
+            Button("Prepare speech models") { audio.prepareASR() }.disabled(!audio.canPrepare)
+            if audio.asrError != nil, audio.canPrepare, audio.asrModel != .phoWhisper {
+                Button("Repair download") { audio.prepareASR(repairDownload: true) }
+            }
+            Text(audio.asrState.rawValue).accessibilityIdentifier("local-asr-status")
+            if audio.asrBusy && audio.asrState != .recording { ProgressView() }
+            if let seconds = audio.preparationSeconds {
+                Text("Total preparation: \(seconds, specifier: "%.1f") s").font(.footnote)
+            }
+            if !audio.preparationDetail.isEmpty { Text(audio.preparationDetail).font(.footnote) }
+        }
+        Section("Your recording") {
+            Text(audio.inputDescription).font(.footnote)
+            Button("Record", systemImage: "mic") { audio.record() }.disabled(!audio.canRecord)
+                .accessibilityIdentifier("local-asr-record")
+            Button("Send recording", systemImage: "arrow.up") { audio.finishRecording() }
+                .disabled(audio.asrState != .recording).accessibilityIdentifier("local-asr-send")
+            Text("Speak for up to \(audio.recordingLimitSeconds) seconds, then tap Send recording. Stop discards an unfinished recording and unloads the models.").font(.footnote)
+        }
+        Section("Finalized recognition · \(audio.asrModel.rawValue)") {
+            Text(audio.asrText.isEmpty ? "No finalized text" : audio.asrText)
+                .textSelection(.enabled).accessibilityIdentifier("local-asr-text")
+            if let notice = audio.asrNotice { Text(notice).font(.footnote) }
+            if let error = audio.asrError { Text(error).foregroundStyle(.red) }
+            if let seconds = audio.finalizeSeconds {
+                Text("Captured audio: \(audio.capturedSeconds, specifier: "%.2f") s · Send to final: \(seconds, specifier: "%.2f") s").font(.footnote)
+            }
+        }
+    }
+
+    private func refresh() {
+        availability = LocalTutorModel.availabilityMessage
+        locales = LocalTutorModel.localeStatus
+    }
+
+    private func stop() {
+        timeout?.cancel(); timeout = nil
+        worker?.cancel(); audio.stop()
+        if worker != nil { status = "Stopping…" }
+    }
+
+    private func send() {
+        guard worker == nil else { return }
+        refresh()
+        guard availability == nil else { return }
+        focused = false
+        let input = text, context = history
+        error = nil; reply = ""; timings = ""; status = "Thinking…"
+        worker = Task { @MainActor in
+            defer { timeout?.cancel(); timeout = nil; worker = nil }
+            do {
+                let result = try await LocalTutorModel().reply(to: input, history: context)
+                try Task.checkCancellation()
+                reply = result.text
+                history = Array((context + ["Learner: \(input)", "Mural: \(result.text)"]).suffix(6))
+                timings = String(format: "Model first output: %.2f s · full reply: %.2f s", result.firstOutputSeconds, result.fullResponseSeconds)
+                timeout?.cancel(); timeout = nil
+                status = "Speaking…"
+                do { try await audio.speak(result.text) }
+                catch is CancellationError { throw CancellationError() }
+                catch { self.error = error.localizedDescription; status = "Speech unavailable"; return }
+                try Task.checkCancellation()
+                status = "Ready"
+            } catch {
+                if Task.isCancelled { status = "Stopped" }
+                else { self.error = LocalTutorModel.message(for: error); status = "Reply unavailable" }
+            }
+        }
+        timeout = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(45)) } catch { return }
+            worker?.cancel(); audio.stop()
+            error = "The Apple model took too long. Wait a moment and try Send again."
+        }
     }
 }

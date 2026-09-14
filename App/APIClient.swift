@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import MuralCore
 
 final class NoRedirect: NSObject, URLSessionTaskDelegate {
@@ -17,6 +18,7 @@ struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUs
         session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
     }
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
+        Logger(subsystem: "no.william.mural", category: "CloudBoundary").notice("OpenAI request attempted")
         guard let key = CredentialStore.read() else { throw APIError.missingKey }
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/" + path)!)
         request.httpMethod = "POST"; request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")

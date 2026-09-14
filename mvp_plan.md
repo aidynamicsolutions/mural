@@ -1,5 +1,156 @@
 # Mural local conversation MVP: implementation plan
 
+## Current execution workflow (user override, September 14, 2026)
+
+The user confirmed direct paired verification to reduce latency and token use. This is the active workflow for every remaining phase: the implementation agent handles engineering and deployment; the user tests real behavior on the physical phone. Do not delegate to another agent or wait for a tester report.
+
+- The implementation agent implements, builds, installs, launches, and inspects build/device logs directly. Do not spawn subagents. Preserve the dirty checkout, installed identity/data, and do not commit without authorization.
+- Before handing off a phone checkpoint, build the optimized app, install it in place, launch it, and inspect build/launch/device logs. State whether the changed build is actually installed and running; do not hand the user build commands as their testing task.
+- Give the user a short numbered checklist with the exact entry point, selected model, button labels, sentences to say, expected result, and what to report (exact transcript/error, timings, screenshot if useful). The user performs real phone actions, speech, and listening, then reports results or failures.
+- Once the build is ready, hand it over promptly and wait for that feedback rather than running duplicate UI/audio automation. Keep a scoped log capture when useful; inspect it after the user reports back. Do not imply continuous observation between conversation turns.
+- Record user observations as human-confirmed, not agent-observed. Preserve screenshots/logs and use the existing `verify-mural` procedures where applicable.
+- Diagnose failures from the user's exact action, visible result, and available logs; fix and provide a focused replay. Do not repeat already-passed checks without a relevant change.
+- Keep the existing phase order, feasibility stop gates, offline/privacy requirements, data safety, and no-new-test-suite scope. Advance only when the phase's required evidence and user acceptance are established; no tester-agent report is required.
+
+
+
+
+## Current decision: Phase 2 ACCEPTED FOR MVP WITH KNOWN SILENCE FAILURE; Phase 3 NEXT
+
+**Latest explicit user override:** the user accepts the retained FP16 PhoWhisper CS / ANE-capable encoder configuration for MVP progression and authorizes closing Phase 2 despite the observed silence hallucination. This is acceptance with a documented exception, not an unconditional technical pass or a claim that silence handling is fixed. It supersedes historical UNPASSED/PENDING HUMAN/Phase 3 on-hold instructions below and the original no-invented-silence prerequisite for advancing. No other privacy, lifecycle or downstream acceptance requirements are waived.
+
+**This session is documentation-only. Phase 3 has NOT started.** The next session/new agent should implement Phase 3's manual-turn local conversation loop, not resume model selection, compression, ANE optimization or a silence fix. See the rewritten `mvp_implementation_prompt.md`. Further profiling, 8-bit per-tensor compression and VAD are deferred, not prerequisites for Phase 3.
+
+### Final Phase 2 observations and explicit exception
+
+All following final phone observations are **human-reported**, not agent-driven microphone tests. The user reported all eight supplied checks passing except silence (#2) and the transcript shown after the cap (#7), then clarified #7 was mostly silence and automatic stopping around 30 seconds worked.
+
+| Check | Recorded outcome |
+|---|---|
+| Separate Yes / No | Human-reported pass; exact texts/timings not supplied. |
+| Three-second silence | FAILED: invented `Để mình check lại thông tin trước khi thi.` |
+| Two-second word-search pause | Human-reported pass. |
+| Fresh unrelated next turn | Human-reported pass. |
+| Stop during finalization / reprepare / fresh turn | Human-reported pass; no detailed timings supplied. |
+| Background during recording / reopen / reprepare | Human-reported pass. |
+| Thirty-second cap | Human confirms automatic stop around 30 seconds. Recording was mostly silence and produced the same invented text. Cap behavior passed; this is not evidence that 30 seconds of continuous speech was lost or successfully transcribed. |
+| Wi-Fi/cellular-off cached relaunch, prepare and mixed recognition | Human-reported pass; exact offline transcript/timing not supplied. |
+
+**Deferred defect:** silence, including a mostly silent capped recording, can produce `Để mình check lại thông tin trước khi thi.` The user explicitly accepts proceeding with this behavior for MVP. Do not label silence passed, delete the failure, hardcode this sentence as a rejection rule, add transcript replacements or silently drop legitimate short/quiet speech. In the integrated loop, such a hallucinated nonempty transcript can reach the tutor and cause an unsolicited reply; disclose this known limitation rather than claim no speech was present or filtered. No silence/VAD remediation is requested for Phase 3 by this handoff. Existing handling for genuinely empty ASR must remain: no user turn/tutor request.
+
+### Retained configuration and results
+
+- Installed Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `50fbf078e0d4f41c0f3063562f513e180269f66c7602f0cf828ce01c73cb64b4`. Last verified Kevq iPhone 17/iPhone18,3, iOS 27.0 (24A435); rediscover current device ID next session.
+- Retain `phowhisper-cs-fp16-v1`, encoder **CPU_AND_NE permitted**, decoder CPU_AND_NE permitted. Actual per-op ANE placement remains unverified. Matching local-only tokenizer/control-token fix and pinned decoding unchanged. Runtime files 3,101,573,848 bytes excluding manifest/Core ML caches; no hosting/download source, existing development-only local assets stay installed.
+- First ANE-capable preparation human-reported 215.2 s: verification 2.85 s, prewarm 205.98 s, load/tokenizer 6.33 s. It completed despite exceeding the suggested first-prepare time budget.
+- Send-to-final 4.44 s first supermarket, **3.19 s for the FAILED first mixed-phở attempt**, 1.57 s last supermarket. The mixed first attempt was entirely Vietnamese; exact string not supplied. Its successful retry timing is unknown. Do not count 3.19 s as a successful bilingual benchmark.
+- After force-close/reopen, user reported preparation **6.3 s**: verification 2.3 s, prewarm 3 s, load/tokenizer 0.97 s; the same transcriptions then all correct and fast, without exact output strings/per-turn times. This is consistent with a persisted Core ML specialization cache, not proof of its internals or guaranteed future cache retention. Different microphone recordings do not establish model nondeterminism.
+- User accepts recognition/performance tradeoffs for this MVP. Known earlier siêu thị, borrow/lend and occasional language-switch failures remain; no universal accuracy claim. Actual ANE memory/per-op placement and sustained resource behavior are not established. GPU memory figures must not be relabeled as ANE measurements. ASR alongside the Apple tutor, full response gaps and the later soak still need their designated integration gates.
+- 4/6/8-bit grouped-channel candidates failed saved-corpus fidelity and are NOT retained. Preserve failed artifacts/evidence, but do not rerun the ladder. 8-bit per-tensor was never run and is now deferred.
+
+### Evidence and handoff status
+
+Deployment/previous numeric evidence: `.build/verification/local-mvp-phase-2/phowhisper/fp16-ane-compare-v1/result.md`, `fp16-gpu-profile-v1/recovered-asr.log`, and earlier versioned compression reports. Those historical reports may still say pending; **the latest human acceptance and silence exception are recorded here as the controlling state**. GPU signed rollback app is retained at `fp16-gpu-profile-v1/Mural.app`. No captures are active; do not signal historical PIDs. Instruments saw the phone offline; actual hardware trace unavailable. Device log collection ignores predicates on attached devices: the previously collected broad archive was deleted after filtered Mural extraction. Do not silently collect another broad archive.
+
+## Historical Phase 2 execution journal (not current instructions)
+
+The following dated/superseded checkpoints preserve the investigation and failures. Their old next actions, active labels and stop gates do not override the current explicit MVP acceptance above. The implementation sequence below has been updated to resume at Phase 3.
+
+## Historical comparison: FP16 ANE-capable encoder installed, then PENDING HUMAN
+
+Release0.1.0 (1), com.kevintruong.mural.dev, executable SHA-256 `50fbf078e0d4f41c0f3063562f513e180269f66c7602f0cf828ce01c73cb64b4` installed/launched on rediscovered Kevq iPhone17. Only change from GPU timing build is encoder CPU_AND_NE permission instead of CPU_AND_GPU plus truthful configuration log. Same FP16 weights/manifest/pins, tokenizer, decoder and decode options. No actual ANE placement or preparation success established. GPU signed rollback bundle retained at `fp16-gpu-profile-v1/Mural.app`, hash454aac591edb6e8a5a2f9fb37c27bee761dea7d7817db64c154c89c619505c6e.
+
+Next human action: Prepare PhoWhisper CS once with Device Hub closed; keep foreground, wait at most3minutes, then Stop/report if not Ready, no blind retries. If Ready, Record/Send supermarket, mixed phở, supermarket (same exact three phrases in evidence). Report preparation breakdown, exact outputs and all Send-to-final times; stop/report a finalization over60s. Compare GPU70.262s preparation and9.77/4.44/3.74s Send-to-final. ANE memory/thermal/quality/latency PENDING HUMAN; no live capture or working Instruments trace, content-free unified timing logs retained in app. Never silently collect broad device logs (predicate ignored on attached-device collection).
+
+Evidence: `.build/verification/local-mvp-phase-2/phowhisper/fp16-ane-compare-v1/result.md`, build/install/launch/process logs. No compression/export change, subagents or publication. Phase2 UNPASSED, Phase3 on hold; 8-bit per-tensor NOT STARTED.
+
+## Historical checkpoint: FP16/GPU timing baseline installed, then PENDING HUMAN
+
+User authorized FP16 profiling then a bounded ANE encoder test before any further compression. This supersedes the previous requirement to wait for a passing compressed phone candidate before ANE. Do not change precision and compute backend together. An 8-bit per-tensor recipe remains conditional and NOT STARTED.
+
+Instrumented Release 0.1.0 (1) installed in place and launched on rediscovered Kevq iPhone17/OS27.0, com.kevintruong.mural.dev. Executable SHA-256 `454aac591edb6e8a5a2f9fb37c27bee761dea7d7817db64c154c89c619505c6e`. Assets remain `phowhisper-cs-fp16-v1`, 3,101,573,848 runtime bytes; original tokenizer, manifest, pins, GPU encoder and NE-capable decoder unchanged. Only content-free component/preparation/first-vs-warm/UI timing logs added. Existing memory/thermal logs retained. No model transfer or data deletion. GPU app bundle retained for rollback in checkpoint evidence.
+
+**Core AI trace BLOCKED:** xctrace sees phone offline although devicectl install/launch/process inspection succeeded. App-scoped recording never began and timed out waiting for boot. Owned trace PID74651 already exited; no placement evidence. No Device Hub running. Content-free Mural/asr_ capture PID74650 retained at `.build/verification/local-mvp-phase-2/phowhisper/fp16-gpu-profile-v1/capture.log`; verify ownership/liveness before later cleanup, inspect after feedback, no continuous observation claim.
+
+**Next human replay:** Flask > Speech recognition > PhoWhisper CS > Prepare once. Report preparation breakdown/error. Record/Send separately: (1) `Yesterday I went to the supermarket.` (2) `I ordered phở không hành, but they gave me thêm hành.` (3) `Yesterday I went to the supermarket.` Report exact finalized text and Send-to-final seconds for each plus unusual heat/termination. These are unperformed checks, not passed results.
+
+After feedback, inspect new component timings; a separate language-detection total is unavailable in WhisperKit1.1.0 and prediction timing includes it. Trace recovery needs connected/unlocked phone recognized online by Instruments before one bounded retry. Then test only encoder CPU_AND_NE with finite preparation budget and matched human replay; no ANE build/run yet. Do not claim actual ANE placement merely from compute permission. Phase2 remains UNPASSED, Phase3 on hold. Historical FP16 preparation64.15s, first20.51s, warm median4.36s, footprint~2.55GB/lifetime RSS peak4.02GB are not new-build measurements.
+
+Full evidence and next actions: `.build/verification/local-mvp-phase-2/phowhisper/fp16-gpu-profile-v1/result.md` (build/install/launch logs, instrumentation diff, binary hash, trace failure).
+
+## Historical checkpoint: authorized 6-bit then 8-bit ladder completed, both FAILED QUALITY
+
+The user approved 6-bit grouped-channel/group-16 compression on both components, then 8-bit if quality failed. Both are now converted and replayed on the same 21 scored scripted WAVs, unchanged decoding/local tokenizer/compute configuration. 017 remains excluded; 019 and all followup5 outputs were unchanged. No model substitution, remerge or calibration.
+
+| Recipe | Runtime bytes, excluding manifest/caches | New failure versus FP16 | Other lexical change | first16 WER | followup5 WER |
+|---|---:|---|---|---:|---:|
+| 6-bit | 1,265,613,461 | 011: `I went to` -> `I went through` | 007: `seal tea` -> `seoul tea` | 5.46875% | 2.89855% |
+| 8-bit | 1,655,763,645 | 006: `Em không biết từ này.` -> `Em complete từ này.` | 007: `seal tea` -> `seoul tea` | 6.25% | 2.89855% |
+
+FP16 first16 WER remains 4.6875%. Each recipe has 19/21 identical normalized outputs; 007 changes an already-incorrect siêu thị rendering, not a previously correct target. The other substitution fails preservation. Language detection remained vi on changed clips in all candidates and FP16. Higher bit count did not monotonically preserve text; no individual tensor cause established.
+
+6-bit encoder first attempt timed out after 1800 s at 86%, still progressing; failure log preserved. One same-recipe retry succeeded in 2143.06 s; decoder 2904.48 s. 8-bit used four standard kmeans worker processes (not subagents) to parallelize clustering; encoder 2217.14 s, decoder 2964.47 s, both succeeded. Necessary incompatible-group tensors and mel remained FP16. Source packages reused; pins unchanged.
+
+Mac-only timing: 6-bit preparation 65.699 s, first file 13.082 s, subsequent20 median 2.670 s; 8-bit preparation 59.978 s, first file 7.126 s, subsequent20 median 2.640 s. Not iPhone speed/memory evidence or UI Send-to-final. No compressed phone timing/memory/thermal results.
+
+Evidence: `.build/verification/local-mvp-phase-2/phowhisper/pal6-g16-v1/result.md` and `pal8-g16-v1/result.md`, with raw outputs, commands, source/runtime hashes and separate metrics. External artifacts/logs: `/Users/tiger/tmp/mural-asr-benchmark/phowhisper-conversion/pal6-g16-v1/` and `pal8-g16-v1/`. Manifest hashes: 6-bit `13f9bbd0d08bf0b6a111f8415ddffad158f8d1fb4e4014c17585066e37fd23bb`; 8-bit `430c6b5454ac44e35e69f007683477b2064cf4f92af1011d65485017c0607336`.
+
+**No app source changes/instrumentation/build/install/transfer or phone replay.** Retained FP16 Release 0.1.0 (1), com.kevintruong.mural.dev, executable SHA-256 `00fae19f33012569a40b74535db88ca3f882c35bcb4fbd89b630b455a8c85627`; last recorded Kevq iPhone17/iOS27.0 (24A435), not freshly reverified. Original preparation 64.15 s, first ASR finalization 20.51 s, four warm median 4.36 s, footprint ~2.55 GB/lifetime RSS peak 4.02 GB remain the phone baseline. No capture active, no old PID signaled, no new recordings or user data changes. ANE NOT ATTEMPTED. Phase 2 remains UNPASSED, Phase 3 on hold.
+
+**Next:** stop the completed 4/6/8-bit ladder and retain FP16. Review focused precision/mixed-component diagnosis or supported optimization guidance before another recipe, not a repeat of completed conversion or a broad sweep. A quality-preserving candidate must pass the saved corpus before instrumentation/deployment and the five-phrase PENDING HUMAN phone comparison. No relaxation of performance/silence/short-answer/offline/lifecycle gates; ANE stays gated on compressed phone feedback.
+
+### Historical checkpoint: 4-bit compression failed parity; FP16 retained
+
+**Resume at the Phase 2C quality blocker below. The approved 4-bit/group-16 candidate has now failed saved-corpus parity; do not repeat that recipe or deploy it.** Phase 2A merge/Core ML parity passed; Phase 2B FP16 probe is installed. The user accepts initial phone recognition quality, including the residual `siêu thị` error, but does not accept current latency/resources for conversation UX. The user approved 4-bit compression, saved-corpus parity and paired phone verification next. After that checkpoint, optionally investigate Apple Neural Engine (ANE) encoding only if a small, quick change is feasible. Do not delay the compressed-build handoff for ANE research. Phase 2 overall remains UNPASSED; Phase 3 stays on hold pending remaining speech/performance/offline/lifecycle acceptance. Do not restart completed phases, merge the LoRA again, request new Mac recordings, or switch models.
+
+Candidate:
+
+- Base: `vinai/PhoWhisper-large`, revision `b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb`.
+- Published LoRA adapter: `rinhoooo/phowhisper-large-vien-cs-asr`, revision `a98f55e0f42b2c4f1e71b3348a2b917fac0a7328`.
+- The adapter contains learned weight adjustments, not custom word-replacement logic. No training on the user's recordings was performed. The successful Mac path used the unmerged base plus adapter, FP16/MPS, transcription, and no forced language or expected-text prompt.
+
+The completed sidetrack lives outside this repository at `/Users/tiger/tmp/mural-asr-benchmark/`. Read its `README.md`, `benchmark.py`, `models.json`, `results/summary.md`, and `followup/results/summary.md` before conversion. Reuse the actual saved WAVs and user-confirmed references, not fresh readings of the same sentences.
+
+| Mac cohort | PhoWhisper CS WER | PhoWhisper base WER | Stock large-v3 WER | Current WhisperKit replay WER |
+|---|---:|---:|---:|---:|
+| 001-016: 16 scripted clips | 4.69% | 5.47% | 20.31% | 30.47% |
+| 018-022: 5 new scripted clips | 2.90% | 18.84% | Not run | 27.54% |
+
+There are **21 scored scripted recordings from one speaker**, not spontaneous-conversation evidence. `017` contains instructions read aloud and remains an excluded diagnostic. Frozen inputs: `evaluation-manifest.csv` and `followup-manifest.csv`; paired raw results: `results/results.csv` and `followup/results/results.csv`; audio hashes: `results/audio-qc.json` and `followup/results/input-qc.json`. Exact Python versions are in `results/requirements.lock.txt`. The Mac was an M1 Pro with 16 GB RAM. Mac timings are not iPhone estimates, and Python generation-only timing differs from WhisperKit's file-to-transcript wall timing.
+
+Known candidate failures remain important: `siêu thị` became `shooting`/`seal tea`, English `borrow/lend` was confused, and digital silence produced hallucinated text. Follow-up 019 retained a self-correction imperfectly. Do not present the model as universally accurate or mark these cases passed by relying on tutor guesses. That Mac checkpoint authorized **iOS feasibility**. The subsequent initial phone quality acceptance is recorded below; it does not pass the performance, full speech or conversation gates.
+
+Keep Nemotron, stock WhisperKit, Parakeet code and their caches intact for comparison, loading only one recognizer at a time. Plain PhoWhisper remains a Mac diagnostic comparator; do not add a second new phone model unless a specific failure justifies it. No Qwen experiment, VAD, tutor integration, or product-mode redesign in Phase 2. Later historical approvals below do not override this current checkpoint.
+
+
+## Phase 2C optimization result: pal4-g16-v1 FAILED QUALITY
+
+The approved 4-bit grouped-channel/group-16 candidate was converted and replayed on the 21 frozen scored WAVs. Runtime files are 891,738,051 bytes excluding manifest/caches (FP16 3,101,573,848). New lexical regressions on 006 (`Em complete từ này.`), 011 (`I went through ...`) and 021 (`Mai phone ...`) fail the parity gate. WER first16 7.03125% versus FP16 4.6875%; followup5 4.34783% versus 2.89855%. Other 18 normalized outputs, including 019, unchanged. Known original failures remain.
+
+Focused component swaps: restoring FP16 encoder repaired none; restoring FP16 decoder repaired 006/011 but not 021. Regenerated uncompressed FP16 decoder with original encoder restored all three original outputs, excluding regeneration as their cause. No single whole-component FP16 exception preserved all three. No broad sweep or further low-bit recipe attempted.
+
+**Stopped before app instrumentation/build/install.** Phone and app source remain on `phowhisper-cs-fp16-v1`, Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `00fae19f33012569a40b74535db88ca3f882c35bcb4fbd89b630b455a8c85627`. Kevq iPhone17 was rediscovered as available; no microphone/device mutation. No capture active or new PID signaled. Compressed phone preparation/latency/memory unknown. Mac preparation 56.683 s, first file 7.197 s, remaining 20 median 2.606 s are not phone measurements. Optional ANE encoder NOT ATTEMPTED; Phase 2 remains UNPASSED and Phase 3 on hold.
+
+Evidence: [pal4-g16-v1/result.md](.build/verification/local-mvp-phase-2/phowhisper/pal4-g16-v1/result.md), raw parity/diagnostics and manifest in that directory; external weights/scripts/commands/logs at `/Users/tiger/tmp/mural-asr-benchmark/phowhisper-conversion/pal4-g16-v1/`. Candidate manifest SHA-256 `bbdee2a57bbb29e538389364969e75f731dd4f0baf2dd977830f966857095702`. All base/adapter/runtime/converter pins unchanged. Original assets/evidence/dirty changes retained; no subagents, publication or commits.
+
+**Next:** resolve the recorded quality blocker with a focused, justified higher-precision exception before any deployment. The current evidence identifies sensitive components, not individual tensors or a proven successful recipe. Do not repeat the same 4-bit run or request phone speech for this rejected candidate. Do not bypass quality to chase size/speed. Once a retained candidate passes parity, finish timing instrumentation/build/install and hand off the five phrases PENDING HUMAN, then await feedback before ANE.
+
+### Historical Phase 2 comparison: WhisperKit, September 14, 2026
+
+The user approved the fixed **WhisperKit-only Phase 2 experiment and its model download**. Keep FluidAudio/Nemotron code and cached weights for later accuracy/performance comparison; load only one recognizer at a time. A two-choice selector in the existing microphone probe is sufficient, not a provider framework or catalogue. Whisper is the new probe default, not an integrated conversation mode.
+
+Use WhisperKit 1.1.0, the multilingual `openai_whisper-large-v3-v20240930_626MB` assets, auto language detection and transcription (not translation). Keep 30-second Record/Send, uncorrected text, local inference, and no saved audio. The user conditionally named Qwen3-ASR as the next experiment if Whisper's language switching fails; do not add it concurrently or before the human checkpoint. A one-language-per-turn compromise is an option to revisit, not an accepted relaxation of this gate. Phase 3 remains on hold. Other earlier defaults below describe the original Nemotron experiment unless explicitly updated here.
+
+### Historical checkpoint: Whisper provisionally accepted; Parakeet failed
+
+The user reports improved Whisper switching, provisionally acceptable for the MVP despite `siêu thị` -> `Silti`, retries/slower speech, and an unexpected `Gracias`. Their "80%" is a subjective assessment, not a measured accuracy figure. Logs confirm 125.35 s total first preparation and 1.09-2.47 s finalization across five turns. Download and Core ML initialization were combined in the original displayed time; the probe now separates them. Offline, silence, recovery, and stability are not yet established for Whisper.
+
+At that checkpoint, the user authorized testing **Parakeet CTC 0.6B Vietnamese-English** per `Parakeet_CTC_Vietnamese_English_Code_Switching_Handoff.md`. This supersedes Qwen as the next experiment. Use the existing isolated Phase 2 Record/Send probe, retaining Whisper/Nemotron and cached assets, no Phase 3/VAD/tutor integration. The handoff's assumed FluidAudio capture/VAD pipeline is not the current app: capture/conversion are native AVAudioEngine/AVAudioConverter and VAD remains absent. Keep that working path. A narrow `App/VietnameseEnglishRecognizer.swift` is authorized for this probe. Extend only the existing experimental selector, not product mode selection or a provider framework.
+
+Actual split community assets from `leakless/parakeet-ctc-0.6b-Vietnamese-coreml` are about **1.19 GB**, not the card's claimed 258 MB. Pin revision `8e7545c334001a4a135aa031095538ff97487089`, validate actual tensor shapes/vocabulary, use FluidAudio's custom CTC loader and stride-correct valid-frame extraction. Parakeet alone has an explicit **15-second** manual-turn cap matching its exported window; no silent truncation or long-audio stitching. The upstream NVIDIA Open Model License conflicts with the community card's CC-BY claim; preserve upstream notices and treat this as unproven community conversion provenance, not a production artifact. Test the same three phrases first; assess silence, cache/recovery, memory/thermal behavior before integrating. Reports: [Whisper](.build/verification/local-mvp-phase-2/whisperkit/result.md), [Parakeet](.build/verification/local-mvp-phase-2/parakeet/result.md).
+
+**Parakeet phone result:** FAILED mixed-language quality. Vietnamese words survived but English was severely corrupted, including `appointment`. User reports worse quality than Whisper. Download/cache 116.62 s, load 20.52 s; four finalizations 0.096-0.532 s. Actual phone vocabulary/config match the pinned assets, and logged sample/valid-frame counts match; no app decoding defect established. Official bilingual naming is not an iPhone benchmark, and this greedy community conversion excludes the separately supplied 4-gram LM/lexicon. Exact base-model versus conversion/decoder cause remains unproven. Whisper was the best observed phone candidate at that time; no switch/default change or Phase 3 work was performed. The later Mac PhoWhisper evidence above now determines the next experiment. See [human Parakeet failure and diagnosis](.build/verification/local-mvp-phase-2/parakeet/result.md).
+
 ## 1. Objective and delivery priority
 
 Answer one question on a physical iPhone 17 running iOS 27:
@@ -9,7 +160,7 @@ Answer one question on a physical iPhone 17 running iOS 27:
 Build this pipeline, not a replacement for Mural:
 
 ```text
-microphone -> FluidAudio multilingual streaming ASR
+microphone -> finalized-turn local ASR (PhoWhisper CS candidate via WhisperKit)
            -> Apple SystemLanguageModel
            -> English AVSpeechSynthesizer -> speaker
 ```
@@ -18,7 +169,7 @@ Keep GPT-Live plus its existing Luna calls as the premium natural-conversation p
 
 **Priority: deliver a testable manual-turn conversation build after Phase 3.** Do not wait for automatic endpointing, learning assessment, or UI polish before testing the hard assumptions. Continue to the integrated MVP only if that loop works.
 
-**Acceptance is based on using the running app, not writing tests.** Use the existing `verify-mural` skill during every phase: build, install, launch, perform the user actions, inspect the result, fix failures, and replay the affected actions. Do not create new unit/UI test suites, mocks, coverage targets, or a testing framework for this MVP. Section 10 defines the verification policy and replay checklist.
+**Acceptance is based on using the running app, not writing tests.** The implementation agent uses the existing `verify-mural` procedures to build, install, launch, and inspect logs; the user performs the supplied phone checklist and reports the actual speech/UI/listening results. No subagents, new unit/UI test suites, mocks, coverage targets, or testing framework. Section 10 defines the verification policy and replay checklist. The copyable implementation handoff is [mvp_implementation_prompt.md](mvp_implementation_prompt.md).
 
 Two milestones:
 
@@ -43,10 +194,12 @@ ConversationCoordinator
   +-- SessionRecord / Fragment / MeaningController / LearningEngine
 ```
 
-Keep two new implementation files:
+Keep the existing local implementation ownership:
 
-- `App/LocalConversationEngine.swift`: audio session, capture/conversion, one reusable ASR manager, finalization, TTS, and small audio callbacks/state.
+- `App/LocalConversationEngine.swift`: audio session, capture/conversion, the existing experimental ASR selection, one loaded recognizer at a time, finalization, TTS, and small audio callbacks/state. Reuse its WhisperKit lifecycle for PhoWhisper where compatible; inspect the converted model/tokenizer contract rather than assuming the existing v3 assets are interchangeable.
 - `App/LocalTutorModel.swift`: Foundation Models requests, bounded context, and local structured assessment mapping.
+
+The already-added `App/VietnameseEnglishRecognizer.swift` belongs to the Parakeet experiment; preserve it. A small private PhoWhisper recognizer/helper is acceptable only if the existing WhisperKit code cannot cleanly handle the fixed candidate. Do not add a provider abstraction.
 
 The coordinator retains teaching context, themes, session records, persistence, and application lifecycle. Keep FoundationModels/FluidAudio imports and `@Generable` types in `App`; keep `MuralCore` platform-light. A small mode enum can live beside the coordinator.
 
@@ -71,32 +224,40 @@ MAIChat's `VoiceToTextService.swift` demonstrates reusable ASR initialization an
 
 ## 4. Implementation sequence and stop gates
 
-### Execution rules for the implementation agent
+### Execution and paired-verification rules
 
-1. Work on one phase at a time. Use this plan's defaults: manual Send, 1120 ms full-vocabulary ASR, Apple English TTS, fresh bounded model sessions, and last-passage-only assessment after End. Do not redesign these choices unless that phase's verification exposes a concrete failure.
-2. Read `.agents/skills/verify-mural/SKILL.md` and the relevant feature note before the first check. Follow its actual build/install/launch/input/evidence workflow, not just a reference to the skill in the final answer. If slash commands are available, the entry point is `/skill:verify-mural`.
-3. After implementing a phase, build the changed app for the surface listed below, install that build, launch it, and perform the phase's actions. Inspect the settled UI and, for audio, listen. A successful build, accepted tap, timer, or log line alone is not a pass.
-4. Fix a failure at its cause, rebuild, and replay that same user action. Fix small, clear UI defects in the affected flow too. Do not run unrelated suites or repeat already-passed phases unless shared behavior changed.
-5. Keep one short phase result under `.build/verification/`: build/revision and device/OS, actions, expected versus observed result, PASS/FAIL/BLOCKED, and the relevant screenshot/log or human listening observation. Reuse this evidence at handoff; no separate reporting system.
-6. Stop at a failed feasibility gate. If the phone, input forwarding, signing, model availability, or speech/listening access is blocked, finish safe preparation, state the exact blocker, and request only the concrete missing action. Do not label the phase passed or spend time on downstream polish. No plan can guarantee success without these hardware checks.
+1. Work on one phase/checkpoint at a time. Resume at Phase 3 under the current explicit Phase 2 MVP acceptance and silence exception. Do not restart Phase 0, Phase 2 conversion/compression or the completed ASR-only checks. Keep manual Record/Send, the approved fixed candidate, Apple English TTS, bounded model sessions, and last-passage-only assessment after End. Do not add downstream features to work around a failed gate.
+2. Read `.agents/skills/verify-mural/SKILL.md` and `.agents/skills/verify-mural/features/local-conversation.md`. Follow their local paired-verification procedures directly. Do not discover, spawn, resume, or wait for a tester or any other subagent.
+3. Implement and inspect the affected code. Use the actual model/dependency APIs. For phone checkpoints, build an optimized Release app, discover the connected iPhone, install in place, launch, and inspect build/launch/device logs. Preserve the existing signed identity `com.kevintruong.mural.dev` using the documented build override, not a second install. Keep the dirty checkout and user data; no unauthorized commit/push/publication.
+4. Once that build is ready, give the user the exact entry point, selected model, button sequence, a short speech/listening checklist, expected observations, and what to report. Start with a small relevant batch, not a long replay of all earlier phases. The user should test the app, not compile it or operate development tools. Fully quit Device Hub before user microphone tests.
+5. Retain scoped content-free logs for preparation, sample counts, finalization, errors, and lifecycle. Keep raw audio/transcripts out of default device logs. Tell the user how to identify the turn/error in their reply; inspect the capture after they report. Stop only owned captures when the checkpoint is finished. Do not repeatedly poll unchanged work or claim to hear/see a human action you did not observe.
+6. Record build/revision, phone/OS, actions, exact outputs or errors supplied by the user, timings, PASS/FAIL/BLOCKED/PENDING HUMAN, and evidence under `.build/verification/`. Attribute human-confirmed observations separately from agent-observed logs. A successful build/launch/timer alone is not recognition acceptance. Update the existing verification notes only with confirmed steps.
+7. Fix concrete failures, rebuild/install/launch, inspect logs, and give a focused replay of the failed action. Do not repeat passed cases without a relevant change. Continue to the next phase only when the required evidence and user acceptance are established.
+8. If conversion, signing, device availability, or another feasibility requirement blocks progress, complete safe preparation and report the exact blocker and smallest missing action. Do not ask the user to test an old or uninstalled build as if it contained the change. Stop downstream work rather than silently changing models or relaxing scope.
 
-The existing skill predates local mode: its API-key requirements and `--verify-audio`/`--verify-meaning` helpers describe **premium OpenAI flows**, not local inference. Do not run those helpers to prove the free pipeline. Use the skill's build/launch/control procedures with the local actions below. As local controls become real, minimally update that same skill's feature map and add `features/local-conversation.md` with the verified steps; correct outdated onboarding expectations. Do not create another skill, fake provider, or automation framework. The skill's optional unit/native-test commands are not required phase gates for this MVP.
+The skill's API-key requirements and `--verify-audio`/`--verify-meaning` helpers describe premium OpenAI flows, not local inference. Missing OpenAI credentials do not block local development. No new verification skill, control plane, test suite, or automation framework is needed. Reuse the existing Mac benchmark and saved recordings for the explicitly approved conversion-parity check.
 
-### Phase 0: establish the baseline
+### Phase 0: establish the baseline - DONE
+
+**Accepted September 14, 2026.** Simulator baseline navigation passed in [the Phase 0 report](.build/verification/local-mvp-phase-0/result.md). Signing was recovered using the existing personal team in ignored `Config/Local.xcconfig` and the existing device bundle override `PRODUCT_BUNDLE_IDENTIFIER=com.kevintruong.mural.dev`. The tester's [build status](.build/verification/local-mvp-phase-0/evidence/replay-device-build.status), [install result](.build/verification/local-mvp-phase-0/evidence/replay-install-kevin.json), [launch result](.build/verification/local-mvp-phase-0/evidence/replay-device-launch.json), and [phone screenshot](.build/verification/local-mvp-phase-0/evidence/replay-device-screen.png) establish the baseline running on iPhone 17/iOS 27. The user confirmed that it looks working and explicitly accepted advancing without waiting for the interrupted tester's report update. The original report retains its earlier signing blocker as historical evidence; it is resolved. This acceptance does not establish model, microphone, TTS, or premium response behavior. Premium responses remain unverified without credentials. The recorded onboarding subtitle overlap remains a known baseline UI defect to correct in the affected onboarding phase.
 
 1. Read the current coordinator, transport, model/persistence, teaching, meaning, and final-assessment paths. Preserve unrelated working-tree changes.
 2. Read `scripts/generate_project.py`: it is the source for the Xcode project, dependencies, and deployment settings. **Do not hand-edit generated project files.** Change the generator and regenerate when adding files/dependencies or raising the target.
 3. Read the verification skill's `features/onboarding-consent.md` and `features/themes-words-settings.md`. Discover an available iOS 27 simulator and the actual connected iPhone; do not hardcode old device IDs.
 
-**Verify now with `verify-mural`: Simulator.** Build/install/launch the current app. Drive onboarding, open Talk, Themes, Words, and Settings, and inspect the API-key UI without entering a key. Use existing preview arguments only for this UI baseline. Record existing defects. Check that the physical phone is available for Phase 1. No new tests or mandatory `swift test` run.
+**Agent preparation/check: Simulator using `verify-mural`.** Build/install/launch the current app. Drive onboarding, open Talk, Themes, Words, and Settings, and inspect the API-key UI without entering a key. Use existing preview arguments only for this UI baseline. Record existing defects. Check that the physical phone is available for Phase 1. No new tests or mandatory `swift test` run.
 
 **Gate:** the app launches and the baseline navigation works. A premium response additionally requires a key; record that check blocked if none is available, without blocking local development. Never put credentials in source, commands, or logs.
 
 ### Phase 1: prove the Apple tutor before integrating ASR
 
-Implement a small visible debug entry inside Mural using the eventual `LocalTutorModel`: text entry, a Send action, the actual model reply, and system speech. No separate app, fake replies, or elaborate probe harness. Record how to reach this entry so another agent can replay it.
+**Status: DONE with a known teaching-quality issue, human-accepted September 14, 2026.** The user confirmed model availability, the three typed examples working, audible English TTS, cancellation during thinking/speech, and successful retry. The user explicitly accepted proceeding to Phase 2. Their [screenshot](.build/verification/local-mvp-phase-1/human-vietnamese-reply.png) shows a poor explanation that repeats the supermarket sentence instead of simplifying it: first output 1.29 s, full reply 1.52 s, TTS delegate startup 0.01 s, playback 8.89 s (one example, not a benchmark). They also reported English TTS spelling Vietnamese quoted by the model. The prompt now asks for easier wording/concrete explanations and English equivalents without quoting Vietnamese; this correction still needs a focused human replay. This is a provisional feasibility acceptance, not proof of reliable teaching, offline operation, or ASR. Full bilingual quality remains a Phase 3 gate.
 
-**Verify now with `verify-mural`: physical iPhone 17.** Build/install/launch, open the entry, and send:
+Entry: flask toolbar button labeled **Local tutor probe**, when no premium conversation is running. In the Phase 2 build, select **Apple tutor** in the probe picker. Enter text, tap **Send**, read actual reply/timings, and listen. **Stop**, Close, or backgrounding cancels work. The probe is available in optimized builds and does not save conversations or award evidence.
+
+Implement a small visible debug entry inside Mural using the eventual `LocalTutorModel`: text entry, a Send action, the actual model reply, and system speech. No separate app, fake replies, or elaborate probe harness. Record how to reach this entry so the user can follow the phone checklist.
+
+**Paired phone checkpoint:** Agent builds/installs/launches and checks logs; user performs the following actions on iPhone 17 using the supplied instructions. Open the entry and send:
 
 1. `Yesterday I went to the supermarket.`
 2. `Tôi không hiểu câu đó.`
@@ -108,20 +269,96 @@ Read and listen to each real response. English stays short and natural; Vietname
 
 ### Phase 2: prove microphone ASR independently
 
-- Pin FluidAudio exactly to **0.15.7** through the generator and resolve normally. If implementation happens substantially later, verify the latest stable release and its API before changing this baseline.
-- Download one full-vocabulary Nemotron variant with `languageCode: "auto"`, initially **1120 ms**, not the implicit 2240 ms default.
-- Add Record/Send and visible finalized ASR text to the probe. Stream from AVAudioEngine and reset state between turns without reloading weights. No VAD or LLM is required for this phase.
+**Current status: ACCEPTED FOR MVP WITH A KNOWN SILENCE FAILURE by explicit user decision. Retain FP16 PhoWhisper CS with the ANE-capable encoder and advance to Phase 3 next session. See the current decision above for final human checks, cached preparation, first-attempt recognition failure, and the narrowly scoped silence waiver. Historical unpassed states below are preserved, not operative.**
 
-**Verify now with `verify-mural`: physical iPhone 17.** Prepare the assets and allow the microphone. Fully quit Device Hub before voice capture. Have the Vietnamese learner record/send the English, Vietnamese, missing-word, and reverse-switch examples in section 11. Inspect the exact recognized text before any tutor can guess its meaning. Try silence and `Yes`/`No`, then record another turn and confirm no text leaks from the previous turn.
+**Historical Nemotron result, September 14, 2026: FAILED.** The user confirmed preparation, recording/Send, single-language recognition, and recovery passed. In mixed speech, `siêu thị` became `Silti`, `cái từ này` became `kai too ni`, and the reverse-switch example lost `appointment` and returned `Ngày mai nói thế nào bằng tiếng Ân`. Exact human-reported outputs and log evidence are in [the Phase 2 report](.build/verification/local-mvp-phase-2/result.md). The supplied short-answer output was `Yes, then a separate no`; separate isolated Yes/No acceptance is not established by that combined output. Recording-state feedback was reported unclear and is deferred at the user's request. Source inspection confirms auto/full vocabulary/1120ms, forced prefix disabled by library default, ordered process/finish/reset; logs contain 14 finalized turns and no explicit ASR turn/preparation failures. These checks do not prove the audio path is flawless, but no concrete configuration error was found. Do not use tutor guessing, force a monolingual prompt, or add downstream integration to conceal these losses. Resolve this gate or obtain an explicit revised scope first.
 
-**Gate:** important Vietnamese words and English meaning survive actual mixed speech. If the agent cannot supply or hear real speech, ask the user to perform these specific steps on the installed build and record their observations. Do not substitute typing, prerecorded text, or monolingual benchmark scores. Compare 560 ms only if these measurements justify it; no tier picker.
+**Follow-up investigation, September 14:** actual phone metadata/tokenizer match the inspected asset revision and full vocabulary; no language-forcing or tokenizer defect was found. The library already enables its known blank-span rescue. A diagnostic-only Release build adds source/converted sample counts and decoder/blank-rescue counters, without changing recognition settings. It is installed under the existing identity; the user subsequently relaunched with Device Hub off and confirmed another failed replay. Isolated `siêu thị` returned empty; isolated `cái từ này` worked but became `night` inside English; the reverse switch lost `appointment` again. All 10 logged turns (including retries) had exact resampled counts and expected chunks; four had zero tokens, with 13 heuristic blank spans and zero successful recoveries. See [the investigation report](.build/verification/local-mvp-phase-2/investigation/result.md). Stop speculative Nemotron tuning. The user authorized research into alternatives; a single scout attempt/resume failed, and the parent completed [direct research](.build/verification/local-mvp-phase-2/asr-alternatives-direct.md). The user subsequently approved the fixed offline WhisperKit large-v3-turbo comparison and download while retaining Nemotron. The probe then gained the Whisper comparison; subsequent human speech results and the still-unverified offline/recovery cases are summarized in the historical checkpoints above. See [the Whisper experiment report](.build/verification/local-mvp-phase-2/whisperkit/result.md). No Phase 3 work or Qwen dependency has been added.
+
+**Retained capture and historical probe:** FluidAudio remains pinned/resolved to 0.15.7 (`41540ea237350afe5117a082b5c28eda642d0612`). The existing flask > Speech recognition probe already provides Prepare, Record/Send, Finalized recognition, and Stop/Close/background teardown. Its microphone capture/conversion is native AVAudioEngine/AVAudioConverter. The historical Nemotron path used full multilingual/auto/1120 ms, no forced prefix, and ordered process/finish/reset; see section 5 for that retained contract. Do not repeat its download, timing variants, or failed mixed-speech replay by default. Use this existing probe for the approved PhoWhisper steps below.
+
+#### Phase 2A: merge and convert the proven Mac candidate
+
+**September 14 execution: PASS MAC PARITY.** Supported PEFT merge and FP16 Core ML replay preserve all 21 scored normalized transcripts, including the existing 019 self-correction. 017 remains excluded. The first encoder Neural Engine load timed out; the identical export passes with GPU encoding. A concrete old-tokenizer control-ID mismatch caused initial native blanks and was corrected without lexical replacements. Final parity used the app-pinned WhisperKit 1.1.0 revision `1e2a163736dfa5a198e637ae44c114e1c6d5cc2d`. Raw attempts, final outputs, settings, hashes and notices are in `/Users/tiger/tmp/mural-asr-benchmark/phowhisper-conversion/README.md`; see [checkpoint evidence](.build/verification/local-mvp-phase-2/phowhisper/result.md). No phone acceptance or model publication is implied.
+
+Work in the external benchmark directory for weights and conversion artifacts. This task is approved; do not ask for another general model-selection review or fresh recordings first.
+
+1. Read the frozen results and model revisions in the current checkpoint. Reuse the existing Python environment where compatible; inspect WhisperKitTools requirements before installing conversion dependencies, using an isolated conversion environment if needed. Download only necessary assets. Never commit weights or publish/host recordings or converted assets without authorization.
+2. Merge the pinned LoRA into the pinned PhoWhisper base using PEFT's supported path. Save it as a separate artifact; preserve the unmerged reference and prior results. Check actual licensing/attribution for base, adapter, runtime, and any redistributed derived weights.
+3. Run the merged model on the same 21 scored WAVs with the original preprocessing and transcription/no-forced-language settings. Preserve raw transcripts, source hashes, versions, and timings separately. Keep 017 as a labeled diagnostic. No training or expected-sentence prompts.
+4. Inspect current WhisperKit/WhisperKitTools support for the actual PhoWhisper large-v2 architecture. This is not the existing compact large-v3/turbo checkpoint. Use the base's matching processor/tokenizer and inspect mel features, token IDs, model shapes, and decode settings; do not reuse v3-specific assumptions. Attempt the standard Core ML conversion path, not a new inference runtime. Start without additional quantization; only introduce compression for a measured size/memory blocker and repeat parity afterward.
+5. Replay those exact WAVs through the converted model on Mac. Save the merged-PyTorch and Core ML outputs next to the reference results. Require essentially the same lexical/language-switch quality: punctuation/case differences alone are not a failure, but new missing words, unwanted translation, or meaning regressions are. Investigate a concrete mismatch before proceeding. Record model size and preparation/runtime memory where measurable; do not extrapolate these to iPhone.
+
+**Gate:** merged and converted artifacts preserve the successful recognition behavior and have a plausible WhisperKit loading path. If merge/conversion cannot succeed or materially damages recognition, stop and report the failing stage and evidence. Do not silently switch to a smaller/unrelated model or begin Phase 3. No extra user speech is needed for this Mac checkpoint.
+
+#### Phase 2B: add PhoWhisper CS to the existing iPhone probe
+
+**September 14 execution: installed and launched; first preparation and five-phrase phone feedback now received (see Phase 2C).** Release 0.1.0 (1), executable SHA-256 `00fae19f33012569a40b74535db88ca3f882c35bcb4fbd89b630b455a8c85627`, installed under `com.kevintruong.mural.dev` on Kevq iPhone 17 / iOS 27.0 (24A435). Separate 3.10 GB `phowhisper-cs-fp16-v1` assets transferred to Application Support. PhoWhisper CS is the probe default, GPU encoder / Neural Engine-capable decoder, matching local-only tokenizer. Prepare validates fixed hashes before warmup; no download source exists. Other recognizers/caches retained. Build/install/launch logs inspected; microphone observations are user-reported, not agent-performed. [First human checklist, feedback and logs](.build/verification/local-mvp-phase-2/phowhisper/result.md).
+
+1. Extend the existing experimental **Speech model** selector with **PhoWhisper CS** and make it the new probe default for this approved experiment. Keep Whisper, Nemotron, and Parakeet code/caches available; unload the previous recognizer before loading another. No product-level model catalogue or provider framework.
+2. Reuse AVAudioEngine capture, native conversion to 16 kHz mono, ordered bounded buffering, and manual Record/Send. Use the converted model's matching tokenizer and WhisperKit transcription path; keep no forced language, expected text, or cross-turn prompt. Preserve raw model wording/diacritics, without custom replacements or filler cleanup. No tutor, TTS, VAD, or conversation persistence in this probe.
+3. Keep the explicit 30-second manual-turn cap for PhoWhisper if supported by the inspected export, finalizing exactly once without silent truncation. Preserve Parakeet's separate 15-second limit. Loading/inference stays off the audio callback/main actor. Reuse loaded weights across turns and guard cancellation/stale results through Stop/Close/background/reprepare.
+4. Use the existing asset preparation/cache pattern with a fixed tested artifact and recorded checksums/version. Show actual download/cache, warmup/load, Ready, and actionable failure states. Keep weights out of Git and the shipped app bundle. If converted assets are only local, use a documented development-only install/cache preparation path without altering user learning data; do not claim first-install download support until a distribution source is actually configured. No new hosting/service or publication without authorization.
+5. Update `scripts/generate_project.py` only if source/dependency changes require it, then regenerate normally. Add required notices. Build Release, install under the existing identity, launch, and inspect logs. Leave normal/premium conversation routing unchanged.
+
+**Handoff:** Once installed and launched, tell the user exactly how to open flask > Speech recognition > Speech model: PhoWhisper CS, prepare, Record, Send recording, and read Finalized recognition. Report the actual installed build and any preparation blocker. A successful build is **PENDING HUMAN**, not a passed ASR gate.
+
+#### Phase 2C: paired iPhone speech acceptance
+
+**Closed for MVP progression by explicit user acceptance with the silence exception recorded above.** The original gate and earlier feedback below are historical. Silence remains a reproduced defect, not a passed check.
+
+**First PhoWhisper human feedback:** user accepts accuracy on the five initial phone phrases despite #3 becoming “Yesterday I went too silty how do I say that in English.” Performance is not accepted for conversation UX. Logs: preparation 64.15 s (verification 2.42 s, prewarm 59.64 s); first finalization 20.51 s, four subsequent 3.46-4.93 s (median 4.36 s). App footprint about 2.55 GB, process-lifetime RSS peak 4.02 GB; sampled thermal state nominal. User requested compression/performance investigation. No model change yet; silence, short answers, offline and lifecycle checks remain pending. See [feedback and logs](.build/verification/local-mvp-phase-2/phowhisper/result.md). This is not full Phase 2 acceptance.
+
+The agent handles deployment and scoped logs; the user handles real phone speech/UI actions. Fully quit Device Hub before microphone use. Start with these five short turns at normal pace, one Record/Send each:
+
+1. `I ordered phở không hành, but they gave me thêm hành.`
+2. `My phone hết pin giữa đường, so em không gọi được cho bạn.`
+3. `Yesterday I went to siêu thị. How do I say that in English?`
+4. `Em có một appointment ngày mai. Nói thế nào bằng tiếng Anh?`
+5. `Yesterday I went to the supermarket.`
+
+Ask for exact displayed transcripts and Send-to-final seconds, including blank/error results. Keep the known `siêu thị` case; do not replace it with only the easiest successes. Inspect the corresponding logs, then provide a second short checklist for pure Vietnamese, isolated `Yes`, isolated `No`, silence, a word-search pause, and a fresh unrelated turn. The Mac silence hallucination is an explicit unresolved risk: require no invented user turn from silence, without a broad heuristic that discards quiet speech or short answers.
+
+After quality checks, instruct the user to verify Stop during finalizing, reprepare/fresh turn, background/reopen, and cached preparation/recognition after relaunch with Wi-Fi and cellular off. Record cold preparation separately from warm median/tail ASR latency, memory-pressure/termination evidence, and thermal state. A small repeated-turn phone check is appropriate here; the full 20-turn/20-minute conversation soak remains at its existing later gate. Do not label ASR-only timing as the whole tutor response gap or assume memory will fit alongside Apple model work before Phase 3.
+
+**Gate:** important English and Vietnamese words survive actual phone speech with an acceptable user experience, cached offline operation, no invented silence turns, and safe lifecycle behavior. Report residual failures honestly; get explicit user acceptance before marking Phase 2 passed. The Mac scripted results justify this phone experiment but do not replace it. If quality, latency, memory, conversion fidelity, or recovery fails, fix the concrete cause and supply a focused replay or stop at that blocker. Only after this gate passes may Phase 3 connect the tutor.
+
+#### Phase 2C optimization checkpoint: compress the accepted candidate - ATTEMPTED, QUALITY BLOCKED
+
+The following is the approved recipe already attempted after FP16 phone feedback. Its recorded quality failure above now blocks deployment; do not repeat completed conversion or restart model selection. A focused higher-precision exception remains within scope if justified, but no successful exception has been established.
+
+**Baseline:** `phowhisper-cs-fp16-v1`, 3,101,573,848 runtime-file bytes excluding manifest; phone preparation 64.15 s, first finalization 20.51 s, four subsequent turns 3.46-4.93 s (median 4.36 s), app footprint about 2.55 GB, process-lifetime RSS peak 4.02 GB. These are a small observed sample, not a sustained benchmark. Exact feedback/logs: `.build/verification/local-mvp-phase-2/phowhisper/result.md` and `device-asr.log`. Capture PID 40170 was stopped after inspection; do not assume it is still running or kill a reused PID.
+
+1. **Reuse the merged weights and matching tokenizer.** Read `/Users/tiger/tmp/mural-asr-benchmark/phowhisper-conversion/README.md`, `merge-fp16/contract.json`, `merge-fp16/checksums.json`, `merge-fp16/results.csv`, `coreml-pinned-runtime.jsonl`, `parity-summary.json`, and the conversion environment lock. Preserve reference artifacts and failed attempts. The final native replay uses the actual app-pinned WhisperKit 1.1.0 revision `1e2a163736dfa5a198e637ae44c114e1c6d5cc2d`; an enclosing Git HEAD for the historical source copy is not an SDK revision.
+2. **Try 4-bit grouped-channel palettization first, group size 16.** Inspect the installed Core ML Tools/WhisperKitTools APIs and use their existing conversion/compression path, without new runtime, training, or benchmark infrastructure. Reuse source `.mlpackage` files where available; if only a compiled `.mlmodelc` exists, regenerate that component from the saved merged model through the standard converter rather than treating compiled assets as editable weights. Use an appropriate deployment target for grouped-channel compression, preserve the large-v2 shapes, tokenizer and decode contract, and keep mel/necessary small tensors uncompressed. This is weight palettization, not a promise of FP4 arithmetic. Keep encoder GPU and decoder's existing compute configuration initially so compression has a clear comparator.
+3. **Save a separate versioned artifact.** Preserve FP16 for rollback and all existing recognizer caches. Record actual encoder/decoder/total bytes, precision/granularity settings, source/tool/runtime pins, checksums, notices and commands. The 600-700 MB goal is aspirational: 4-bit weights alone are approximately 775 MB before overhead. Do not claim that target reached by ignoring caches or silently using 3-bit weights. Prefer retained accuracy over a hard size cutoff.
+4. **Run saved-corpus parity before phone replacement.** Reuse the same 21 scored WAVs (001-016, 018-022), frozen references and preprocessing; 017 stays an excluded diagnostic, 019 keeps its self-correction. Compare raw compressed output with FP16 output, not only aggregate WER. Punctuation/case alone do not fail parity; new lost switches, translation, blank turns or material meaning regressions do. Preserve unchanged decoding options so compression is the isolated variable. Investigate a concrete regression; at most try a focused higher-precision exception for affected tensors/components rather than a broad recipe sweep. Stop and report if quality cannot be retained. Do not train or calibrate on the scored user recordings to manufacture a pass.
+5. **Instrument and deploy through the existing probe.** Reuse WhisperKit timings to log content-free encoder, decoder, language-detection where exposed, prewarm/specialization and load times separately; record first-turn versus warm timing, footprint and thermal state. Current logs do not establish the per-component bottleneck. Keep UI Send-to-final distinct from ASR-only internal timings. Update only the fixed PhoWhisper asset identity/checksums/path and minimal preparation copy; no new model catalogue or comparator picker. Retain local-only tokenizer loading/control-ID fix, one recognizer at a time, 30-second cap, cancellation and error behavior. Read/regenerate the project generator if needed. Build Release, install in place, transfer the separate local artifact, launch and inspect logs yourself. No model hosting or claimed first-install download path.
+6. **Hand off promptly, PENDING HUMAN.** Use the same five short phone phrases in Phase 2C and ask for exact output, preparation breakdown and each Send-to-final time. Compare measured size, cold preparation, first-turn delay, warm latency and memory with FP16; smaller weights alone do not prove faster inference. Do not rerun the entire old phone suite before handing over. After feedback, replay only relevant failures and complete the remaining silence/Yes-No/pause/offline/lifecycle checks on the retained candidate. Get explicit user acceptance before passing Phase 2 or connecting the tutor.
+
+**Conditional follow-ups, not concurrent experiments:** if 4-bit retains quality but the size goal remains important, mixed 3/4-bit palettization may be investigated after reporting the measured 4-bit result and user feedback. Record the recipe and repeat parity and phone checks; 3-bit weights alone are about 581 MB before overhead, not an assured 600-700 MB package. No smaller-model switch, incompatible LoRA transplant, distillation, pruning/training project, new runtime, VAD or tutor workaround is authorized by this checkpoint. A real prediction warmup may be a small follow-up if measurements support deferred first-use initialization; report the added preparation cost and do not present moved work as eliminated work.
+
+#### Optional follow-up: iPhone Apple Neural Engine encoding - APPROVED, BOUNDED
+
+Do this **after the compressed-model phone checkpoint and feedback**, without blocking its delivery. The previous encoder CPU_AND_NE specialization exceeded the 1200-second Mac conversion command budget; the same export worked on GPU. This does not establish an iPhone ANE incompatibility. Conversely, selecting `.cpuAndNeuralEngine` only permits ANE usage; it does not prove actual placement or a speedup.
+
+- First inspect the new per-component timing evidence. Try the same retained compressed artifact with the native ANE-capable encoder compute option if straightforward. If a specific graph incompatibility is evident, allow at most one existing WhisperKitTools attention/export option change. Keep architecture, weights, tokenizer and recognition settings fixed; repeat saved-corpus parity for any changed export.
+- Treat “quick” as a small investigation, roughly 30 minutes of active engineering, not an open-ended backend project. Give compilation/specialization explicit finite timeouts; do not repeat the earlier 20-minute stalled path or extend waits without evidence of useful progress. Preserve failure logs and retain the working GPU candidate.
+- Agent builds/installs/launches and inspects evidence; user performs a short matched phone replay. Use existing Core ML compute-plan/profiling support where practical to distinguish actual ANE execution from permitted compute units and CPU fallback. If placement cannot be observed, label it an ANE-capable configuration, not proven ANE execution. Compare preparation, first/warm inference, memory, thermal state and quality on the actual iPhone, not Mac speed.
+- Keep the change only with preserved quality and a useful observed phone benefit. If it needs custom kernels, library forks, major graph surgery, training, a new runtime or repeated long stalls, **drop/defer the optional ANE work**, record the concrete reason, and retain GPU encoding. No broad search or new approval needed just to defer it. If performance is still unacceptable, report that blocker; do not pretend optional ANE deferral passes the overall speech gate.
+
+**Required plan maintenance after each checkpoint:** update this plan, the existing verification notes and the next-session handoff with actual artifact/build/device identity, conversion/parity outcomes, cold/first/warm timings, memory, residual errors, ANE outcome (not attempted/passed/failed/deferred), evidence paths, stopped/owned captures, and the exact next action. Preserve historical unsuccessful attempts. Mark human-dependent results PENDING HUMAN until feedback arrives; never check off later phases speculatively.
+
+References: [Apple compression workflow](https://apple.github.io/coremltools/docs-guides/source/opt-workflow.html), [palettization performance caveats](https://apple.github.io/coremltools/docs-guides/source/opt-palettization-perf.html), [WhisperKitTools](https://github.com/argmaxinc/whisperkittools/tree/84f77a83c8f530022ae55fbb1a64b3351ef63c7a).
 
 ### Phase 3: connect the testable audio loop
 
+**NEXT SESSION: authorized next phase, NOT STARTED.** Use the retained FP16/ANE-capable recognizer. The user explicitly deferred the known silence hallucination; do not reopen Phase 2 or add a silence/VAD fix as a prerequisite. Explain that nonempty hallucinations may trigger tutor replies. Keep genuinely empty results from triggering replies. Other safety/privacy and actual integrated-loop acceptance gates remain in force.
+
 ```text
 fixed greeting -> ready
-user taps Record -> streaming ASR -> user taps Send
--> finish/reset ASR -> short English model reply -> TTS -> ready
+user taps Record -> capture/buffer audio -> user taps Send
+-> finalize with the Phase 2 accepted recognizer -> short English model reply -> TTS -> ready
 ```
 
 - Use `Hi! What did you do today?` as a fixed opening. No greeting-generation request.
@@ -129,9 +366,9 @@ user taps Record -> streaming ASR -> user taps Send
 - Disable conflicting controls while busy, but leave End available.
 - Keep unfinished local actions unavailable. Bring forward section 8's minimum mode latch and teardown guards now: automatic `finish()`/meaning/assessment hooks must not call OpenAI. Hiding buttons is not sufficient.
 
-**Verify now with `verify-mural`: physical iPhone 17.** Build/install/launch this loop, then prepare assets, disable Wi-Fi/cellular, and relaunch. Complete ten real back-and-forth exchanges, including the supermarket exchange in section 12, with meanings and assessment off. Confirm English speech, no recording during playback, and readiness afterward. End once during thinking and once during speech; confirm no late audio/recording starts. Measure the response gap, not just model text speed.
+**Paired phone checkpoint:** Agent builds/installs/launches and checks logs; user performs the following actions on iPhone 17 using the supplied instructions. Prepare assets, disable Wi-Fi/cellular, and relaunch. Complete ten real back-and-forth exchanges, including the supermarket exchange in section 12, with meanings and assessment off. Confirm English speech, no recording during playback, and readiness afterward. End once during thinking and once during speech; confirm no late audio/recording starts. Measure the response gap, not just model text speed.
 
-**Deliver this build for the user's testing after this pass.** State that it is the conversation-only feasibility milestone. Do not wait for Phase 5 or VAD.
+**Hand over this build as soon as it is installed/launched and logs are checked.** Give the user the short acceptance checklist above and wait for feedback. After it passes, label it the conversation-only feasibility milestone. Do not wait for Phase 5 or VAD to make it testable.
 
 **Gate:** the learner can communicate and receive useful English bridges offline without frequent lost words, misleading corrections, intolerable waits, or instability. Stop with the measured bottleneck if not; do not build around an unusable loop.
 
@@ -139,7 +376,7 @@ user taps Record -> streaming ASR -> user taps Send
 
 Implement sections 7 and 8. Add Vietnamese, explicit mode selection, truthful consent/status, durable finalized transcripts with turn boundaries, and safe teardown. Keep premium transport essentially unchanged.
 
-**Verify now with `verify-mural`: Simulator for UI, iPhone for real records.**
+**Paired checkpoint:** Agent prepares the build and checks relevant simulator UI/logs; user verifies the following real phone behavior with exact instructions.
 
 1. On Simulator, select English/Vietnamese and On-device without a key. Confirm no OpenAI consent is granted or shown by local onboarding/start; select GPT-Live and confirm its existing first-use consent/key path. Inspect the new controls and unsupported-pair message.
 2. On the phone, complete two short local exchanges, End, open the transcript, then terminate/relaunch normally. Open Words > Past conversations and confirm the same separate passages remain. Do not use `--preview` for persistence.
@@ -151,7 +388,7 @@ Implement sections 7 and 8. Add Vietnamese, explicit mode selection, truthful co
 
 Implement section 9. Reuse existing UI/controllers, serialize local model work, and assess only the latest user passage after explicit End. No assessment scheduler in the live loop.
 
-**Verify now with `verify-mural`: physical iPhone 17, offline after preparation.**
+**Paired phone checkpoint, offline after preparation:** Agent builds/installs/launches and checks logs; user follows the steps below on iPhone 17.
 
 1. Complete an exchange and toggle Meaning; confirm a Vietnamese meaning for the English response. Tap an English caption word and read its contextual Vietnamese lookup.
 2. Tap Help; hear a simpler English response. Type a Vietnamese/mixed reply; confirm it takes the same local tutor path. No OpenAI consent/key request appears.
@@ -164,11 +401,15 @@ Implement section 9. Reuse existing UI/controllers, serialize local model work, 
 
 ### Phase 6: final user acceptance and handoff
 
-**Verify now with `verify-mural`: the integrated app on the physical iPhone 17.** Run section 11's 20-turn/20-minute session once, the offline relaunch, and the affected user-flow checks in section 10. Do not repeat the whole soak after every small edit; repeat the relevant failed flow, and repeat the soak only if a later change affects sustained audio/model behavior.
+**Paired final checkpoint on iPhone 17:** Agent prepares the integrated build and logs; user performs the following instructed session and reports the results. Run section 11's 20-turn/20-minute session once, the offline relaunch, and the affected user-flow checks in section 10. Do not repeat the whole soak after every small edit; repeat the relevant failed flow, and repeat the soak only if a later change affects sustained audio/model behavior.
 
 Perform an actual premium smoke exchange with existing authorized credentials if available; otherwise explicitly report that portion blocked. Keep one final evidence summary linking phase results, install/use instructions, asset requirements, timings, and limitations. A phase marked BLOCKED remains unverified, not implicitly passed.
 
-## 5. FluidAudio implementation contract
+## 5. ASR implementation contract
+
+**Current path:** Phase 2A-2C defines the PhoWhisper CS experiment via WhisperKit. Its merged model, tokenizer, and export must match the successful Mac candidate. Use one loaded recognizer with finalized manual turns; do not force streaming partials onto it. The current app capture/conversion is native AVAudioEngine/AVAudioConverter, not FluidAudio VAD. Existing WhisperKit lifecycle code is the reuse point, subject to model compatibility inspection.
+
+**Retained Nemotron contract, historical comparator only:** the following details document the existing implementation. Do not reconfigure or rerun it without a specific reason. They are not requirements for PhoWhisper.
 
 Use `StreamingNemotronMultilingualAsrManager`, not MAIChat's Parakeet-v3 manager or the English-only Nemotron manager.
 
@@ -222,7 +463,7 @@ Add the required library and model-license notices. The inspected weights identi
 - Keep one AVSpeechSynthesizer in the audio engine owner, with an available English voice and `usesApplicationAudioSession = true`. Verify that voice after an offline relaunch.
 - Do not capture/feed ASR while generating or speaking. Reuse audio objects within the session without repeatedly recreating model weights.
 - Model inference must not run on the real-time microphone callback or block the main actor. Transfer/copy PCM safely into one bounded, ordered consumer. Do not launch an unbounded Task per buffer or silently drop audio when overloaded.
-- Drain queued audio before `finish()`. Do not overlap `process`, `finish`, or `reset`; actor reentrancy does not serialize an entire async operation across suspension points.
+- Drain queued capture audio before finalization. For PhoWhisper/WhisperKit, pass the complete bounded turn to transcription once; for the retained Nemotron path, preserve ordered `process`/`finish`/`reset`. Do not overlap finalization/reset or unload an in-flight model; actor reentrancy does not serialize an entire async operation across suspension points.
 - Enforce a 30-second recording limit for manual turns too. Finalize once with a clear notice instead of letting a forgotten recording run indefinitely. Empty ASR produces no fragment or tutor request; reset and return to ready.
 - Use TTS delegate completion/cancellation for state transitions, not a text-length timer. End must stop speech and prevent late callbacks from restarting capture.
 - Use one completion convention for speaking, such as an async method bridged to delegate events, rather than both an awaited completion and a second callback driving the same transition.
@@ -245,7 +486,7 @@ Use FluidAudio Silero VAD, not a dB-only conversational detector:
 - Do not reject legitimate short "yes"/"no" answers through an aggressive minimum-duration filter.
 - Resume listening after TTS only while active and not muted. Retain manual Send as an escape hatch. No barge-in.
 
-If endpointing repeatedly cuts off word-search pauses, retain manual turns for this tester build instead of starting a turn-prediction project.
+If endpointing repeatedly cuts off word-search pauses, retain manual turns for this feasibility build instead of starting a turn-prediction project.
 
 ## 7. Local model and teaching contract
 
@@ -374,7 +615,7 @@ Verify language judgments and saved evidence through actual conversations, End, 
 
 ## 10. Verification policy: run the app, do not build a test project
 
-**The acceptance source of truth is observed behavior of the actual app built from the changed checkout.** The `verify-mural` skill is a procedure the agent must execute at each checkpoint, not a label for compilation or a request for the user to do all testing later.
+**The acceptance source of truth is observed behavior of the actual app built from the changed checkout.** The implementation agent directly uses `verify-mural` to build/install/launch and inspect logs, then gives the user a short exact checklist for the running phone build. The user tests and reports; the agent correlates logs, fixes failures, and supplies a focused replay. This deliberate division saves time and tokens. No subagents or canonical-tester-report requirement. Delivering instructions is a handoff, not a passed gate: record PENDING HUMAN until feedback establishes the required behavior.
 
 ### Keep effort focused
 
@@ -532,3 +773,51 @@ Handoff must state: installed build/revision, tested phone and OS, selected asse
 - [Apple session caching and prewarming](https://developer.apple.com/documentation/foundationmodels/optimizing-key-value-caching-in-language-model-sessions)
 - [Apple voiceChat processing requirements](https://developer.apple.com/documentation/avfaudio/avaudiosession/mode-swift.struct/voicechat)
 - [Apple synthesizer audio-session ownership](https://developer.apple.com/documentation/avfaudio/avspeechsynthesizer/usesapplicationaudiosession)
+
+## Historical supplementary Phase 2 log and feedback notes
+
+These earlier pending states are superseded by the current MVP acceptance at the top.
+
+### Trace retry after user reconnect/unlock
+
+User confirmed ready and authorized retry. xctrace still listed Kevq offline while devicectl listed it available. One bounded app-scoped retry exited 13 with `Timed out waiting for device to boot: Kevq (27.0)`; no trace recorded. Evidence `fp16-gpu-profile-v1/core-ai-retry.log`. Original syslog capture PID74650 had exited on disconnect; started replacement PID14136 with the same Mural/asr_ filter, file `fp16-gpu-profile-v1/capture-reconnected.log`, exact command/PID stored alongside. No Device Hub process. Do not signal historical PIDs. Next: user performs the existing three-turn dictation checklist using component logs; hardware placement remains unverified. No further blind Instruments retry or ANE change yet.
+
+### Human feedback: FP16/GPU profile build
+
+User reports preparation70.3s, local verification2.65s, prewarm65.43s, displayed load/tokenizer2.17s. The latter combines model load and local tokenizer, not tokenizer alone. User says all three dictated phrases correct (exact output strings not supplied), and estimates first finalization around20s again; second/third timings not supplied. Human-confirmed quality on this small replay, no new overall Phase2 acceptance.
+
+Critical evidence gap: capture-reconnected.log contains only `[connected]`, no ASR events. PID14136 was verified as this session's idevicesyslog command and stopped. No component timings recovered and no continuous capture remains. Mural is present at PID23708 in fresh process inspection (previous launch PID23562 differed); no reason for process change established.
+
+Tried direct historical recovery, scoped to the LocalAudio subsystem/category and asr_ events from the last15 minutes via `/usr/bin/log collect --device-udid ... --predicate ...`. It exited77: Must be root to collect logs from attached device. Noninteractive sudo attempt failed: a password is required. No archive obtained, no credential requested/read, no broad sysdiagnose or permission change. Logs: log-collect.log/log-collect-admin.log. Core AI trace remains blocked separately by Instruments offline device detection.
+
+Do not claim encoder/decoder bottleneck from user total or empty capture. Next smallest recovery is user-mediated administrator authorization for the prepared scoped device-log collection, or a minimal reliable diagnostic delivery change before another replay. Do not request blind dictation repeats or switch backend while claiming nonexistent measurements. ANE and 8-bit per-tensor not started.
+
+### Recovered GPU timing evidence after administrator authorization
+
+User authorized the macOS administrator prompt. Device log collection succeeded for the last hour. Apple emitted `Warning: --predicate is ignored when collecting from attached device`, so the collection was broader than requested. Only Mural LocalAudio/asr_ events were queried/read into `fp16-gpu-profile-v1/recovered-asr.log`; the broader root-owned archive was removed with administrator privileges immediately afterward. `log-collect-prompt.log` and `archive-cleanup.txt` retain the limitation/cleanup record. No unfiltered events inspected or published. Do not describe attached-device log collection as predicate-scoped in future.
+
+Actual recorded preparation70.262s: verification2.650s, local tokenizer0.447s, prewarm65.434s (SDK encoder specialization30.986s/decoder34.319s), subsequent load1.720s (encoder0.427s/decoder1.288s). Displayed load/tokenizer2.17s is their aggregate. SDK specialization timers cover prewarm model-load calls, not proven per-op hardware placement.
+
+| Turn | UI Send-to-final | Encoder | Decoder predictions including language | Capture duration |
+|---|---:|---:|---:|---:|
+| 1 supermarket | 9.769509s | 8.521943s | 1.130057s | 4.6s |
+| 2 mixed phở | 4.437624s | 1.843983s | 2.469130s | 8.3s |
+| 3 supermarket | 3.744224s | 1.821264s | 1.815854s | 5.1s |
+
+These recovered numbers supersede the user's approximate20s estimate for THIS replay. Historical FP16 first20.51s remains valid for its earlier run. Internal inference wall times9.757907/4.424682/3.726933s. Encoder accounts for most first-turn wall time and its excess versus warm; exact deferred setup/compilation versus compute cause remains unproven without Core AI trace. Decoder work is material in warm turns too. The SDK decodingLoop9.722821/4.394863/3.693373s overlaps encoding/the full window loop and must NOT be treated as decoder-only time or added to encoding.
+
+Footprint loaded2.081GB, first finalized2.598GB, next2.547GB/2.542GB; process-lifetime RSS peak3.998GB throughout, not isolated model peak. Thermal state0 nominal on recorded samples. User reports all three transcripts correct; exact output strings not supplied, no microphone content in filtered logs. Tiny sample, no robust tail/soak/general accuracy claim.
+
+Next justified experiment: bounded FP16 encoder CPU_AND_NE comparison with identical assets/decode and the same three human phrases, measuring preparation/first/warm/quality. Hardware placement remains unverified, ANE not tested yet. No 8-bit per-tensor work or Phase3. No active captures.
+
+### First human ANE-capable feedback: preparation slow, quality concern
+
+User reports total preparation215.2s and subjectively faster transcriptions. This exceeded the supplied3-minute preparation stop gate, but preparation ultimately completed. GPU matched preparation was70.262s, so observed ANE-capable total is about3.06x, +144.94s. Preparation breakdown and per-turn Send-to-final values not supplied; no quantified inference speedup established.
+
+User reports second sentence (mixed phở phrase) first came out entirely Vietnamese and required another recording to get correct. Exact first/retry outputs not supplied. Record this as a real reported first-attempt quality concern, not a pass based on the retry. Separate microphone recordings/backend numerical differences mean no matched-waveform attribution or proven translation mechanism. Other exact transcripts unknown.
+
+No active capture or Core AI placement trace. Need exact available outputs/times and permission for historical device-log recovery: Apple attached-device collection ignores predicates and collects a broader device archive, even though only filtered Mural events would be read and the broader archive then deleted. Do not silently reuse the earlier narrow collection authorization as broad collection consent. No new collection, build, backend reversal or compression experiment performed on this feedback. ANE usefulness NOT ACCEPTED, GPU rollback bundle retained. Next: obtain evidence without another blind dictation replay; distinguish one-time specialization from recurring preparation before deciding retention. Phase2 UNPASSED, Phase3 on hold.
+
+### Human ANE timing details supplied
+
+User supplies Send-to-final4.44s (first supermarket),3.19s (mixed phở),1.57s (last supermarket); preparation verification2.85s, prewarm205.98s, load/tokenizer6.33s (sum215.16s, consistent with displayed215.2s). Compared with recovered GPU9.769509/4.437624/3.744224s and prewarm65.434232s, these human-reported timings suggest faster finalization but substantially slower preparation. Not matched-waveform or sustained benchmark evidence; second-turn3.19s is not yet attributed to first failed attempt versus successful retry. Preserve first-attempt fully Vietnamese quality concern. No measured ANE component timings/hardware placement yet. Prewarm accounts for most added preparation; one-time specialization versus recurring cost remains unknown. Broad device-log recovery permission was requested but not explicitly granted by this timing-only response; no collection/prompt triggered.
