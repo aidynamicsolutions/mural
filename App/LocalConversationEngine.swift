@@ -187,6 +187,10 @@ import WhisperKit
         return asrText
     }
 
+    func clearSubmissionTiming() {
+        submittedAt = nil; sendToPlaybackSeconds = nil
+    }
+
     func selectASR(_ model: ASRModel) {
         guard !asrBusy, completion == nil, model != asrModel else { return }
         stop() // Release weights, never delete either model's cached assets.

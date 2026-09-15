@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 public struct FinalAssessmentResult: Sendable {
     public let sessionID: UUID
@@ -26,7 +27,7 @@ public struct FinalAssessmentResult: Sendable {
 }
 
 /// Finishes the latest unassessed user passage without owning the visible conversation.
-@MainActor public final class FinalAssessmentQueue {
+@MainActor @Observable public final class FinalAssessmentQueue {
     public var onResult: ((FinalAssessmentResult) -> Void)?
     private let assess: (SessionRecord, Passage) async throws -> FinalAssessmentResult
     private let timeout: TimeInterval
@@ -41,7 +42,7 @@ public struct FinalAssessmentResult: Sendable {
     public init(timeout: TimeInterval = 15, assess: @escaping (SessionRecord, Passage) async throws -> FinalAssessmentResult) {
         self.timeout = min(15, max(0.001, timeout)); self.assess = assess
     }
-    deinit { for job in jobs.values { job.request.cancel(); job.timer.cancel() } }
+    isolated deinit { for job in jobs.values { job.request.cancel(); job.timer.cancel() } }
 
     @discardableResult public func submit(_ session: SessionRecord) -> Bool {
         guard session.endedAt != nil, jobs[session.id] == nil,

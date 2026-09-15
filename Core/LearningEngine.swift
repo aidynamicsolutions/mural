@@ -68,6 +68,12 @@ public enum LearningEngine {
         var nextGoal = "Start with a greeting and one small question. Adjust from what the learner actually says."
         var capabilityEvidence: [String: Set<String>] = [:]
         var events: [String: [(WordProposal, Date, String)]] = [:]
+        // Older archives stored hidden IDs as language|lemma|meaning. Honor them without rewriting history.
+        let hiddenKeys = Set(hiddenWords.map { id in
+            let parts = id.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count >= 2 else { return id }
+            return parts[0] + "|" + parts[1].split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+        })
         let calendar = Calendar(identifier: .gregorian)
         for session in sessions.filter({ $0.languageID == languageID }).sorted(by: { $0.startedAt < $1.startedAt }) {
             var seen = Set<String>()
@@ -84,7 +90,7 @@ public enum LearningEngine {
                     capabilityEvidence[a.capability, default: []].insert("\(calendar.startOfDay(for: a.createdAt))|\(a.context)")
                 }
                 var seenWords = Set<String>()
-                for word in a.words where !hiddenWords.contains(word.key) && seenWords.insert(word.key).inserted {
+                for word in a.words where !hiddenKeys.contains(word.key) && seenWords.insert(word.key).inserted {
                     events[word.key, default: []].append((word, a.createdAt, a.context))
                 }
             }

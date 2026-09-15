@@ -106,14 +106,16 @@ struct TalkView: View {
                     Text(coordinator.microphoneLabel).font(.caption2).foregroundStyle(MuralColor.secondary).padding(.top, 10)
                         .accessibilityIdentifier("microphone-status")
                     HStack(spacing: 24) {
-                        if coordinator.state == .active && !coordinator.isLocal {
+                        if coordinator.state == .active {
                             Button("Type instead", systemImage: "keyboard") { typing = true }
+                                .frame(minHeight: 44).disabled(coordinator.isLocal && !coordinator.canRecordLocal)
                             Button("A little help", systemImage: "sparkles") { coordinator.help() }
+                                .frame(minHeight: 44).disabled(coordinator.isLocal && !coordinator.canUseLocalSupport)
                         } else if coordinator.session == nil && !coordinator.isLocal {
                             Text("Reply in whichever language comes to you.").foregroundStyle(MuralColor.secondary)
                         } else if !coordinator.isRunning && coordinator.session != nil {
                             Button("New conversation", systemImage: "arrow.counterclockwise") { coordinator.resetConversation() }
-                                .accessibilityIdentifier("new-conversation").disabled(coordinator.localResourcesBusy)
+                                .accessibilityIdentifier("new-conversation").disabled(!coordinator.canChangeMode)
                         }
                     }.font(.caption).padding(.top, 6).padding(.bottom, 12)
                     if let notice = coordinator.notice {
@@ -129,16 +131,19 @@ struct TalkView: View {
         }
         .sheet(item: $lookup) { item in LookupView(item: item, coordinator: coordinator) }
         .onChange(of: coordinator.mode) { typing = false; lookup = nil; transcript = nil }
+        .onChange(of: coordinator.session?.id) { typing = false; lookup = nil; transcript = nil }
+        .onChange(of: coordinator.localResourcesBusy) { if !coordinator.localResourcesBusy { coordinator.refreshLocalMeaning() } }
+        .onChange(of: coordinator.state) { if coordinator.isLocal && !coordinator.isRunning { typing = false; lookup = nil } }
     }
     private var captionArea: some View {
         VStack(spacing: 12) {
             Text(linkedCaption).font(.system(coordinator.assistantPassage == nil ? .largeTitle : .title2, design: .rounded, weight: .medium))
                 .tracking(-0.5).multilineTextAlignment(.center).tint(MuralColor.ink)
                 .environment(\.openURL, OpenURLAction { url in
-                    guard !coordinator.isLocal, url.scheme == "mural-word", let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let word = components.queryItems?.first?.value else { return .discarded }
+                    guard (!coordinator.isLocal || coordinator.canUseLocalSupport), url.scheme == "mural-word", let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let word = components.queryItems?.first?.value else { return .discarded }
                     lookup = WordLookup(word: word, sentence: coordinator.caption); return .handled
                 }).accessibilityIdentifier("target-caption")
-            if !coordinator.isLocal && coordinator.store.preferences.meaningVisible {
+            if coordinator.store.preferences.meaningVisible && (!coordinator.isLocal || coordinator.assistantPassage != nil) {
                 Text(coordinator.assistantPassage == nil ? MeaningLanguages.greeting(in: coordinator.store.preferences.meaningLanguage) : !coordinator.meaning.isEmpty ? coordinator.meaning : coordinator.translating ? "Finding the meaning…" : "")
                     .font(.subheadline).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                     .accessibilityIdentifier("meaning-caption")
@@ -146,6 +151,7 @@ struct TalkView: View {
                     VStack(spacing: 6) {
                         Text(error).foregroundStyle(MuralColor.secondary)
                         Button("Try meaning again") { coordinator.retryMeaning() }
+                            .disabled(coordinator.isLocal && !coordinator.canUseLocalSupport)
                     }.font(.caption).multilineTextAlignment(.center)
                 }
             }
@@ -167,13 +173,22 @@ struct TalkView: View {
             var part = AttributedString((i > 0 ? " " : "") + word)
             var components = URLComponents(); components.scheme = "mural-word"; components.host = "lookup"
             components.queryItems = [URLQueryItem(name: "word", value: word)]
-            if !coordinator.isLocal && coordinator.assistantPassage != nil { part.link = components.url }
+            if coordinator.assistantPassage != nil && (!coordinator.isLocal || coordinator.canUseLocalSupport) { part.link = components.url }
             part.foregroundColor = MuralColor.ink; result.append(part)
         }
         return result
     }
     private var localControls: some View {
         VStack(spacing: 12) {
+            if coordinator.assistantPassage != nil {
+                Button(coordinator.store.preferences.meaningVisible ? "Hide meaning" : "Meaning", systemImage: "captions.bubble") {
+                    coordinator.toggleMeaning()
+                }.frame(minHeight: 44)
+                    .accessibilityValue(coordinator.store.preferences.meaningVisible ? "On" : "Off")
+                    .accessibilityHint("Shows the completed English response in Vietnamese")
+                    .disabled(!coordinator.store.preferences.meaningVisible && !coordinator.canUseLocalSupport)
+                Text("Tap an English word for its meaning.").font(.caption).foregroundStyle(MuralColor.secondary)
+            }
             if coordinator.isRunning {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) { localTurnButtons }
@@ -200,7 +215,7 @@ struct TalkView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("PhoWhisper CS FP16 → Apple tutor → English system voice. No OpenAI key or cloud inference. Tap Record only after Mural finishes speaking; tap Send when done.")
                     Text("Silence can produce invented text and an unsolicited tutor reply. Recognition is accepted for MVP with this known limitation; silence detection is not implemented.")
-                    Text("Finalized turns are saved on this iPhone. Meanings, lookup, Help, typing, themes, and learning evidence are not available yet.")
+                    Text("Finalized turns, Vietnamese meanings, lookup, Help and typed replies stay on this iPhone. After you tap End, only your last reply is reviewed for up to two English words or phrases. Evidence is provisional; supported practice is not independent recall. Themes and search remain unavailable.")
                     Text("Uses the speech assets already installed on this phone (3.10 GB plus caches). No model download source is configured. Keep the app open during preparation.")
                     if let seconds = coordinator.localAudio.preparationSeconds {
                         Text("Preparation: \(seconds, specifier: "%.1f") s").font(.caption).monospacedDigit()
@@ -218,6 +233,13 @@ struct TalkView: View {
                     }
                     if let seconds = coordinator.localModelSeconds {
                         Text("Model: \(seconds, specifier: "%.2f") s")
+                    }
+                    if !coordinator.isRunning, coordinator.userPassage != nil {
+                        if let assessment = coordinator.session?.assessments.last {
+                            Text("Last-reply review: \(assessment.outcome.rawValue) · \(assessment.words.count) words · \(assessment.capability.isEmpty ? "no capability credit" : "provisional capability evidence")")
+                        } else {
+                            Text(coordinator.localAssessmentRunning ? "Last-reply review is pending." : "No verified last-reply evidence saved. The review may have been canceled or unavailable.")
+                        }
                     }
                 }.font(.footnote).padding(.top, 8)
             }.font(.footnote)
@@ -279,6 +301,7 @@ struct LookupView: View {
     let coordinator: ConversationCoordinator
     @State private var explanation: String?
     @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
@@ -290,8 +313,9 @@ struct LookupView: View {
                 Spacer()
             }.padding(28).frame(maxWidth: .infinity, alignment: .leading).background(MuralColor.cream)
                 .navigationTitle("A little meaning").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }.presentationDetents([.medium, .large])
-            .task { do { explanation = try await coordinator.lookup(word: item.word, sentence: item.sentence) } catch { self.error = error.localizedDescription } }
+            .task { do { let result = try await coordinator.lookup(word: item.word, sentence: item.sentence); try Task.checkCancellation(); explanation = result } catch is CancellationError { } catch { self.error = error.localizedDescription } }
     }
 }
 
@@ -308,7 +332,13 @@ struct TypedReplyView: View {
                 TextField("Reply in \(coordinator.language.name) or another language", text: $text, axis: .vertical).lineLimit(3...6).focused($focused).padding(18).background(.white, in: RoundedRectangle(cornerRadius: 22))
                 Button { sending = true; Task { await coordinator.sendTyped(text); sending = false; dismiss() } } label: {
                     HStack { Text(sending ? "Sending…" : "Send reply"); Spacer(); Image(systemName: "arrow.up") }.padding(18).background(MuralColor.orange, in: Capsule())
-                }.disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }.disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                           (coordinator.isLocal && (!coordinator.canRecordLocal || text.count > 2000)))
+                if coordinator.isLocal {
+                    Text("English, Vietnamese, or both. Up to 2,000 characters. Typed replies count as supported practice.")
+                        .font(.footnote).foregroundStyle(MuralColor.secondary)
+                    if !coordinator.canRecordLocal { Text("Wait for Ready before sending.").font(.footnote) }
+                }
                 Spacer()
             }.padding(26).foregroundStyle(MuralColor.ink).background(MuralColor.cream)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }

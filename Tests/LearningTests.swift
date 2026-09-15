@@ -67,6 +67,63 @@ final class LearningTests: XCTestCase {
         var s = fixture(); s.assessments[0].words += s.assessments[0].words
         XCTAssertEqual(LearningEngine.project([s], now: s.startedAt).words[0].independentCount, 1)
     }
+    func testBreakfastDefinitionsShareOneWordAcrossConversations() throws {
+        let meanings = ["morning meal", "the first meal of the day", "a meal eaten in the morning"]
+        var sessions = meanings.enumerated().map { index, meaning in
+            let date = Date(timeIntervalSince1970: 1_780_000_000 + Double(index) * 86400)
+            var session = SessionRecord(languageID: "en")
+            session.startedAt = date
+            session.endedAt = date.addingTimeInterval(60)
+            session.append(Fragment(speaker: .user, text: "I had breakfast this morning.", startMS: 1000,
+                                    endMS: 2000, receivedAt: date, typed: index == 2, turnID: UUID()))
+            let passage = session.passages[0]
+            session.assessments = [Assessment(passageID: passage.id, revisionKey: passage.revisionKey,
+                outcome: .success, suggestedLevel: 2, nextGoal: "", capability: "",
+                words: [WordProposal(lemma: index == 1 ? " Breakfast " : "breakfast", meaning: meaning,
+                    form: "breakfast", kind: .independent, confidence: 0.95,
+                    sourceIDs: passage.fragments.map(\.id), quote: passage.text, language: "en")], createdAt: date)]
+            return session
+        }
+        var duplicate = sessions[0].assessments[0].words[0]
+        duplicate.meaning = "a morning meal"
+        sessions[0].assessments[0].words.append(duplicate)
+        var archive = Archive()
+        archive.sessions = sessions
+        let restored = try Archive.decode(archive.encoded())
+        let now = sessions[2].startedAt
+        let words = LearningEngine.project(restored.sessions, languageID: "en", now: now).words
+        XCTAssertEqual(words.count, 1)
+        let word = try XCTUnwrap(words.first)
+        XCTAssertEqual(word.id, "en|breakfast")
+        XCTAssertEqual(word.meaning, meanings[2])
+        XCTAssertEqual(word.lastSeen, now)
+        XCTAssertEqual(word.independentCount, 2) // One credit per passage; the typed turn stays assisted.
+        XCTAssertEqual(word.bars, 2)
+        for hiddenID in [word.id, "en|breakfast|morning meal"] {
+            XCTAssertTrue(LearningEngine.project(restored.sessions, languageID: "en", hiddenWords: [hiddenID]).words.isEmpty)
+        }
+        XCTAssertEqual(LearningEngine.project(restored.sessions, languageID: "en", hiddenWords: ["nb|breakfast|morning meal"]).words.count, 1)
+
+        sessions[1].correctFragment(id: sessions[1].fragments[0].id, text: "I bought apples.")
+        let corrected = LearningEngine.project(sessions, languageID: "en", now: now).words
+        XCTAssertEqual(corrected.count, 1)
+        XCTAssertEqual(corrected.first?.independentCount, 1)
+        sessions.removeFirst()
+        XCTAssertEqual(LearningEngine.project(sessions, languageID: "en", now: now).words.first?.independentCount, 0)
+    }
+    func testWordIdentityNormalizesWhitespaceButPreservesAccentsAndLanguage() {
+        var word = fixture().assessments[0].words[0]
+        word.lemma = "  LOOK\n after  "; word.language = "en"
+        let key = word.key
+        word.lemma = "look after"; word.meaning = "a different definition"
+        XCTAssertEqual(word.key, key)
+        word.language = "fr"
+        XCTAssertNotEqual(word.key, key)
+        word.lemma = "marche"
+        let unaccented = word.key
+        word.lemma = "marché"
+        XCTAssertNotEqual(word.key, unaccented)
+    }
     func testSteadyRequiresSpacingAndDifferentContexts() {
         let first = fixture(), second = fixture(day: 2), third = fixture(day: 8, theme: "dinner")
         let p = LearningEngine.project([first, second, third], now: third.startedAt)

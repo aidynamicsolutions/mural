@@ -14,13 +14,28 @@ import MuralCore
     private var localStartedAt = 0.0
     var isLocal: Bool { (sessionMode ?? mode) == .local }
     let localAudio = LocalConversationEngine()
+    private let localTutor: LocalTutorModel
+    private let localMeanings: MeaningController
+    private let localFinalAssessments: FinalAssessmentQueue
+    private var localPostTask: Task<Void, Never>?
+    private var localLookupTask: Task<String, Error>?
+    var localAssessmentRunning: Bool { session.map { localFinalAssessments.isPending($0.id) } ?? false }
+    private var localSupportUsed = false
+    var localPairSupported: Bool { language.id == "en" && store.preferences.meaningLanguage == "Vietnamese" }
+    var canUseLocalSupport: Bool {
+        isLocal && localPairSupported && !localResourcesBusy && assistantPassage != nil &&
+        ((state == .active && localPhase == .ready) || state == .ended)
+    }
     private(set) var localPhase: LocalPhase = .idle
     private var localTask: Task<Void, Never>?
     private var localTimeout: Task<Void, Never>?
     private(set) var localReplySeconds: Double?
     private(set) var localModelSeconds: Double?
-    var localResourcesBusy: Bool { localTask != nil || localAudio.asrBusy }
-    var canChangeMode: Bool { !isRunning && !localResourcesBusy }
+    var localResourcesBusy: Bool {
+        localTask != nil || localAudio.asrBusy || localTutor.isBusy || localMeanings.isLoading ||
+        localLookupTask != nil || localPostTask != nil || localAssessmentRunning
+    }
+    var canChangeMode: Bool { !isRunning && localTask == nil && !localAudio.asrBusy }
     var canRecordLocal: Bool { isLocal && state == .active && localPhase == .ready && !localResourcesBusy && localAudio.canRecord }
     var canRetryLocalReply: Bool { canRecordLocal && session?.fragments.last?.speaker == .user }
     private let localLogger = Logger(subsystem: "no.william.mural", category: "LocalConversation")
@@ -33,9 +48,10 @@ import MuralCore
     private(set) var isMuted = false
     private let meanings: MeaningController
     private let finalAssessments: FinalAssessmentQueue
-    var meaning: String { meanings.text }
-    var translating: Bool { meanings.isLoading }
-    var meaningError: String? { meanings.error }
+    private var activeMeanings: MeaningController { isLocal ? localMeanings : meanings }
+    var meaning: String { activeMeanings.text }
+    var translating: Bool { activeMeanings.isLoading }
+    var meaningError: String? { activeMeanings.error }
     private(set) var working = false
     var error: String?
     var notice: String?
@@ -64,6 +80,18 @@ import MuralCore
     init(store: LearningStore) {
         self.store = store
         let api = APIClient(); self.api = api
+        let localTutor = LocalTutorModel(); self.localTutor = localTutor
+        localMeanings = MeaningController { request in
+            guard request.learningLanguageID == "en", request.meaningLanguage == "Vietnamese",
+                  store.sessions.first(where: { $0.id == request.sessionID })?.isLocalConversation == true else { throw LocalFeatureError.unavailable }
+            do { return MeaningResult(text: try await localTutor.meaning(request.text)) }
+            catch is CancellationError { throw CancellationError() }
+            catch { throw LocalTutorModel.TutorError.unavailable(LocalTutorModel.message(for: error)) }
+        }
+        localFinalAssessments = FinalAssessmentQueue { snapshot, passage in
+            try Task.checkCancellation()
+            return try await localTutor.assess(snapshot, passage: passage)
+        }
         finalAssessments = FinalAssessmentQueue { snapshot, passage in
             guard store.preferences.aiConsentVersion == AIProcessingConsent.version || AudioVerification.requested else { throw AIProcessingConsent.ConsentError.required }
             return try await Self.assess(api: api, snapshot: snapshot, passage: passage)
@@ -86,7 +114,30 @@ import MuralCore
             self.store.save(updated)
             if self.session?.id == updated.id { self.session = updated }
         }
-        store.onSessionInvalidation = { [weak self] id in self?.finalAssessments.cancel(id) }
+        localMeanings.onResult = { [weak self] request, result in
+            guard let self, self.isLocal, self.session?.id == request.sessionID,
+                  self.assistantPassage?.revisionKey == request.revisionKey,
+                  self.store.sessions.contains(where: { $0.id == request.sessionID }) else { return }
+            self.session?.translations[request.cacheKey] = result.text
+            self.localSupportUsed = true
+            self.save()
+        }
+        localFinalAssessments.onResult = { [weak self] result in
+            guard let self, self.isLocal, self.state == .ended, self.session?.id == result.sessionID,
+                  UIApplication.shared.applicationState == .active,
+                  let updated = result.applying(to: self.store.sessions.first(where: { $0.id == result.sessionID })) else { return }
+            self.store.save(updated); self.session = updated
+            self.localLogger.notice("local_assessment_saved words=\(result.assessment.words.count, privacy: .public)")
+        }
+        store.onSessionInvalidation = { [weak self] id in
+            guard let self else { return }
+            self.finalAssessments.cancel(id); self.localFinalAssessments.cancel(id)
+            if self.isLocal, self.session?.id == id, !self.isRunning {
+                self.cancelLocalSupporting()
+                // Do not later save an obsolete in-memory transcript over an edit/deletion.
+                self.session = nil
+            }
+        }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
@@ -128,12 +179,12 @@ import MuralCore
             switch localPhase {
             case .idle: return "Prepare to talk on this iPhone"
             case .preparing: return localAudio.asrState == .downloading ? "Preparing · Checking installed speech assets…" : "Preparing · Warming speech models…"
-            case .ready: return "Ready · Tap Record"
+            case .ready: return localResourcesBusy ? "Finishing on-device support · Microphone off" : "Ready · Tap Record"
             case .recording:
                 return localAudio.asrState == .warming ? "Starting microphone…" : localAudio.asrState.rawValue
             case .thinking: return "Thinking on this iPhone…"
             case .speaking: return "Mural is speaking · Microphone off"
-            case .ended: return localResourcesBusy ? "Stopping local work…" : "Ended · Microphone off"
+            case .ended: return localAssessmentRunning ? "Reviewing your last reply on this iPhone…" : localResourcesBusy ? "Finishing local work…" : "Ended · Microphone off"
             case .failed: return "Local conversation unavailable"
             }
         }
@@ -189,6 +240,7 @@ import MuralCore
     }
     func selectMode(_ value: Mode) {
         guard canChangeMode, value != mode else { return }
+        cancelLocalSupporting()
         // Cancel old premium post-session work before entering the local boundary.
         for record in store.sessions { finalAssessments.cancel(record.id) }
         assessmentTask?.cancel(); connectionTask?.cancel(); closeTask?.cancel(); durationTask?.cancel()
@@ -206,7 +258,7 @@ import MuralCore
             return
         }
         if let message = LocalTutorModel.availabilityMessage { error = message; return }
-        cancelReset(); meanings.reset()
+        cancelReset(); meanings.reset(); cancelLocalSupporting()
         for record in store.sessions { finalAssessments.cancel(record.id) }
         assessmentTask?.cancel(); connectionTask?.cancel(); closeTask?.cancel(); durationTask?.cancel()
         saveTask?.cancel(); saveTask = nil
@@ -220,12 +272,12 @@ import MuralCore
         session = record
         error = nil; notice = nil; isMuted = true; working = false
         inputLevel = 0; outputLevel = 0
-        localReplySeconds = nil; localModelSeconds = nil
+        localReplySeconds = nil; localModelSeconds = nil; localSupportUsed = false
         state = .connecting; localPhase = .preparing
         let id = record.id
         localTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.localTask = nil }
+            defer { self.localTask = nil; self.scheduleTranslation() }
             do {
                 try await self.localAudio.prepareConversation()
                 try self.checkLocal(id)
@@ -249,7 +301,7 @@ import MuralCore
         localReplySeconds = nil; localModelSeconds = nil; lastActivity = .now
         localTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.localTask = nil }
+            defer { self.localTask = nil; self.scheduleTranslation() }
             do {
                 let text = try await self.localAudio.recordConversationTurn()
                 try self.checkLocal(id)
@@ -276,14 +328,16 @@ import MuralCore
         error = nil; notice = nil; localPhase = .thinking
         localTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.localTask = nil }
+            defer { self.localTask = nil; self.scheduleTranslation() }
             await self.replyLocal(sessionID: id)
         }
     }
 
-    private func replyLocal(sessionID: UUID) async {
-        guard let current = session?.fragments.last, current.speaker == .user else { return }
-        let history = (session?.fragments.dropLast().suffix(6) ?? []).map {
+    private func replyLocal(sessionID: UUID, help: Bool = false) async {
+        guard let current = help ? session?.fragments.last(where: { $0.speaker == .assistant }) : session?.fragments.last,
+              help || current.speaker == .user else { return }
+        localMeanings.reset()
+        let history = (session?.fragments.filter { $0.id != current.id }.suffix(6) ?? []).map {
             "\($0.speaker == .user ? "Learner" : "Mural"): \($0.text)"
         }
         localPhase = .thinking
@@ -295,11 +349,11 @@ import MuralCore
         }
         defer { localTimeout?.cancel(); localTimeout = nil }
         do {
-            let result = try await LocalTutorModel().reply(to: current.text, history: history)
+            let result = try await self.localTutor.reply(to: current.text, history: history, help: help)
             try checkLocal(sessionID)
             localTimeout?.cancel(); localTimeout = nil
             localModelSeconds = result.fullResponseSeconds
-            localReplySeconds = localAudio.lastSubmissionTime.map { ProcessInfo.processInfo.systemUptime - $0 }
+            localReplySeconds = (help || current.typed ? nil : localAudio.lastSubmissionTime).map { ProcessInfo.processInfo.systemUptime - $0 }
             localLogger.notice("local_reply_complete send_to_reply_seconds=\(self.localReplySeconds ?? 0, privacy: .public)")
             let fragmentID = try appendLocal(result.text, speaker: .assistant, sessionID: sessionID)
             try await speakLocal(result.text, sessionID: sessionID, fragmentID: fragmentID)
@@ -329,11 +383,12 @@ import MuralCore
         localPhase = .ready; lastActivity = .now
     }
 
-    @discardableResult private func appendLocal(_ text: String, speaker: Speaker, sessionID: UUID) throws -> String {
+    @discardableResult private func appendLocal(_ text: String, speaker: Speaker, sessionID: UUID, typed: Bool = false) throws -> String {
         try checkLocal(sessionID)
         let offset = max(0, Int((ProcessInfo.processInfo.systemUptime - localStartedAt) * 1000))
-        var fragment = Fragment(speaker: speaker, text: text, startMS: offset, endMS: offset, turnID: UUID())
-        // Meanings and typing are unavailable locally. Visible modeled text is retained.
+        var fragment = Fragment(speaker: speaker, text: text, startMS: offset, endMS: offset,
+                                meaningVisible: store.preferences.meaningVisible || localSupportUsed, typed: typed, turnID: UUID())
+        if speaker == .user { localSupportUsed = false }
         if speaker == .assistant { fragment.playbackCompleted = false }
         session?.append(fragment)
         save() // Finalized text survives errors, cancellation, and process termination.
@@ -351,11 +406,12 @@ import MuralCore
         guard isLocal, isRunning, session?.id == id else { throw CancellationError() }
     }
 
-    private func endLocal(reason: String) {
+    private func endLocal(reason: String, assess: Bool = false) {
         guard isRunning else { return }
         localTimeout?.cancel(); localTimeout = nil
         localTask?.cancel(); localAudio.stop(); durationTask?.cancel()
         meanings.reset(); assessmentTask?.cancel()
+        localLookupTask?.cancel()
         // Preparation can end before any finalized text exists. Discard that draft,
         // rather than exposing an empty transcript or persisting a history entry.
         if session?.fragments.contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) != true {
@@ -367,11 +423,32 @@ import MuralCore
         isMuted = true; inputLevel = 0; outputLevel = 0; working = false
         state = .ended; localPhase = .ended; notice = reason
         localLogger.notice("local_ended")
+        // End stays immediate; the existing final queue runs only after canceled workers drain.
+        let finishing = localTask, lookup = localLookupTask, id = session?.id
+        localPostTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.localPostTask = nil; if !Task.isCancelled { self.scheduleTranslation() } }
+            await self.localMeanings.cancelAndWait()
+            await finishing?.value
+            _ = await lookup?.result
+            guard !Task.isCancelled, assess, self.isLocal, self.state == .ended,
+                  let id, self.session?.id == id, UIApplication.shared.applicationState == .active,
+                  let saved = self.store.sessions.first(where: { $0.id == id }) else { return }
+            // ponytail: last user passage only; whole-conversation extraction needs separate approval.
+            self.localFinalAssessments.submit(saved)
+        }
+    }
+
+    private func cancelLocalSupporting() {
+        localPostTask?.cancel()
+        localLookupTask?.cancel(); localMeanings.reset()
+        if let id = session?.id { localFinalAssessments.cancel(id) }
+        languageGeneration = UUID()
     }
 
     private enum LocalFeatureError: LocalizedError {
         case unavailable
-        var errorDescription: String? { "This feature is unavailable in the on-device conversation-only build. No OpenAI request was made." }
+        var errorDescription: String? { "This feature is unavailable in On-device mode. No OpenAI request was made." }
     }
 
     private var hasAIConsent: Bool {
@@ -389,7 +466,7 @@ import MuralCore
     }
     func selectLanguage(_ id: String) {
         guard canChangeMode, id != language.id, LanguageRegistry.module(for: id) != nil else { return }
-        cancelReset(); languageGeneration = UUID()
+        cancelReset(); cancelLocalSupporting(); languageGeneration = UUID()
         connectionTask?.cancel(); closeTask?.cancel(); durationTask?.cancel()
         meanings.reset(); assessmentTask?.cancel(); saveTask?.cancel(); saveTask = nil
         delegationTasks.values.forEach { $0.cancel() }; delegationTasks.removeAll()
@@ -403,7 +480,7 @@ import MuralCore
     func selectMeaningLanguage(_ value: String) {
         guard !(isLocal && (isRunning || localResourcesBusy)) else { return }
         guard MeaningLanguages.all.contains(value) else { return }
-        meanings.reset()
+        meanings.reset(); cancelLocalSupporting()
         store.updatePreferences { $0.meaningLanguage = value }
         scheduleTranslation()
     }
@@ -430,19 +507,31 @@ import MuralCore
         store.deleteAll()
     }
     func toggleMeaning() {
-        guard !isLocal else { return }
         store.updatePreferences { $0.meaningVisible.toggle() }
-        if store.preferences.meaningVisible { scheduleTranslation() }
-        else { meanings.reset() }
+        if store.preferences.meaningVisible {
+            if isLocal { localSupportUsed = true }
+            scheduleTranslation()
+        } else { activeMeanings.reset() }
     }
     func help() {
-        guard !isLocal else { return }
+        if isLocal {
+            guard canUseLocalSupport, state == .active, let id = session?.id else { return }
+            localAudio.clearSubmissionTiming()
+            localReplySeconds = nil; localModelSeconds = nil
+            localPhase = .thinking; error = nil; notice = nil
+            localTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.localTask = nil; self.scheduleTranslation() }
+                await self.replyLocal(sessionID: id, help: true)
+            }
+            return
+        }
         guard state == .active else { return }
         append("instructions", TeachingPolicy.help(language: language))
         notice = "Mural will make that a little simpler."
     }
     func end(reason: String = "Ended by you") {
-        if isLocal { endLocal(reason: reason); return }
+        if isLocal { endLocal(reason: reason, assess: reason == "Ended by you"); return }
         guard state == .active || state == .connecting else { return }
         let wasConnecting = state == .connecting
         state = .closing; isMuted = true
@@ -459,7 +548,11 @@ import MuralCore
         }
     }
     func background() {
-        if isLocal { endLocal(reason: "App moved to background. Start again when ready."); return }
+        if isLocal {
+            endLocal(reason: "App moved to background. Start again when ready.")
+            cancelLocalSupporting()
+            return
+        }
         guard isRunning else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Close Mural conversation") { [weak self] in
             Task { @MainActor in self?.finish(final: false) }
@@ -555,14 +648,24 @@ import MuralCore
         }
     }
     private func scheduleTranslation() {
-        guard !isLocal else { return }
+        if isLocal {
+            guard canUseLocalSupport, UIApplication.shared.applicationState == .active,
+                  store.preferences.meaningVisible, let session, let passage = assistantPassage else { return }
+            let request = MeaningRequest(sessionID: session.id, passage: passage, learningLanguageID: session.languageID, meaningLanguage: "Vietnamese")
+            localMeanings.update(request, cached: session.translations[request.cacheKey])
+            return
+        }
         guard store.preferences.meaningVisible, let session, let passage = assistantPassage else { return }
         let request = MeaningRequest(sessionID: session.id, passage: passage, learningLanguageID: session.languageID, meaningLanguage: store.preferences.meaningLanguage)
         meanings.update(request, cached: session.translations[request.cacheKey])
     }
-    func retryMeaning() { guard !isLocal else { return }; scheduleTranslation(); meanings.retry() }
+    func retryMeaning() {
+        guard !isLocal || canUseLocalSupport else { return }
+        scheduleTranslation(); activeMeanings.retry()
+    }
     func resetConversation() {
-        guard !isRunning, !localResourcesBusy else { return }
+        guard canChangeMode else { return }
+        cancelLocalSupporting()
         if isLocal { localAudio.stop() }
         localPhase = .idle; localReplySeconds = nil; localModelSeconds = nil
         sessionMode = nil
@@ -583,7 +686,9 @@ import MuralCore
             self.resetConversation()
         }
     }
+    func refreshLocalMeaning() { if isLocal { scheduleTranslation() } }
     func resume() {
+        refreshLocalMeaning()
         if state == .ended, let resetDeadline, Date() >= resetDeadline { resetConversation() }
     }
     #if DEBUG
@@ -691,7 +796,23 @@ import MuralCore
         }
     }
     func sendTyped(_ text: String) async {
-        guard !isLocal else { return }
+        if isLocal {
+            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard canRecordLocal, let id = session?.id, !clean.isEmpty else { return }
+            guard clean.count <= 2000 else { error = LocalTutorModel.TutorError.longInput.localizedDescription; return }
+            do { try appendLocal(clean, speaker: .user, sessionID: id, typed: true) }
+            catch { self.error = error.localizedDescription; return }
+            localAudio.clearSubmissionTiming()
+            localReplySeconds = nil; localModelSeconds = nil
+            error = nil; notice = nil; localPhase = .thinking
+            localTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.localTask = nil; self.scheduleTranslation() }
+                await self.replyLocal(sessionID: id)
+            }
+            // The coordinator owns the submitted turn, not the dismissible input sheet.
+            return
+        }
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .active, !clean.isEmpty, let snapshot = session else { return }
         let offset = Int(Date().timeIntervalSince(snapshot.startedAt) * 1000)
@@ -708,7 +829,24 @@ import MuralCore
         } catch { if session?.id == snapshot.id { self.error = error.localizedDescription } }
     }
     func lookup(word: String, sentence: String) async throws -> String {
-        guard !isLocal else { throw LocalFeatureError.unavailable }
+        if isLocal {
+            guard canUseLocalSupport, let id = session?.id, sentence == assistantPassage?.text,
+                  !word.isEmpty, word.count <= 100, sentence.contains(word) else { throw LocalTutorModel.TutorError.busy }
+            let generation = languageGeneration
+            localSupportUsed = true
+            let task = Task { try await self.localTutor.meaning(sentence, word: word) }
+            localLookupTask = task
+            defer { localLookupTask = nil }
+            return try await withTaskCancellationHandler {
+                do {
+                    let text = try await task.value
+                    try Task.checkCancellation()
+                    guard isLocal, generation == languageGeneration, session?.id == id else { throw CancellationError() }
+                    return text
+                } catch is CancellationError { throw CancellationError() }
+                catch { throw LocalTutorModel.TutorError.unavailable(LocalTutorModel.message(for: error)) }
+            } onCancel: { task.cancel() }
+        }
         guard hasAIConsent else { throw AIProcessingConsent.ConsentError.required }
         let generation = languageGeneration, sessionID = session?.id
         let result = try await api.respond(instructions: TeachingPolicy.lookup(language: language, meaningLanguage: store.preferences.meaningLanguage), input: "Selected: \(word)\nSentence: \(sentence)")

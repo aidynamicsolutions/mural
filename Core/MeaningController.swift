@@ -59,6 +59,12 @@ public struct MeaningResult: Sendable {
         if let rendered, !request.text.hasPrefix(rendered.text) { text = ""; self.rendered = nil }
         if worker == nil && error == nil { begin() }
     }
+    /// Await cooperative cancellation before another local model operation takes ownership.
+    public func cancelAndWait() async {
+        let pending = worker
+        reset()
+        await pending?.value
+    }
     public func reset() {
         cancelWorker(); desired = nil; rendered = nil; text = ""; error = nil
     }

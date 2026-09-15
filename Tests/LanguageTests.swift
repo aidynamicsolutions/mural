@@ -63,7 +63,7 @@ final class LanguageTests: XCTestCase {
         var session = evidence(languageID: "nb")
         session.topics = [TopicBrief(languageID: "nb", query: "weather", text: "En solrik dag.", sources: [])]
         original.sessions = [session]
-        original.preferences.hiddenWords = [session.assessments[0].words[0].key]
+        original.preferences.hiddenWords = ["nb|radio|radio"] // Persisted pre-word-identity format.
         var legacy = try JSONSerialization.jsonObject(with: original.encoded()) as! [String: Any]
         legacy["schemaVersion"] = 1
         var preferences = legacy["preferences"] as! [String: Any]

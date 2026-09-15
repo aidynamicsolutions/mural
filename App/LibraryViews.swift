@@ -16,7 +16,7 @@ struct ThemesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                if coordinator.isLocal { Text("Themes and topic search are unavailable in the on-device conversation-only build. Use Talk to record a turn.").font(.footnote) }
+                if coordinator.isLocal { Text("Themes and topic search are unavailable in On-device mode. Use Talk to record a turn.").font(.footnote) }
                 PageHeading(eyebrow: "A place to begin", title: "What’s on\nyour mind?", subtitle: "Same friend. Somewhere new.")
                 Button { choose(nil) } label: {
                     HStack { Image(systemName: "waveform"); Text("Just talk"); Spacer(); Image(systemName: "arrow.up.right") }
@@ -102,6 +102,10 @@ struct WordsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 PageHeading(eyebrow: "Little by little · \(coordinator.language.name)", title: "Your words.", subtitle: "Familiar words, ready for another conversation.")
+                if coordinator.isLocal {
+                    Text(coordinator.localAssessmentRunning ? "Reviewing your last reply on this iPhone…" : "On-device practice reviews only your last reply after you tap End, saving up to two English words or phrases when the evidence is clear.")
+                        .font(.footnote).foregroundStyle(MuralColor.secondary)
+                }
                 if words.isEmpty {
                     VStack(alignment: .leading, spacing: 18) {
                         Image(systemName: "leaf").font(.system(size: 34, weight: .light))
@@ -318,7 +322,7 @@ struct SettingsView: View {
                     LearningLanguagePicker(coordinator: coordinator)
                     Toggle("Meaning subtitles", isOn: Binding(get: { store.preferences.meaningVisible }, set: { value in
                         if value != store.preferences.meaningVisible { coordinator.toggleMeaning() }
-                    })).disabled(coordinator.isLocal)
+                    }))
                     Picker("Meaning language", selection: Binding(get: { store.preferences.meaningLanguage }, set: { coordinator.selectMeaningLanguage($0) })) {
                         ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
                     }

@@ -70,7 +70,8 @@ public struct WordProposal: Codable, Sendable {
         self.lemma = lemma; self.meaning = meaning; self.form = form; self.kind = kind
         self.confidence = confidence; self.sourceIDs = sourceIDs; self.quote = quote; self.language = language
     }
-    public var key: String { language + "|" + lemma.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() + "|" + meaning.lowercased() }
+    // Definitions can vary between assessments; recall belongs to the word, not that wording.
+    public var key: String { language + "|" + lemma.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased() }
 }
 
 public struct Assessment: Codable, Identifiable, Sendable {
