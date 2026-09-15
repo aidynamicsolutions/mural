@@ -161,18 +161,18 @@ extension AudioVerification {
             var translatedWhileActive = false
             var cachedMeaningAfterEnd = false
             var newTranslationAfterEnd = false
-            var resetAfter15Seconds = false
+            var manualReset = false
             var savedConversationRetained = false
             var audioReleased = false
             var error: String?
             var passed: Bool {
                 translatedWhileActive && cachedMeaningAfterEnd && newTranslationAfterEnd &&
-                resetAfter15Seconds && savedConversationRetained && audioReleased && error == nil
+                manualReset && savedConversationRetained && audioReleased && error == nil
             }
             // Include the computed outcome in the written report.
             enum CodingKeys: String, CodingKey {
                 case date, status, languageID, translatedWhileActive, cachedMeaningAfterEnd,
-                     newTranslationAfterEnd, resetAfter15Seconds, savedConversationRetained, audioReleased, error, passed
+                     newTranslationAfterEnd, manualReset, savedConversationRetained, audioReleased, error, passed
             }
             func encode(to encoder: Encoder) throws {
                 var c = encoder.container(keyedBy: CodingKeys.self)
@@ -181,7 +181,7 @@ extension AudioVerification {
                 try c.encode(translatedWhileActive, forKey: .translatedWhileActive)
                 try c.encode(cachedMeaningAfterEnd, forKey: .cachedMeaningAfterEnd)
                 try c.encode(newTranslationAfterEnd, forKey: .newTranslationAfterEnd)
-                try c.encode(resetAfter15Seconds, forKey: .resetAfter15Seconds)
+                try c.encode(manualReset, forKey: .manualReset)
                 try c.encode(savedConversationRetained, forKey: .savedConversationRetained)
                 try c.encode(audioReleased, forKey: .audioReleased)
                 try c.encodeIfPresent(error, forKey: .error); try c.encode(passed, forKey: .passed)
@@ -195,9 +195,22 @@ extension AudioVerification {
         write()
         coordinator.store.updatePreferences { $0.meaningVisible = true; $0.meaningLanguage = "English" }
         coordinator.start()
+        let activeDeadline = Date().addingTimeInterval(45)
+        while Date() < activeDeadline && coordinator.state != .active && !Task.isCancelled {
+            if coordinator.meaningError != nil || coordinator.error != nil || coordinator.showSettings { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard coordinator.state == .active else {
+            report.error = coordinator.meaningError ?? coordinator.error ?? "The conversation did not become active."
+            report.status = "complete"; write(); return
+        }
+        // A learner turn keeps this premium verification aligned with the
+        // product rule that assistant-only greetings are not conversations.
+        await coordinator.sendTyped("I drank coffee today.")
         let deadline = Date().addingTimeInterval(45)
         while Date() < deadline && !Task.isCancelled {
-            if coordinator.state == .active, !coordinator.meaning.isEmpty, !coordinator.translating {
+            if coordinator.state == .active, coordinator.session?.hasUserMessage == true,
+               !coordinator.meaning.isEmpty, !coordinator.translating {
                 report.translatedWhileActive = true; break
             }
             if coordinator.meaningError != nil || coordinator.error != nil || coordinator.showSettings { break }
@@ -208,7 +221,6 @@ extension AudioVerification {
         coordinator.end(reason: "Meaning verification")
         let closingDeadline = Date().addingTimeInterval(7)
         while coordinator.isRunning && Date() < closingDeadline { try? await Task.sleep(for: .milliseconds(100)) }
-        let endedAt = coordinator.session?.endedAt
         report.audioReleased = !RTCAudioSession.sharedInstance().isActive
         let english = coordinator.meaning
         coordinator.toggleMeaning()
@@ -223,12 +235,10 @@ extension AudioVerification {
             if coordinator.meaningError != nil { report.error = coordinator.meaningError; break }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        write()
-        let resetDeadline = (endedAt ?? .now).addingTimeInterval(18)
-        while coordinator.state == .ended && Date() < resetDeadline { try? await Task.sleep(for: .milliseconds(100)) }
-        report.resetAfter15Seconds = coordinator.state == .idle && coordinator.session == nil && coordinator.selectedTheme == nil &&
-            coordinator.caption == coordinator.language.greeting && endedAt.map { Date().timeIntervalSince($0) >= 14.5 } == true
-        report.savedConversationRetained = coordinator.store.sessions.contains { $0.id == sessionID && $0.endedAt != nil && !$0.fragments.isEmpty }
+        report.savedConversationRetained = coordinator.store.sessions.contains { $0.id == sessionID && $0.endedAt != nil && $0.hasUserMessage }
+        coordinator.resetConversation()
+        report.manualReset = coordinator.state == .idle && coordinator.session == nil && coordinator.selectedTheme == nil &&
+            coordinator.caption == coordinator.language.greeting
         report.status = "complete"; write()
     }
 }

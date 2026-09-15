@@ -1,6 +1,17 @@
 # Local conversation feasibility probes
 
-## Phase 5 checkpoint: installed and launched, PENDING HUMAN
+## Current UX and lifecycle follow-up
+
+This section records the current behavior after the Phase 5 UI feedback. The historical checkpoints below retain their original evidence and wording.
+
+- **Meaning subtitles** are controlled from Settings only. Talk has no persistent Meaning or Hide meaning button.
+- The word-lookup hint appears under the first completed assistant reply of a conversation, then disappears after the conversation has another assistant reply.
+- On-device conversations have no inactivity or elapsed-time auto-end. Backgrounding pauses audio/model work and foregrounding re-prepares the same in-memory session when possible.
+- An explicit **New conversation** action clears an ended Talk session. Ending after only Mural's greeting discards the draft; history is saved only after a non-empty learner message.
+- The GPT-Live inactivity and maximum-duration guards, and its existing background close behavior, remain unchanged.
+- The collapsed **On-device details & diagnostics** disclosure contains microphone and lifecycle details. Normal Talk does not show the microphone state or implementation notes.
+
+## Phase 5 checkpoint: installed and launched, PENDING HUMAN (historical)
 
 The user authorized **Phase 5 only**, retaining the original latest-user-passage assessment scope. Implementation and deployment are complete; **stop and wait for the user's phone feedback**. Phase 6 and whole-conversation extraction are not implemented or authorized. Whole-conversation extraction remains an optional later expansion the user can choose after testing this checkpoint.
 

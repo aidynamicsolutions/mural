@@ -67,7 +67,7 @@ A free Personal Team can run the app on your own phone; TestFlight and App Store
 - **Themes:** 24 conversation settings, with cultural details supplied by each language module. You can also request a current topic; web search supplies source links.
 - **Adaptive practice:** vocabulary and provisional ability observations come from validated conversation evidence. Each learning language keeps separate progress.
 - **Recall bars:** one to three bars summarise repeated retrieval over time. Three bars require spaced evidence in different contexts. These are product heuristics, not calibrated forgetting probabilities or a language certificate.
-- **A fresh start:** the Talk screen returns to its greeting 15 seconds after a conversation ends. Tap **New conversation** to reset immediately. Your saved conversations and learning remain.
+- **A fresh start:** an ended conversation stays available until you tap **New conversation**. Your saved conversations and learning remain.
 - **Local records:** export or import a JSON learning backup, delete a conversation, or delete all learning data from Settings.
 
 The modules teach Norwegian Bokmål with an Eastern Norwegian voice target, Spanish from Spain, international English and French from France. Voice accent and teaching guidance are model instructions; fluent-speaker review is still needed before making pronunciation or learning-effectiveness claims.

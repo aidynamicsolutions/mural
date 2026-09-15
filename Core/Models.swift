@@ -137,6 +137,9 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
         self.title = title ?? LanguageRegistry.module(for: languageID)?.defaultTitle ?? "A conversation"
     }
     public var isLocalConversation: Bool { fragments.contains { $0.turnID != nil } }
+    public var hasUserMessage: Bool {
+        fragments.contains { $0.speaker == .user && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
     public var passages: [Passage] { Transcript.passages(fragments) }
     public mutating func append(_ fragment: Fragment) {
         guard !fragments.contains(where: { $0.id == fragment.id }) else { return }

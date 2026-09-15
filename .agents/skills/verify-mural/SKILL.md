@@ -171,7 +171,7 @@ Prefer the app's existing preview arguments. They create temporary records and a
 
 - `--preview --preview-onboarding` for new-user language, subtitle, and consent UI.
 - `--preview --preview-existing-user` for an existing-user AI-consent decision.
-- `--preview --ended-conversation` for meaning, transcript, manual reset, automatic reset, and retained history.
+- `--preview --ended-conversation` for Settings-only meaning subtitles, transcript, manual reset, and retained history.
 - `--preview --screenshot=greeting|conversation|themes|words` for visual fixtures.
 
 Do not use `xcrun simctl erase`, do not uninstall the app to force a state, and do not overwrite a simulator another session owns. For persistence changes, create a disposable iPhone 17 simulator from an installed device type and runtime listed by `xcrun simctl list devicetypes` and `xcrun simctl list runtimes`; record its returned UDID, use the normal non-preview launch, and shut down only that simulator when finished. Keep its evidence.

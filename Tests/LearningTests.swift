@@ -17,6 +17,14 @@ final class LearningTests: XCTestCase {
         s.append(f); s.append(f)
         XCTAssertEqual(s.fragments.count, 1)
     }
+    func testAssistantOnlySessionIsNotEligibleForHistory() {
+        var s = SessionRecord()
+        s.append(Fragment(speaker: .assistant, text: "Hi!", startMS: 0, endMS: 100))
+        s.append(Fragment(speaker: .user, text: "   \n", startMS: 100, endMS: 200))
+        XCTAssertFalse(s.hasUserMessage)
+        s.append(Fragment(speaker: .user, text: "Hello", startMS: 200, endMS: 300))
+        XCTAssertTrue(s.hasUserMessage)
+    }
     func testConcatenationPreservesExactProviderWhitespace() {
         let f = [Fragment(id: "a", speaker: .assistant, text: "Hva", startMS: 0, endMS: 100), Fragment(id: "b", speaker: .assistant, text: " gjorde du?", startMS: 100, endMS: 400)]
         XCTAssertEqual(Transcript.passages(f).first?.text, "Hva gjorde du?")

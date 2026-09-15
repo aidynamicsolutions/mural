@@ -9,10 +9,17 @@ final class MuralUITests: XCTestCase {
         let app = launch()
         XCTAssertTrue(app.staticTexts["target-caption"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Hei!")
-        XCTAssertEqual(app.staticTexts["microphone-status"].label, "Microphone off")
-        app.buttons["Hide meaning subtitles"].tap()
-        XCTAssertFalse(app.staticTexts["meaning-caption"].exists)
-        app.buttons["Show meaning subtitles"].tap()
+        XCTAssertFalse(app.buttons["Hide meaning subtitles"].exists)
+        app.buttons["Settings"].tap()
+        let meaningToggle = app.switches["Meaning subtitles"]
+        XCTAssertTrue(meaningToggle.waitForExistence(timeout: 5))
+        meaningToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)).tap()
+        app.buttons["Done"].tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["meaning-caption"])
+        waitForExpectations(timeout: 5)
+        app.buttons["Settings"].tap()
+        app.switches["Meaning subtitles"].coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)).tap()
+        app.buttons["Done"].tap()
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "Hi!")
     }
     func testThemeSurvivesNavigationToWords() {
@@ -24,7 +31,6 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Your words."].exists)
         app.tabBars.buttons["Talk"].tap()
         XCTAssertTrue(app.staticTexts["A coffee?"].exists)
-        XCTAssertEqual(app.staticTexts["microphone-status"].label, "Microphone off")
     }
     func testSettingsOfferSecureKeyEntryAndBackups() {
         let app = launch()
@@ -71,7 +77,6 @@ final class MuralUITests: XCTestCase {
         app.buttons["start-conversation"].tap()
         XCTAssertTrue(app.staticTexts["ai-consent-title"].waitForExistence(timeout: 5))
         app.buttons["ai-consent-decline"].tap()
-        XCTAssertEqual(app.staticTexts["microphone-status"].label, "Microphone off")
         app.buttons["start-conversation"].tap()
         XCTAssertTrue(app.staticTexts["ai-consent-title"].waitForExistence(timeout: 5))
         app.buttons["ai-consent-agree"].tap()
@@ -95,7 +100,7 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["onboarding-meaning-picker"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["onboarding-ai-consent"].exists)
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "onboarding-privacy-policy").firstMatch.exists)
-        XCTAssertEqual(app.buttons["onboarding-continue"].label, "Agree and continue")
+        XCTAssertEqual(app.buttons["onboarding-continue"].label, "Continue")
         app.buttons["onboarding-meaning-picker"].tap()
         app.buttons["Spanish"].tap()
         XCTAssertEqual(app.staticTexts["onboarding-meaning-example"].label, "¡Hola!")
@@ -105,7 +110,6 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["target-caption"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Salut !")
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "¡Hola!")
-        XCTAssertEqual(app.staticTexts["microphone-status"].label, "Microphone off")
         XCTAssertFalse(app.secureTextFields["api-key"].exists)
     }
 
@@ -168,42 +172,44 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["start-conversation"].isHittable)
         XCTAssertTrue(app.buttons["Conversation transcript"].isHittable)
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "I like coffee.")
-        app.buttons["Hide meaning subtitles"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.93)).tap()
-        XCTAssertFalse(app.staticTexts["meaning-caption"].exists)
-        app.buttons["Show meaning subtitles"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.93)).tap()
+        XCTAssertFalse(app.buttons["Hide meaning subtitles"].exists)
+        app.buttons["Settings"].tap()
+        app.switches["Meaning subtitles"].coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)).tap()
+        app.buttons["Done"].tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["meaning-caption"])
+        waitForExpectations(timeout: 5)
+        app.buttons["Settings"].tap()
+        app.switches["Meaning subtitles"].coordinate(withNormalizedOffset: CGVector(dx: 0.86, dy: 0.5)).tap()
+        app.buttons["Done"].tap()
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "I like coffee.")
         app.buttons["new-conversation"].tap()
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Hei!")
-        XCTAssertEqual(app.staticTexts["microphone-status"].label, "Microphone off")
         XCTAssertFalse(app.staticTexts["A coffee?"].exists)
         app.tabBars.buttons["Words"].tap()
         app.buttons["Past conversations"].tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "A coffee?")).firstMatch.exists)
     }
 
-    func testEndedConversationAutomaticallyReturnsToGreeting() {
+    func testEndedConversationStaysUntilManualNewConversation() {
         let app = launch(ended: true)
         XCTAssertTrue(app.buttons["new-conversation"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Jeg liker kaffe.")
-        let ready = NSPredicate(format: "label == %@", "Ready when you are")
-        expectation(for: ready, evaluatedWith: app.staticTexts["conversation-status"])
-        waitForExpectations(timeout: 18)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertEqual(app.staticTexts["target-caption"].label, "Jeg liker kaffe.")
+        XCTAssertTrue(app.buttons["new-conversation"].exists)
+        app.buttons["new-conversation"].tap()
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Hei!")
-        XCTAssertEqual(app.staticTexts["meaning-caption"].label, "Hi!")
-        XCTAssertFalse(app.buttons["new-conversation"].exists)
     }
 
-    func testOpenTranscriptRemainsReadableAfterAutomaticReset() {
+    func testOpenTranscriptRemainsReadableUntilManualNewConversation() {
         let app = launch(ended: true)
         XCTAssertTrue(app.buttons["new-conversation"].waitForExistence(timeout: 5))
         app.buttons["Conversation transcript"].tap()
         XCTAssertTrue(app.staticTexts["I like coffee."].exists)
-        let delay = expectation(description: "Allow the 15-second reset to finish")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 16) { delay.fulfill() }
-        waitForExpectations(timeout: 18)
+        XCTAssertTrue(app.staticTexts["Jeg drakk kaffe."].exists)
         XCTAssertTrue(app.staticTexts["Jeg liker kaffe."].exists)
-        XCTAssertTrue(app.staticTexts["I like coffee."].exists)
         app.buttons["Done"].tap()
-        XCTAssertEqual(app.staticTexts["target-caption"].label, "Hei!")
+        XCTAssertEqual(app.staticTexts["target-caption"].label, "Jeg liker kaffe.")
+        XCTAssertTrue(app.buttons["new-conversation"].exists)
     }
 }

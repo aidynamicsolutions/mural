@@ -59,7 +59,7 @@ Try Mural, a voice conversation app for language practice. The beta includes Nor
 
 ## What to test
 
-Try a short conversation and tell us where it stops feeling natural: pacing, corrections, pronunciation or how Mural responds when you are stuck. Check meanings while Mural speaks and after ending. Try a theme, mute, interruption, the 15-second reset, and a learning export/import. Report the learning language, iOS version and audio route. Please leave private conversation content and API keys out of feedback screenshots.
+Try a short conversation and tell us where it stops feeling natural: pacing, corrections, pronunciation or how Mural responds when you are stuck. Check meaning subtitles from Settings while Mural speaks and after ending. Try a theme, mute, interruption, the explicit New conversation action, and a learning export/import. Report the learning language, iOS version and audio route. Please leave private conversation content and API keys out of feedback screenshots.
 
 ## App Review notes
 
@@ -74,7 +74,7 @@ Review flow:
 1. Open Settings and select Spanish from Spain, with English meanings.
 2. Open **Advanced → Use your own API key** and configure the review access provided privately, then return to Talk and start a conversation.
 3. Allow microphone access. Mural greets you in Spanish. Reply aloud, or use the typed reply action.
-4. Toggle Meaning to show or hide subtitles. End the conversation; Meaning remains available until the screen resets after 15 seconds. **New conversation** resets immediately.
+4. Use Settings > Meaning subtitles to show or hide subtitles. End the conversation; it remains available until you choose **New conversation**.
 5. Open Themes to try a setting. Open Words to inspect vocabulary and past conversations. Settings contains JSON export/import and local deletion.
 
 Conversation and vocabulary records stay in local SwiftData storage; selected context goes to OpenAI for teaching. OpenAI is the provider for live voice, translation and optional current-topic search. The request disables provider application storage where supported; abuse-monitoring retention can still apply.

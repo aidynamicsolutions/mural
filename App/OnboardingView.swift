@@ -134,7 +134,7 @@ struct OnboardingView: View {
                 ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.menu)
             Text(coordinator.mode == .local
-                 ? "On-device supports English with Vietnamese support, without an OpenAI key or consent. Speech assets must be installed separately from the Mac. No model download is available."
+                 ? "On-device supports English with Vietnamese support."
                  : "GPT-Live requires your OpenAI API key and separate consent when you start. Continuing here does not grant OpenAI consent.")
                 .font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                 .accessibilityIdentifier("onboarding-ai-consent")
@@ -148,7 +148,7 @@ struct OnboardingView: View {
                 Text(target.greeting).font(.system(.title2, design: .rounded, weight: .medium))
                 Text(MeaningLanguages.greeting(in: meaningLanguage)).font(.body).foregroundStyle(MuralColor.secondary)
                     .accessibilityIdentifier("onboarding-meaning-example")
-                Text(coordinator.mode == .local ? "On-device meanings are not available yet." : "Turn meanings on whenever you need a hand.").font(.caption).foregroundStyle(MuralColor.secondary).padding(.top, 8)
+                Text("Turn meanings on whenever you need a hand.").font(.caption).foregroundStyle(MuralColor.secondary).padding(.top, 8)
             }.multilineTextAlignment(.center).padding(.vertical, 12)
         }
     }

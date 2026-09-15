@@ -314,7 +314,7 @@ struct SettingsView: View {
                         ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }.disabled(!coordinator.canChangeMode)
                     Text(coordinator.isLocal
-                         ? "On-device: English with Vietnamese support. No OpenAI key or consent needed. Speech assets must be installed separately from the Mac; no model download is available. Finalized text stays on this iPhone."
+                         ? "On-device: English with Vietnamese support. Finalized text stays on this iPhone."
                          : "GPT-Live: separate OpenAI consent and your API key are required. Audio and selected text are processed by OpenAI.")
                         .font(.footnote)
                 } header: { Text("Conversation") }
@@ -357,19 +357,23 @@ struct SettingsView: View {
                             .font(.footnote).foregroundStyle(MuralColor.secondary)
                     } label: { Label("Use your own API key", systemImage: "key").accessibilityIdentifier("advanced-api-key") }
                     if let message { Text(message).font(.footnote).foregroundStyle(MuralColor.secondary) }
-                } header: { Text("Advanced") } footer: {
-                    if !hasKey { Text("GPT-Live uses your OpenAI API key. On-device conversations do not need a key.") }
-                }
+                } header: { Text("Advanced") }
                 Section {
-                    Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
-                        ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
+                    if !coordinator.isLocal {
+                        Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
+                            ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
+                        }
                     }
                     LabeledContent("GPT-Live voice time", value: "\(Int(totalVoiceSeconds / 60)) min \(Int(totalVoiceSeconds) % 60) sec")
                     LabeledContent("Voice estimate", value: String(format: "$%.2f USD", totalVoiceSeconds / 60 * 0.05))
                     LabeledContent("Search calls recorded", value: "\(store.sessions.reduce(0) { $0 + $1.searchCalls })")
                     Link("OpenAI usage and billing", destination: URL(string: "https://platform.openai.com/usage")!)
                 } header: { Text("Keep it comfortable") } footer: {
-                    Text("On-device elapsed time is not billed voice time and is excluded. Voice estimate uses $0.05/min as of 11 September 2026. Translation, teaching and search cost extra. Interrupted requests can be billed without a usage record here. Your OpenAI dashboard is authoritative. The time limit is local, not a billing cap.")
+                    if coordinator.isLocal {
+                        Text("On-device practice is not billed voice time.")
+                    } else {
+                        Text("Voice estimate uses $0.05/min as of 11 September 2026. Translation, teaching and search cost extra. Interrupted requests can be billed without a usage record here. Your OpenAI dashboard is authoritative. The time limit is local, not a billing cap.")
+                    }
                 }
                 Section {
                     Button("Export learning backup", systemImage: "square.and.arrow.up") {

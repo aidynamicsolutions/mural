@@ -232,7 +232,7 @@ import WhisperKit
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 let assetsSeconds = ProcessInfo.processInfo.systemUptime - started
-                self.preparationDetail = String(format: selected == .phoWhisper ? "Local asset verification: %.2f s" : "Model download/cache: %.2f s", assetsSeconds)
+                self.preparationDetail = String(format: selected == .phoWhisper ? "Local asset verification: %.2f s" : "Asset/model preparation: %.2f s", assetsSeconds)
                 self.logger.notice("asr_assets_ready model=\(selected.rawValue, privacy: .public) seconds=\(assetsSeconds, privacy: .public)")
                 self.asrState = .warming
                 let loadingStarted = ProcessInfo.processInfo.systemUptime
