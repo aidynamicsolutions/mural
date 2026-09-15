@@ -1,0 +1,13 @@
+Source HEAD: 865c3744a39954db0a165b2f7d85561e1a2f7800 plus working-tree changes described in report.md
+
+Command: python3 Tools/CoreAI/test_mel_reader.py
+PASS: FP16/FP32 values, both shapes, non-contiguous strides, non-finite/type/shape rejection
+
+Command: git diff --check
+Result: passed
+
+Release build command:
+xcodebuild -project Mural.xcodeproj -scheme Mural -configuration Release -destination "platform=iOS,id=<PAIRED_IPHONE_UDID>" -derivedDataPath .build/local-mvp-phase-1-device-derived-data PRODUCT_BUNDLE_IDENTIFIER=com.kevintruong.mural.dev build
+
+Result: ** BUILD SUCCEEDED **
+Full build/install logs remain local; identifiers and host paths are not published here.

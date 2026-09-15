@@ -1,0 +1,16 @@
+Sanitized, filtered runtime log. Unrelated entries omitted.
+
+Sep 15 23:42:53 Mural[40396] <Notice>: Core AI probe: accepted mel ready in 0.007603 s
+Sep 15 23:42:53 Mural[40396] <Notice>: asr_memory model=coreai-sequential stage=before-encoder footprint_bytes=56805240 process_rss_peak_bytes=120733696 thermal_state=0
+Sep 15 23:42:55 Mural[40396] <Notice>: asr_memory model=coreai-sequential stage=encoder-loaded footprint_bytes=1339049848 process_rss_peak_bytes=125517824 thermal_state=0
+Sep 15 23:42:55 Mural[40396] <Notice>: Core AI probe: encoder ready in 0.662868 s
+Sep 15 23:42:55 Mural[40396] <Notice>: asr_memory model=coreai-sequential stage=encoder-output-copied footprint_bytes=1531660176 process_rss_peak_bytes=125845504 thermal_state=0
+Sep 15 23:42:55 Mural[40396] <Notice>: asr_memory model=coreai-sequential stage=encoder-scope-ended footprint_bytes=1531643768 process_rss_peak_bytes=125845504 thermal_state=0
+Sep 15 23:42:59 Mural[40396] <Notice>: asr_memory model=coreai-sequential stage=decoder-loaded footprint_bytes=66489576 process_rss_peak_bytes=3285663744 thermal_state=0
+Sep 15 23:43:09 Mural[40396] <Notice>: Core AI probe: language token 50278 in 10.689065 s
+Sep 15 23:43:36 Mural(ANEServices)[40396] <Error>: ANE_ProgramSendRequest:1029 status=e00002bc
+Sep 15 23:43:36 Mural(ANEServices)[40396] <Error>: ERROR: ANEServicesProgramProcessRequestDirect: pANERequestReceiver->ProgramProcessRequest failed status=0xe00002bc
+Sep 15 23:43:36 Mural(AppleNeuralEngine)[40396] <Error>: <private>: ANEProgramProcessRequestDirect() Failed with status=0x12 : statusType=0x9 lModel=<private>
+Sep 15 23:43:36 Mural(AppleNeuralEngine)[40396] <Error>: <private>: Could not process request ret=0x12 lModel=<private>
+Sep 15 23:43:36 Mural(MetalPerformanceShadersGraph)[40396] <Notice>: /Library/Caches/com.apple.xbs/3C02470B-61FD-496F-A73E-1109A8B40C9E/TemporaryDirectory.SldeCB/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Runtimes/MPSRuntime/Operations/RegionOps/ANERegion.mm:238: ANE inference operation failed due to unknown error. <private>
+Sep 15 23:43:36 Mural(Metal)[40396] <Error>: /Library/Caches/com.apple.xbs/3C02470B-61FD-496F-A73E-1109A8B40C9E/TemporaryDirectory.SldeCB/Sources/MetalPerformanceShadersGraph/mpsgraph/MetalPerformanceShadersGraph/Runtimes/MPSRuntime/Operations/RegionOps/ANERegion.mm, line 414: error '<private>'

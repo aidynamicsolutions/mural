@@ -182,10 +182,23 @@ The probe writes after every fixture:
 Documents/coreai-asr-probe.json
 ```
 
+The probe now loads the encoder and decoder sequentially per fixture. Only an
+owned, finite FP16 `[1,1500,1280]` buffer crosses their lifetime boundary; the
+decoder input is checked for bit-exact preservation. Runtime allocation release
+is measured, not assumed from Swift reference lifetimes.
+
+For a bounded first-fixture check, add `--coreai-fixture=001.wav`. To isolate
+runtime resources across processes, first run with `--coreai-encode-only`,
+terminate that app process, then launch with `--coreai-decode-only` and the same
+fixture selection. Checkpoints are development-only files under
+`Documents/CoreAI/PhoWhisper/EncoderCheckpoints/`; keep the fixture, model pair,
+and app build unchanged between these two launches. An encode-only result is
+not a transcript or a parity pass.
+
 The JSON contains:
 
-- encoder and decoder cache/specialization/loadFunction timings;
-- mel/tokenizer preparation timings;
+- per-result `encoderLoad` and `decoderLoad` cache/specialization/loadFunction timings;
+- mel/tokenizer preparation timings (model loads are deferred until each fixture);
 - exact transcript per fixture;
 - detected language token;
 - generated token count;

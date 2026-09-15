@@ -1,0 +1,13 @@
+{
+  "architecture": "h18p",
+  "date": "2026-09-15T16:42:53Z",
+  "files": [],
+  "fixturesDirectory": "<APP_DATA_CONTAINER>/Documents/CoreAI/PhoWhisper/Fixtures",
+  "preparation": {
+    "architecture": "h18p",
+    "melLoadSeconds": 0.11387200001627207,
+    "supportDirectory": "<APP_DATA_CONTAINER>/Library/Application Support/PhoWhisperCS/phowhisper-cs-fp16-v1",
+    "tokenizerLoadSeconds": 0.26796162500977516,
+    "totalSeconds": 0.38394541665911674
+  }
+}

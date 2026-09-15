@@ -1,6 +1,16 @@
 # Core AI ASR handoff — transcript parity checkpoint
 
-## Controlling status
+## Latest follow-up: sequential loading still blocked
+
+See the commit-ready [report and sanitized crash evidence](docs/coreai/sequential-loading-checkpoint/README.md).
+The mel reader is fixed. Sequential loading and a fresh decoder-only process both
+reach language detection but abort in the ANE runtime before the first completed
+transcript. No 22/22 parity is established; the full corpus was not started after
+that first-fixture failure. This follow-up supersedes the next-action instructions
+below. Preserve weights, FP16, tokenizer and decoding behavior; no KV cache or
+production integration has been implemented.
+
+## Previous loading checkpoint
 
 Core AI AOT loading is **accepted for continuation**.
 

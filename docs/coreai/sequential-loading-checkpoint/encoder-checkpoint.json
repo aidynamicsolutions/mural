@@ -1,0 +1,21 @@
+{
+  "load": {
+    "specializationSeconds": 0,
+    "cacheLookupSeconds": 0.0015366249717772007,
+    "path": "<APP_DATA_CONTAINER>/Library/Application Support/CoreAI/PhoWhisperSplit/phowhisper-cs-fp16-v1.encoder.h18p.aimodelc",
+    "functionLoadSeconds": 1.3815563750104047,
+    "cacheHit": true
+  },
+  "seconds": 0.6968187500024214,
+  "file": "001.wav",
+  "melSeconds": 0.004581666667945683,
+  "sampleCount": 90560,
+  "dataBytes": 3840000,
+  "valueCount": 1920000,
+  "scalarType": "Float16",
+  "allFinite": true,
+  "minimum": -10.7265625,
+  "maximum": 28.9375,
+  "dataSHA256": "cdf3c3f5300103ad2b0a23e414b070041d21e7f7c0f77f18ce32bc52824957ae",
+  "note": "Raw encoder tensor and audio are not included."
+}

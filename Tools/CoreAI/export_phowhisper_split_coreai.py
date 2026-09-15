@@ -208,7 +208,7 @@ def main() -> None:
     save_program(encoder_program, encoder_path, "encoder", args.overwrite)
 
     print("[5/7] Exporting decoder graph with dynamic prefix length...")
-    hidden_example = hidden.detach()
+    hidden_example = hidden.detach().clone()
     dynamic_seq = torch.export.Dim("dec_seq_len", min=1, max=448)
     with torch.autocast(device_type="cpu", dtype=torch.float16):
         decoder_exported = torch.export.export(

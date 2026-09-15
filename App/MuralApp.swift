@@ -48,14 +48,14 @@ private actor CoreAIPhoWhisper {
         let supportDirectory: String
         let melLoadSeconds: Double
         let tokenizerLoadSeconds: Double
-        let encoder: AssetTiming
-        let decoder: AssetTiming
         let totalSeconds: Double
     }
     struct Result: Codable, Sendable {
         let text: String
         let detectedLanguageToken: Int
         let generatedTokenCount: Int
+        let encoderLoad: AssetTiming
+        let decoderLoad: AssetTiming
         let melSeconds: Double
         let encoderSeconds: Double
         let languageSeconds: Double
@@ -115,10 +115,6 @@ private actor CoreAIPhoWhisper {
 
     private var featureExtractor: FeatureExtractor?
     private var tokenizer: PhoWhisperTokenizer?
-    private var encoderModel: AIModel?
-    private var decoderModel: AIModel?
-    private var encoderFunction: InferenceFunction?
-    private var decoderFunction: InferenceFunction?
     private var suppressTokens = Set<Int>()
     private var maxNewTokens = 224
     private var preparedConfig: Config?
@@ -128,7 +124,6 @@ private actor CoreAIPhoWhisper {
         if let preparedConfig, preparedConfig.encoderURL == config.encoderURL,
            preparedConfig.decoderURL == config.decoderURL,
            preparedConfig.supportURL == config.supportURL,
-           encoderFunction != nil, decoderFunction != nil,
            featureExtractor != nil, tokenizer != nil, let savedPreparation {
             return savedPreparation
         }
@@ -158,17 +153,8 @@ private actor CoreAIPhoWhisper {
         suppressTokens = Set((gen.suppress_tokens ?? []).filter { (0..<51_865).contains($0) })
         maxNewTokens = min(max(gen.max_new_tokens ?? 224, 1), 444)
 
-        let enc = try await Self.loadAsset(config.encoderURL)
-        let dec = try await Self.loadAsset(config.decoderURL)
-        try Self.validate(enc.model, role: "encoder")
-        try Self.validate(dec.model, role: "decoder")
-
         featureExtractor = mel
         tokenizer = tok
-        encoderModel = enc.model
-        decoderModel = dec.model
-        encoderFunction = enc.function
-        decoderFunction = dec.function
         preparedConfig = config
 
         let prep = Preparation(
@@ -176,22 +162,39 @@ private actor CoreAIPhoWhisper {
             supportDirectory: config.supportURL.path,
             melLoadSeconds: melSeconds,
             tokenizerLoadSeconds: tokSeconds,
-            encoder: enc.timing,
-            decoder: dec.timing,
             totalSeconds: ProcessInfo.processInfo.systemUptime - total
         )
         savedPreparation = prep
         return prep
     }
 
-    func transcribe(_ samples: [Float]) async throws -> Result {
-        guard let mel = featureExtractor, let tok = tokenizer, let encFn = encoderFunction,
-              let decFn = decoderFunction, let encModel = encoderModel,
-              let decModel = decoderModel else { throw ProbeError("Prepare first.") }
+    func transcribe(_ samples: [Float], file: URL) async throws -> Result? {
+        guard let mel = featureExtractor, tokenizer != nil,
+              let config = preparedConfig else { throw ProbeError("Prepare first.") }
         guard !samples.isEmpty, samples.count <= 480_000, samples.allSatisfy(\.isFinite) else {
             throw ProbeError("Expected 1–480000 finite 16 kHz mono samples.")
         }
         let total = ProcessInfo.processInfo.systemUptime
+
+        if ProcessInfo.processInfo.arguments.contains("--coreai-decode-only") {
+            let root = try Self.checkpointURL(file)
+            let metadata = try JSONDecoder().decode(EncoderCheckpoint.self,
+                from: Data(contentsOf: root.appendingPathExtension("json")))
+            guard metadata.file == file.lastPathComponent, metadata.sampleCount == samples.count else {
+                throw ProbeError("Encoder checkpoint does not match fixture.")
+            }
+            let data = try Data(contentsOf: root.appendingPathExtension("fp16"))
+            guard data.count == 1500 * 1280 * 2 else { throw ProbeError("Invalid encoder checkpoint size.") }
+            let values = data.withUnsafeBytes { bytes in
+                stride(from: 0, to: data.count, by: 2).map {
+                    Float16(bitPattern: bytes.loadUnaligned(fromByteOffset: $0, as: UInt16.self))
+                }
+            }
+            guard values.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite encoder checkpoint.") }
+            VietnameseEnglishRecognizer.logMemory(stage: "fresh-process-before-decoder", model: "coreai-sequential")
+            return try await decodeTurn(Encoded(values: values, load: metadata.load, seconds: metadata.seconds),
+                config: config, melSeconds: metadata.melSeconds, totalStart: total)
+        }
 
         let melStart = ProcessInfo.processInfo.systemUptime
         guard let padded = AudioProcessor.padOrTrimAudio(
@@ -201,18 +204,93 @@ private actor CoreAIPhoWhisper {
         }
         let values = try Self.readAcceptedMel(feature)
         let melSeconds = ProcessInfo.processInfo.systemUptime - melStart
+        Logger().notice("Core AI probe: accepted mel ready in \(melSeconds) s")
 
-        let encDesc = try Self.inputDescriptor(encModel, name: "input_features")
-        var input = NDArray(descriptor: encDesc.resolvingDynamicDimensions([1, 80, 3000]))
-        try Self.fillFloat(&input, values: values)
-        let encStart = ProcessInfo.processInfo.systemUptime
-        var encOut = try await encFn.run(inputs: ["input_features": input])
-        guard let hidden = encOut.remove("encoder_hidden_states")?.ndArray,
-              hidden.shape == [1, 1500, 1280] else {
-            throw ProbeError("Unexpected Core AI encoder output.")
+        VietnameseEnglishRecognizer.logMemory(stage: "before-encoder", model: "coreai-sequential")
+        let encoded = try await Self.encode(values, url: config.encoderURL)
+        // Only owned FP16 values cross this boundary, never a model-backed NDArray.
+        VietnameseEnglishRecognizer.logMemory(stage: "encoder-scope-ended", model: "coreai-sequential")
+        if ProcessInfo.processInfo.arguments.contains("--coreai-encode-only") {
+            let root = try Self.checkpointURL(file)
+            try encoded.values.withUnsafeBytes { try Data($0).write(to: root.appendingPathExtension("fp16"), options: .atomic) }
+            let metadata = EncoderCheckpoint(file: file.lastPathComponent, sampleCount: samples.count,
+                load: encoded.load, seconds: encoded.seconds, melSeconds: melSeconds)
+            try JSONEncoder().encode(metadata).write(to: root.appendingPathExtension("json"), options: .atomic)
+            return nil
         }
-        let encSeconds = ProcessInfo.processInfo.systemUptime - encStart
+        let result = try await decodeTurn(encoded, config: config, melSeconds: melSeconds, totalStart: total)
+        VietnameseEnglishRecognizer.logMemory(stage: "decoder-scope-ended", model: "coreai-sequential")
+        return result
+    }
 
+    private struct EncoderCheckpoint: Codable {
+        let file: String
+        let sampleCount: Int
+        let load: AssetTiming
+        let seconds: Double
+        let melSeconds: Double
+    }
+
+    private static func checkpointURL(_ file: URL) throws -> URL {
+        let directory = URL.documentsDirectory.appending(path: "CoreAI/PhoWhisper/EncoderCheckpoints")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appending(path: file.lastPathComponent)
+    }
+
+    private struct Encoded {
+        let values: [Float16]
+        let load: AssetTiming
+        let seconds: Double
+    }
+
+    private static func encode(_ values: [Float], url: URL) async throws -> Encoded {
+        let encoder = try await loadAsset(url)
+        try validate(encoder.model, role: "encoder")
+        VietnameseEnglishRecognizer.logMemory(stage: "encoder-loaded", model: "coreai-sequential")
+        let desc = try inputDescriptor(encoder.model, name: "input_features")
+        var input = NDArray(descriptor: desc.resolvingDynamicDimensions([1, 80, 3000]))
+        try fillFloat(&input, values: values)
+        let start = ProcessInfo.processInfo.systemUptime
+        var outputs = try await encoder.function.run(inputs: ["input_features": input])
+        guard let hidden = outputs.remove("encoder_hidden_states")?.ndArray else {
+            throw ProbeError("Missing encoder output.")
+        }
+        let owned = try copyEncoderOutput(hidden)
+        let seconds = ProcessInfo.processInfo.systemUptime - start
+        Logger().notice("Core AI probe: encoder ready in \(seconds) s")
+        VietnameseEnglishRecognizer.logMemory(stage: "encoder-output-copied", model: "coreai-sequential")
+        return Encoded(values: owned, load: encoder.timing, seconds: seconds)
+    }
+
+    private static func copyEncoderOutput(_ hidden: NDArray) throws -> [Float16] {
+        guard hidden.shape == [1, 1500, 1280], hidden.scalarType == .float16 else {
+            throw ProbeError("Encoder output must remain FP16 [1,1500,1280].")
+        }
+        var owned = [Float16](repeating: 0, count: 1500 * 1280)
+        hidden.view(as: Float16.self).withUnsafePointer { p, _, strides in
+            for t in 0..<1500 { for c in 0..<1280 {
+                owned[t * 1280 + c] = p[t * strides[1] + c * strides[2]]
+            }}
+        }
+        guard owned.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite encoder output.") }
+        return owned
+    }
+
+    private func decodeTurn(_ encoded: Encoded, config: Config, melSeconds: Double,
+                            totalStart: Double) async throws -> Result {
+        guard let tok = tokenizer else { throw ProbeError("Prepare first.") }
+        let decoder = try await Self.loadAsset(config.decoderURL)
+        try Self.validate(decoder.model, role: "decoder")
+        VietnameseEnglishRecognizer.logMemory(stage: "decoder-loaded", model: "coreai-sequential")
+        let desc = try Self.inputDescriptor(decoder.model, name: "encoder_hidden_states")
+        var hidden = NDArray(descriptor: desc.resolvingDynamicDimensions([1, 1500, 1280]))
+        guard hidden.scalarType == .float16 else { throw ProbeError("Decoder hidden input must remain FP16.") }
+        var hiddenView = hidden.mutableView(as: Float16.self)
+        hiddenView.copyElements(fromContentsOf: encoded.values)
+        guard try Self.copyEncoderOutput(hidden).map(\.bitPattern) == encoded.values.map(\.bitPattern) else {
+            throw ProbeError("Encoder/decoder handoff changed FP16 bits.")
+        }
+        let decFn = decoder.function, decModel = decoder.model
         let langStart = ProcessInfo.processInfo.systemUptime
         let langLogits = try await Self.decode(
             decFn, model: decModel,
@@ -220,6 +298,7 @@ private actor CoreAIPhoWhisper {
         let language = try Self.argmax(
             langLogits, allowed: tok.allLanguageTokens, suppressed: [])
         let langSeconds = ProcessInfo.processInfo.systemUptime - langStart
+        Logger().notice("Core AI probe: language token \(language) in \(langSeconds) s")
 
         let s = tok.specialTokens
         let sampleBegin = 4
@@ -246,15 +325,14 @@ private actor CoreAIPhoWhisper {
 
         return Result(
             text: text, detectedLanguageToken: language, generatedTokenCount: generated,
-            melSeconds: melSeconds, encoderSeconds: encSeconds,
+            encoderLoad: encoded.load, decoderLoad: decoder.timing,
+            melSeconds: melSeconds, encoderSeconds: encoded.seconds,
             languageSeconds: langSeconds, decoderSeconds: decSeconds,
-            totalSeconds: ProcessInfo.processInfo.systemUptime - total)
+            totalSeconds: ProcessInfo.processInfo.systemUptime - totalStart)
     }
 
     private func unload() {
         featureExtractor = nil; tokenizer = nil
-        encoderFunction = nil; decoderFunction = nil
-        encoderModel = nil; decoderModel = nil
         preparedConfig = nil; savedPreparation = nil
         suppressTokens = []; maxNewTokens = 224
     }
@@ -333,19 +411,22 @@ private actor CoreAIPhoWhisper {
     }
 
     private static func readAcceptedMel(_ a: MLMultiArray) throws -> [Float] {
-        guard a.dataType == .float32 else { throw ProbeError("Mel must remain float32.") }
         let shape = a.shape.map(\.intValue), strides = a.strides.map(\.intValue)
-        let p = a.dataPointer.assumingMemoryBound(to: Float.self)
+        guard shape == [1, 80, 3000] || shape == [1, 80, 1, 3000] else {
+            throw ProbeError("Unexpected mel shape \(shape).")
+        }
         var out = [Float](repeating: 0, count: 80 * 3000)
-        if shape == [1, 80, 3000] {
+        func copy<T: BinaryFloatingPoint>(_ type: T.Type) {
+            let p = a.dataPointer.assumingMemoryBound(to: type)
             for m in 0..<80 { for t in 0..<3000 {
-                out[m * 3000 + t] = p[m * strides[1] + t * strides[2]]
+                out[m * 3000 + t] = Float(p[m * strides[1] + t * strides[shape.count - 1]])
             }}
-        } else if shape == [1, 80, 1, 3000] {
-            for m in 0..<80 { for t in 0..<3000 {
-                out[m * 3000 + t] = p[m * strides[1] + t * strides[3]]
-            }}
-        } else { throw ProbeError("Unexpected mel shape \(shape).") }
+        }
+        switch a.dataType {
+        case .float16: copy(Float16.self) // Widening preserves every finite FP16 value exactly.
+        case .float32: copy(Float.self)
+        default: throw ProbeError("Unsupported mel type \(a.dataType).")
+        }
         guard out.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite mel.") }
         return out
     }
@@ -401,6 +482,7 @@ private actor CoreAIPhoWhisper {
     struct Report: Codable, Sendable {
         var date = Date()
         let architecture: String
+        let mode: String
         let preparation: CoreAIPhoWhisper.Preparation?
         let fixturesDirectory: String
         let files: [FileResult]
@@ -431,25 +513,28 @@ private actor CoreAIPhoWhisper {
             preparation = try await recognizer.prepare(config)
             let directory = try Self.fixturesDirectory()
             let exts = Set(["wav", "m4a", "caf", "mp3"])
+            let onlyFile = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--coreai-fixture=") }
+                .map { String($0.dropFirst("--coreai-fixture=".count)) }
             let files = try FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-                .filter { exts.contains($0.pathExtension.lowercased()) }
+                .filter { exts.contains($0.pathExtension.lowercased()) && (onlyFile == nil || $0.lastPathComponent == onlyFile) }
                 .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
             guard !files.isEmpty else { throw CoreAIPhoWhisper.ProbeError("No fixtures in \(directory.path).") }
+            try writeReport(directory: directory, error: nil)
             for (i, file) in files.enumerated() {
                 status = "Transcribing \(i + 1)/\(files.count): \(file.lastPathComponent)"
                 do {
                     let samples = try await Task.detached {
                         try AudioProcessor.loadAudioAsFloatArray(fromPath: file.path)
                     }.value
-                    let result = try await recognizer.transcribe(samples)
+                    let result = try await recognizer.transcribe(samples, file: file)
                     results.append(.init(file: file.lastPathComponent, sampleCount: samples.count, result: result, error: nil))
                 } catch {
                     results.append(.init(file: file.lastPathComponent, sampleCount: 0, result: nil, error: error.localizedDescription))
                 }
                 try writeReport(directory: directory, error: nil)
             }
-            status = "Corpus complete: \(results.filter { $0.error == nil }.count)/\(files.count) transcribed"
+            status = "Corpus complete: \(results.filter { $0.result != nil }.count)/\(files.count) transcribed"
             try writeReport(directory: directory, error: nil)
         } catch {
             self.error = error.localizedDescription
@@ -462,7 +547,10 @@ private actor CoreAIPhoWhisper {
 
     private func writeReport(directory: URL, error: String?) throws {
         let report = Report(
-            architecture: AIModel.deviceArchitectureName, preparation: preparation,
+            architecture: AIModel.deviceArchitectureName,
+            mode: ProcessInfo.processInfo.arguments.contains("--coreai-encode-only") ? "encode-only" :
+                (ProcessInfo.processInfo.arguments.contains("--coreai-decode-only") ? "decode-only" : "sequential"),
+            preparation: preparation,
             fixturesDirectory: directory.path, files: results, error: error)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -503,8 +591,7 @@ private struct CoreAIASRProbeView: View {
                         .foregroundStyle(.secondary)
                     Text(probe.status).font(.headline)
                     if let p = probe.preparation {
-                        Text(String(format: "Prepare %.3f s · encoder load %.3f · decoder load %.3f",
-                                    p.totalSeconds, p.encoder.functionLoadSeconds, p.decoder.functionLoadSeconds))
+                        Text(String(format: "Frontend/tokenizer %.3f s · models load sequentially per file", p.totalSeconds))
                             .font(.caption.monospacedDigit())
                     }
                     if !probe.reportPath.isEmpty {

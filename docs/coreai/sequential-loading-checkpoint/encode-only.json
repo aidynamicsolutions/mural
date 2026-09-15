@@ -1,0 +1,19 @@
+{
+  "architecture": "h18p",
+  "date": "2026-09-15T16:45:46Z",
+  "files": [
+    {
+      "file": "001.wav",
+      "sampleCount": 90560
+    }
+  ],
+  "fixturesDirectory": "<APP_DATA_CONTAINER>/Documents/CoreAI/PhoWhisper/Fixtures",
+  "mode": "encode-only",
+  "preparation": {
+    "architecture": "h18p",
+    "melLoadSeconds": 0.06254970835288987,
+    "supportDirectory": "<APP_DATA_CONTAINER>/Library/Application Support/PhoWhisperCS/phowhisper-cs-fp16-v1",
+    "tokenizerLoadSeconds": 0.2961549583123997,
+    "totalSeconds": 0.35962583334185183
+  }
+}
