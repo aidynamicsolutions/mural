@@ -8,6 +8,7 @@ import WhisperKit
 
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
+    @ObservationIgnored var onPlayback: ((Double, Double?, Bool) -> Void)?
     private(set) var playbackStartSeconds: Double?
     private(set) var playbackDurationSeconds: Double?
     private(set) var voiceDescription = "English system voice"
@@ -96,6 +97,11 @@ import WhisperKit
         asr = nil; whisper = nil; parakeet = nil
         asrState = .ended
         asrNotice = "Stopped. Prepare speech models again to restart."
+        if utterance != nil, let start = playbackStartedAt {
+            let end = ProcessInfo.processInfo.systemUptime
+            playbackDurationSeconds = end - start
+            onPlayback?(start, end, false)
+        }
         utterance = nil
         synthesizer.stopSpeaking(at: .immediate)
         let pending = completion; completion = nil
@@ -108,6 +114,7 @@ import WhisperKit
         Task { @MainActor [weak self] in
             guard let self, self.utterance === utterance else { return }
             self.playbackStartedAt = time
+            self.onPlayback?(time, nil, false)
             self.playbackStartSeconds = time - self.requestedAt
             self.sendToPlaybackSeconds = self.submittedAt.map { time - $0 }
             if let gap = self.sendToPlaybackSeconds {
@@ -122,6 +129,7 @@ import WhisperKit
         Task { @MainActor [weak self] in
             guard let self, self.utterance === utterance else { return }
             self.playbackDurationSeconds = self.playbackStartedAt.map { time - $0 }
+            if let start = self.playbackStartedAt { self.onPlayback?(start, time, true) }
             self.logger.notice("tts_finished")
             self.utterance = nil
             let pending = self.completion; self.completion = nil

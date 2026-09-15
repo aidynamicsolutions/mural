@@ -63,14 +63,7 @@ struct OnboardingView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 12) {
-                if step == 1 {
-                    Text(AIProcessingConsent.summary)
-                        .font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
-                        .accessibilityIdentifier("onboarding-ai-consent")
-                    Link("Privacy policy", destination: URL(string: "https://mural.chat/privacy/")!)
-                        .font(.footnote).underline().accessibilityIdentifier("onboarding-privacy-policy")
-                }
-                Button(step == 0 ? "Continue" : "Agree and continue") { advance() }
+                Button("Continue") { advance() }
                     .font(.system(.headline, design: .rounded)).frame(maxWidth: .infinity).padding(.vertical, 19)
                     .background(MuralColor.orange, in: Capsule())
                     .accessibilityIdentifier("onboarding-continue")
@@ -137,11 +130,25 @@ struct OnboardingView: View {
                 .padding(20).frame(maxWidth: .infinity)
                 .background(.white.opacity(0.8), in: RoundedRectangle(cornerRadius: 22))
                 .accessibilityIdentifier("onboarding-meaning-picker")
+            Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
+                ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.menu)
+            Text(coordinator.mode == .local
+                 ? "On-device supports English with Vietnamese support, without an OpenAI key or consent. Speech assets must be installed separately from the Mac. No model download is available."
+                 : "GPT-Live requires your OpenAI API key and separate consent when you start. Continuing here does not grant OpenAI consent.")
+                .font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
+                .accessibilityIdentifier("onboarding-ai-consent")
+            if coordinator.mode == .local && (targetID != "en" || meaningLanguage != "Vietnamese") {
+                Text("Choose English and Vietnamese to use On-device, or select GPT-Live for other languages.")
+                    .font(.footnote).multilineTextAlignment(.center)
+            }
+            Link("Privacy policy", destination: URL(string: "https://mural.chat/privacy/")!)
+                .font(.footnote).underline().accessibilityIdentifier("onboarding-privacy-policy")
             VStack(spacing: 8) {
                 Text(target.greeting).font(.system(.title2, design: .rounded, weight: .medium))
                 Text(MeaningLanguages.greeting(in: meaningLanguage)).font(.body).foregroundStyle(MuralColor.secondary)
                     .accessibilityIdentifier("onboarding-meaning-example")
-                Text("Turn meanings on whenever you need a hand.").font(.caption).foregroundStyle(MuralColor.secondary).padding(.top, 8)
+                Text(coordinator.mode == .local ? "On-device meanings are not available yet." : "Turn meanings on whenever you need a hand.").font(.caption).foregroundStyle(MuralColor.secondary).padding(.top, 8)
             }.multilineTextAlignment(.center).padding(.vertical, 12)
         }
     }
@@ -160,7 +167,7 @@ struct OnboardingView: View {
         } else {
             coordinator.selectLanguage(targetID)
             coordinator.selectMeaningLanguage(meaningLanguage)
-            coordinator.store.updatePreferences { $0.meaningVisible = true; $0.aiConsentVersion = AIProcessingConsent.version }
+            coordinator.store.updatePreferences { $0.meaningVisible = true }
             done()
         }
     }
@@ -175,7 +182,7 @@ enum AIProcessingConsent {
     static let summary = "With your permission, Mural sends audio and selected text to OpenAI to provide conversations and meanings. Provider retention rules apply."
     enum ConsentError: LocalizedError {
         case required
-        var errorDescription: String? { "Before using AI features, open Talk and tap the microphone to review how OpenAI processes your audio and text." }
+        var errorDescription: String? { "Before using GPT-Live features, select GPT-Live in Talk and tap the microphone to review OpenAI processing. On-device conversations do not need this consent." }
     }
 }
 

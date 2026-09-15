@@ -10,14 +10,19 @@ struct APIUsage { var input = 0; var output = 0; var searches = 0 }
 struct APIResult { var text: String; var sources: [SourceLink]; var usage: APIUsage }
 
 @MainActor final class APIClient {
-    private let session: URLSession
-    init() {
+    private var session = APIClient.makeSession()
+    private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 45; config.timeoutIntervalForResource = 60
         config.httpCookieStorage = nil; config.urlCache = nil
-        session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        return URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+    }
+    func cancelRequests() {
+        session.invalidateAndCancel()
+        session = Self.makeSession()
     }
     func post(_ path: String, body: [String: Any]) async throws -> [String: Any] {
+        try Task.checkCancellation()
         Logger(subsystem: "no.william.mural", category: "CloudBoundary").notice("OpenAI request attempted")
         guard let key = CredentialStore.read() else { throw APIError.missingKey }
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/" + path)!)

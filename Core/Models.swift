@@ -15,9 +15,14 @@ public struct Fragment: Codable, Identifiable, Equatable, Sendable {
     public var receivedAt: Date
     public var meaningVisible: Bool
     public var typed: Bool
-    public init(id: String = UUID().uuidString, speaker: Speaker, text: String, startMS: Int, endMS: Int, receivedAt: Date = .now, meaningVisible: Bool = false, typed: Bool = false) {
+    /// Explicit finalized local turn; absent in legacy/premium streaming fragments.
+    public var turnID: UUID?
+    public var playbackStartMS: Int?
+    public var playbackEndMS: Int?
+    public var playbackCompleted: Bool?
+    public init(id: String = UUID().uuidString, speaker: Speaker, text: String, startMS: Int, endMS: Int, receivedAt: Date = .now, meaningVisible: Bool = false, typed: Bool = false, turnID: UUID? = nil) {
         self.id = id; self.speaker = speaker; self.text = text; self.startMS = startMS
-        self.endMS = endMS; self.receivedAt = receivedAt; self.meaningVisible = meaningVisible; self.typed = typed
+        self.endMS = endMS; self.receivedAt = receivedAt; self.meaningVisible = meaningVisible; self.typed = typed; self.turnID = turnID
     }
 }
 
@@ -40,6 +45,7 @@ public enum Transcript {
         }
         for (_, fragment) in indexed {
             if let i = result.lastIndex(where: { $0.speaker == fragment.speaker }),
+               fragment.turnID == nil, result[i].fragments.last?.turnID == nil,
                fragment.startMS - result[i].endMS <= 2200,
                !fragment.typed, !(result[i].fragments.last?.typed ?? false) {
                 result[i].fragments.append(fragment)
@@ -129,6 +135,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
         self.languageID = languageID; self.themeID = themeID
         self.title = title ?? LanguageRegistry.module(for: languageID)?.defaultTitle ?? "A conversation"
     }
+    public var isLocalConversation: Bool { fragments.contains { $0.turnID != nil } }
     public var passages: [Passage] { Transcript.passages(fragments) }
     public mutating func append(_ fragment: Fragment) {
         guard !fragments.contains(where: { $0.id == fragment.id }) else { return }
@@ -219,7 +226,10 @@ public struct Archive: Codable, Sendable {
                   s.assessments.allSatisfy({ validDate($0.createdAt) }) else { throw ArchiveError.invalid }
             guard Set(s.fragments.map(\.id)).count == s.fragments.count,
                   s.fragments.allSatisfy({ $0.startMS >= 0 && $0.endMS >= $0.startMS && $0.text.count <= 50_000 &&
-                      (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) }),
+                      (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) &&
+                      ($0.playbackStartMS.map { $0 >= 0 } ?? true) &&
+                      ($0.playbackEndMS == nil || ($0.playbackStartMS != nil && $0.playbackEndMS! >= $0.playbackStartMS!)) &&
+                      ($0.playbackCompleted != true || $0.playbackEndMS != nil) }),
                   s.topics.allSatisfy({ $0.languageID == s.languageID && validDate($0.retrievedAt) }) else { throw ArchiveError.invalid }
         }
     }

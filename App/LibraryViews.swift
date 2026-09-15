@@ -51,6 +51,7 @@ struct ThemesView: View {
             .disabled(coordinator.isLocal)
             .searchable(text: $search, prompt: "Find a conversation")
             .sheet(isPresented: $current) { CurrentTopicView(coordinator: coordinator) { choose(coordinator.selectedTheme) } }
+            .onChange(of: coordinator.mode) { current = false; search = "" }
     }
 }
 
@@ -186,6 +187,9 @@ struct TranscriptView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(passage.speaker == .assistant ? "MURAL" : "YOU").font(.caption).tracking(1).foregroundStyle(MuralColor.secondary)
                                 Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                                if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
+                                    Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
+                                }
                                 if let translation = session.translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: meaningLanguage)] ?? session.translations[passage.revisionKey] {
                                     Text(translation).font(.subheadline).foregroundStyle(MuralColor.secondary)
                                 }
@@ -258,6 +262,9 @@ struct EditableTranscriptView: View {
                                 }
                             }.foregroundStyle(MuralColor.secondary)
                             Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                            if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
+                                Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
+                            }
                         }
                     }
                     ForEach(session?.topics ?? []) { topic in Text(.init(topic.text)); SourcesView(sources: topic.sources, date: topic.retrievedAt) }
@@ -299,6 +306,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
+                        ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.disabled(!coordinator.canChangeMode)
+                    Text(coordinator.isLocal
+                         ? "On-device: English with Vietnamese support. No OpenAI key or consent needed. Speech assets must be installed separately from the Mac; no model download is available. Finalized text stays on this iPhone."
+                         : "GPT-Live: separate OpenAI consent and your API key are required. Audio and selected text are processed by OpenAI.")
+                        .font(.footnote)
+                } header: { Text("Conversation") }
+                Section {
                     LearningLanguagePicker(coordinator: coordinator)
                     Toggle("Meaning subtitles", isOn: Binding(get: { store.preferences.meaningVisible }, set: { value in
                         if value != store.preferences.meaningVisible { coordinator.toggleMeaning() }
@@ -306,7 +322,7 @@ struct SettingsView: View {
                     Picker("Meaning language", selection: Binding(get: { store.preferences.meaningLanguage }, set: { coordinator.selectMeaningLanguage($0) })) {
                         ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
                     }
-                    .disabled(coordinator.isLocal && coordinator.isRunning)
+                    .disabled(coordinator.isLocal && (coordinator.isRunning || coordinator.localResourcesBusy))
                     LabeledContent("Corrections", value: "Gently, as we talk")
                     TextField("A few things you enjoy", text: Binding(get: { store.preferences.interests }, set: { value in store.updatePreferences { $0.interests = String(value.prefix(500)) } }), axis: .vertical)
                 } header: { Text("Just your pace") } footer: { Text(coordinator.isRunning ? "End this conversation to switch languages. Each language keeps its own words and progress." : "Each language keeps its own words and progress. Mural finds your pace through conversation.") }
@@ -338,18 +354,18 @@ struct SettingsView: View {
                     } label: { Label("Use your own API key", systemImage: "key").accessibilityIdentifier("advanced-api-key") }
                     if let message { Text(message).font(.footnote).foregroundStyle(MuralColor.secondary) }
                 } header: { Text("Advanced") } footer: {
-                    if !hasKey { Text("GPT-Live uses your OpenAI API key. The on-device feasibility build in Talk does not need a key.") }
+                    if !hasKey { Text("GPT-Live uses your OpenAI API key. On-device conversations do not need a key.") }
                 }
                 Section {
                     Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
                         ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
                     }
-                    LabeledContent("Recorded voice time", value: "\(Int(totalVoiceSeconds / 60)) min \(Int(totalVoiceSeconds) % 60) sec")
+                    LabeledContent("GPT-Live voice time", value: "\(Int(totalVoiceSeconds / 60)) min \(Int(totalVoiceSeconds) % 60) sec")
                     LabeledContent("Voice estimate", value: String(format: "$%.2f USD", totalVoiceSeconds / 60 * 0.05))
                     LabeledContent("Search calls recorded", value: "\(store.sessions.reduce(0) { $0 + $1.searchCalls })")
                     Link("OpenAI usage and billing", destination: URL(string: "https://platform.openai.com/usage")!)
                 } header: { Text("Keep it comfortable") } footer: {
-                    Text("Voice estimate uses $0.05/min as of 11 September 2026. Translation, teaching and search cost extra. Interrupted requests can be billed without a usage record here. Your OpenAI dashboard is authoritative. The time limit is local, not a billing cap.")
+                    Text("On-device elapsed time is not billed voice time and is excluded. Voice estimate uses $0.05/min as of 11 September 2026. Translation, teaching and search cost extra. Interrupted requests can be billed without a usage record here. Your OpenAI dashboard is authoritative. The time limit is local, not a billing cap.")
                 }
                 Section {
                     Button("Export learning backup", systemImage: "square.and.arrow.up") {
@@ -405,7 +421,7 @@ struct LearningLanguagePicker: View {
             ForEach(LanguageRegistry.all) { language in Text(language.settingsTitle).tag(language.id) }
         }
         .pickerStyle(.menu)
-        .disabled(coordinator.isRunning)
+        .disabled(!coordinator.canChangeMode)
         .accessibilityIdentifier("learning-language-picker")
     }
 }

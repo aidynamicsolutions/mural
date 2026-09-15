@@ -128,6 +128,7 @@ struct TalkView: View {
             TranscriptView(session: session, meaningLanguage: coordinator.store.preferences.meaningLanguage)
         }
         .sheet(item: $lookup) { item in LookupView(item: item, coordinator: coordinator) }
+        .onChange(of: coordinator.mode) { typing = false; lookup = nil; transcript = nil }
     }
     private var captionArea: some View {
         VStack(spacing: 12) {
@@ -187,22 +188,30 @@ struct TalkView: View {
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-conversation-start")
             }
-            if let seconds = coordinator.localAudio.preparationSeconds {
-                Text("Preparation: \(seconds, specifier: "%.1f") s").font(.caption).monospacedDigit()
+            if !coordinator.isRunning, coordinator.session != nil {
+                Button("Transcript", systemImage: "text.bubble") { transcript = coordinator.session }
+                    .frame(minHeight: 44).accessibilityIdentifier("local-conversation-transcript")
             }
-            if let seconds = coordinator.localReplySeconds {
-                Text("Send to reply: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
+            if coordinator.session == nil {
+                Text("No OpenAI key needed. Uses separately installed speech assets; no model download is available.")
+                    .font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
             }
-            if let seconds = coordinator.localAudio.sendToPlaybackSeconds {
-                Text("Send to audio: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
-                    .accessibilityIdentifier("local-response-gap")
-            }
-            DisclosureGroup("On-device feasibility build") {
+            DisclosureGroup("On-device details & diagnostics") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("PhoWhisper CS FP16 → Apple tutor → English system voice. No OpenAI key or cloud inference. Tap Record only after Mural finishes speaking; tap Send when done.")
                     Text("Silence can produce invented text and an unsolicited tutor reply. Recognition is accepted for MVP with this known limitation; silence detection is not implemented.")
-                    Text("Conversation only: no saved history, meanings, lookup, Help, typing, themes, or learning evidence. Your existing saved data is unchanged.")
+                    Text("Finalized turns are saved on this iPhone. Meanings, lookup, Help, typing, themes, and learning evidence are not available yet.")
                     Text("Uses the speech assets already installed on this phone (3.10 GB plus caches). No model download source is configured. Keep the app open during preparation.")
+                    if let seconds = coordinator.localAudio.preparationSeconds {
+                        Text("Preparation: \(seconds, specifier: "%.1f") s").font(.caption).monospacedDigit()
+                    }
+                    if let seconds = coordinator.localReplySeconds {
+                        Text("Send to reply: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
+                    }
+                    if let seconds = coordinator.localAudio.sendToPlaybackSeconds {
+                        Text("Send to audio: \(seconds, specifier: "%.2f") s").font(.caption).monospacedDigit()
+                            .accessibilityIdentifier("local-response-gap")
+                    }
                     if !coordinator.localAudio.preparationDetail.isEmpty { Text(coordinator.localAudio.preparationDetail) }
                     if let seconds = coordinator.localAudio.finalizeSeconds {
                         Text("ASR: \(seconds, specifier: "%.2f") s")

@@ -2,7 +2,7 @@
 
 ## User outcome
 
-A new learner chooses a learning language and a subtitle language, reads the OpenAI processing disclosure, agrees, and reaches Talk without creating an account or entering an API key.
+A new learner chooses learning/support languages and a conversation mode, then taps Continue without granting OpenAI consent. GPT-Live requests separate consent on first start. On-device requires English/Vietnamese and no cloud key/consent. Phase 4 UI replay is PENDING HUMAN; see `local-conversation.md` for the current paired workflow.
 
 ## How to get to it
 
@@ -34,7 +34,7 @@ Use `serve-sim` and its `$HELPER_URL/ax` endpoint for a quick visual inspection.
 
 1. Confirm `onboarding-language-fr` exists.
 2. Tap French, then `onboarding-continue`.
-3. Confirm the processing summary, privacy link, subtitle picker, and `Agree and continue` label.
+3. Confirm the mode-specific privacy/preparation copy, privacy link, subtitle picker, and `Continue` label.
 4. Select Spanish in `onboarding-meaning-picker`.
 5. Confirm the example is `¡Hola!`.
 6. Tap `onboarding-continue`.
@@ -55,3 +55,5 @@ Capture the initial onboarding frame and the resulting Talk frame plus accessibi
 - Do not bypass onboarding by editing SwiftData or installing a marker.
 - `--preview` uses in-memory records. It proves the UI flow, not persistent onboarding migration.
 - A live AI response still needs the physical iPhone 17 and a key entered through Settings.
+
+Phase 4: no duplicate agent UI automation or new tests. The existing UI test has not been rerun for this checkpoint. Use the human checklist in `local-conversation.md`; do not reset personal data to force first-use consent.
