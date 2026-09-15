@@ -1,115 +1,159 @@
-# Core AI ASR implementation handoff
+# Core AI ASR handoff — transcript parity checkpoint
 
-## Status
+## Controlling status
 
-This commit implements the **loading-time decision gate**, not the final runtime
-migration.
+Core AI AOT loading is **accepted for continuation**.
 
-The existing on-device conversation path remains unchanged on
-WhisperKit/Core ML.
-
-New work in this commit:
-
-- deterministic helper to recreate the pinned merged PhoWhisper source if the
-  previously frozen source is unavailable;
-- Core AI `.aimodel` exporter derived from Apple's official Whisper example;
-- Core AI AOT compilation helper;
-- an explicit Mural launch-time Core AI load probe;
-- persistent specialization-cache measurement and controlled per-model cache
-  reset;
-- JSON diagnostic output for reporting.
-
-## Why this boundary is deliberate
-
-The current unacceptable delay is historical ~215 s first preparation, with
-~206 s in WhisperKit/Core ML prewarm/specialization. Before implementing a new
-ASR decoder, prove that Core AI AOT actually reduces the expensive part.
-
-The app probe does not transcribe and cannot affect normal conversations.
-
-## Current reference
-
-- branch before this work: `mvp`
-- starting head: `c3e6b1b0859c579983a263cf831689a40e2ff734`
-- retained model: `phowhisper-cs-fp16-v1`
-- retained runtime bytes: ~3.10 GB
-- Large-v2/PhoWhisper frontend: 80 mel bins
-- current Core ML/ANE cold preparation: ~215.2 s historical
-- current cached preparation: ~6.3 s historical
-
-## Next agent: exact task
-
-1. Pull the new `mvp` commit.
-2. Read `Tools/CoreAI/README.md`.
-3. Confirm the checkout is clean and do not modify unrelated Phase 5 work.
-4. Locate the exact previously frozen merged PhoWhisper FP16 Hugging Face source
-   from the existing local benchmark artifacts. Prefer it over re-merging.
-5. If it is missing, run `Tools/CoreAI/merge_phowhisper.py`.
-6. Replay the existing frozen ASR corpus against the source before conversion.
-   Stop if source parity fails.
-7. Run `Tools/CoreAI/export_phowhisper_coreai.py`.
-8. Run `Tools/CoreAI/compile_aot.sh`.
-9. Identify the compiled asset matching `AIModel.deviceArchitectureName` on the
-   iPhone 17.
-10. Stage only that asset into Mural's app container.
-11. Build Mural Release using the existing bundle/signing/device workflow.
-12. Launch with `--coreai-load-probe --coreai-reset-cache` for an uncached trial.
-13. Run at least two additional controlled uncached trials if cache deletion is
-    safe and repeatable.
-14. Force-close/relaunch with `--coreai-load-probe` for at least three cached
-    trials.
-15. Retrieve `Documents/coreai-load-probe.json` after each representative run.
-16. Report exact raw timings, architecture, asset size, Xcode/iOS versions, and
-    any error.
-17. Do **not** implement the Core AI ASR decoder yet if cold readiness exceeds
-    60 s.
-
-## Pass gate
-
-Proceed with full Core AI transcription only when:
-
-- median/representative cold AOT ready <= 55 s;
-- cached ready <= 5 s;
-- no app termination during specialization/function loading.
-
-Stretch target: cold <= 15 s.
-
-## If the gate passes
-
-Report back before doing a large refactor. The next code change should preserve
-the exact FP16 weights and implement transcript parity in stages:
-
-- exact 80-mel frontend;
-- current PhoWhisper tokenizer/control tokens;
-- greedy decode first;
-- frozen-corpus parity;
-- then decoder performance/KV-cache work;
-- then phone integration.
-
-## Report template
+Tested prior commit:
 
 ```text
-MVP commit tested:
-Mac / Xcode:
-iPhone model / iOS:
+8e80058df135b6032c7d57e5c0c28193c4b3a751
+```
+
+Physical device:
+
+- iPhone 17 / `iPhone18,3`
+- iOS 27.0 (`24A435`)
+- Core AI architecture `h18p`
+
+Frozen source:
+
+```text
+/Users/tiger/tmp/mural-asr-benchmark/phowhisper-conversion/merge-fp16/model
+```
+
+Weights:
+
+```text
+3,086,759,768 bytes
+SHA256 264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a
+```
+
+Frozen-source ASR replay: **22/22 normalized matches**.
+
+## Loading evidence
+
+Monolithic FP16 Core AI artifact:
+
+- `.aimodel`: 3,087,059,590 bytes
+- matching `.aimodelc`: 3,087,114,272 bytes
+
+Controlled physical-phone timings:
+
+| Run | Cache | Specialization | loadFunction | Total |
+|---|---:|---:|---:|---:|
+| Cold 1 | miss | 7.585 | 7.209 | 14.816 |
+| Cold 2 | miss | 6.188 | 5.523 | 11.734 |
+| Cold 3 | miss | 6.218 | 6.077 | 12.314 |
+| Cached 1 | hit | 0 | 5.346 | 5.349 |
+| Cached 2 | hit | 0 | 5.594 | 5.597 |
+| Cached 3 | hit | 0 | 5.782 | 5.784 |
+
+This is a ~17x improvement over the historical ~215 s first Core ML/ANE
+prepare. Missing the former cached <=5 s goal by ~0.35–0.78 s is not a blocker;
+the remaining cached cost is almost entirely `loadFunction`.
+
+No correlated Mural crash, Jetsam, memory-pressure termination, or thermal
+warning was reported. One launch failed only because the phone was locked.
+
+A nonfatal Core AI/MPSGraph message mentioned no ANE hash / GPU-only / wrong
+target. Actual compute placement remains unproven and must not be inferred from
+that message alone.
+
+## What this commit adds
+
+This checkpoint adds a **parallel transcript-parity path only**:
+
+1. split Core AI encoder exporter;
+2. simple full-prefix Core AI decoder exporter;
+3. split AOT compilation helper;
+4. Release-build iPhone corpus probe;
+5. reuse of the accepted Core ML 80-mel frontend;
+6. reuse of the exact existing PhoWhisper tokenizer/control-token contract;
+7. JSON per-fixture timing/transcript evidence.
+
+Normal Mural on-device conversations remain on WhisperKit/Core ML.
+
+## Why the old mel frontend is reused
+
+Apple's stock CoreAISpeech Whisper frontend is currently v3-oriented and uses
+128 mel bins. PhoWhisper Large-v2 requires 80.
+
+Rather than introduce a new mel implementation and a new encoder/decoder
+runtime in the same experiment, this checkpoint reuses Mural's already-accepted
+`MelSpectrogram.mlmodelc`.
+
+That isolates transcript differences to the Core AI encoder/decoder path.
+
+## Exact next action
+
+1. Pull the latest `mvp` commit.
+2. Read `Tools/CoreAI/README.md`.
+3. Confirm clean checkout.
+4. Build Mural Release immediately. Fix only narrow compile/API issues caused by
+   the new probe if Xcode 27's Core AI surface differs.
+5. Reuse the exact frozen merged source above.
+6. Run `export_phowhisper_split_coreai.py`.
+7. Run `compile_split_aot.sh`.
+8. Stage the architecture-matching encoder + decoder `.aimodelc` pair.
+9. Preserve the installed accepted PhoWhisper Core ML support directory.
+10. Stage the same frozen 22 audio fixtures.
+11. Launch `--coreai-asr-probe --coreai-asr-auto`.
+12. Retrieve `Documents/coreai-asr-probe.json`.
+13. Compare exact outputs to the accepted baseline using the same normalization.
+14. Stop and report. Do not implement KV cache or change the normal conversation
+    path in the same session.
+
+## Gate
+
+PASS only when:
+
+- 22/22 normalized transcripts match the accepted FP16 baseline;
+- no new code-switch regression;
+- no app termination;
+- all files produce finite valid outputs.
+
+Latency is measured but is not yet a hard pass gate because this first decoder
+deliberately recomputes the prefix.
+
+## Report back
+
+```text
+Commit tested:
+Local diff:
+Xcode/macOS:
+iPhone/iOS:
 Core AI architecture:
-Source model path/hash:
-.aimodel bytes:
-matching .aimodelc bytes:
 
-Uncached run 1:
-  cache lookup:
-  specialization:
-  loadFunction:
+Encoder .aimodel bytes:
+Decoder .aimodel bytes:
+Encoder matching .aimodelc bytes:
+Decoder matching .aimodelc bytes:
+
+Split prepare:
+  mel model:
+  tokenizer:
+  encoder cache/specialize/loadFunction:
+  decoder cache/specialize/loadFunction:
   total:
-Uncached run 2:
-Uncached run 3:
 
-Cached run 1:
-Cached run 2:
-Cached run 3:
+Corpus:
+  passed normalized:
+  failed normalized:
+  exact mismatches:
+  per-file JSON:
 
-Errors / termination / heat:
-coreai-load-probe.json:
-PASS/FAIL against <=55 s cold and <=5 s cached:
+Representative latency:
+  English:
+  Vietnamese:
+  forward switch:
+  reverse switch:
+  Yes:
+  No:
+  silence:
+  long turn:
+
+Crash/Jetsam/thermal/memory notes:
+Core AI/MPSGraph messages:
+PASS/FAIL:
 ```
