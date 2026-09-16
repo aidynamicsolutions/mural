@@ -205,6 +205,7 @@ import ArgmaxCore
             warmup.cancel()
             _ = await warmup.result
             stagedDecoderWarmup = nil
+            try Task.checkCancellation()
         }
         guard !stagedMemoryWarning else {
             throw CaptureError.operation(asrError ?? "Speech is disabled after a memory warning. Use the default build.")
@@ -248,6 +249,8 @@ import ArgmaxCore
 
     func prepareASR(repairDownload: Bool = false) {
         guard canPrepare else { return }
+        let previousWarmup = stagedDecoderWarmup
+        previousWarmup?.cancel()
         let token = UUID(); generation = token
         let selected = asrModel
         asrError = nil; asrNotice = nil; preparationSeconds = nil; preparationDetail = ""; asrState = .downloading
@@ -255,8 +258,13 @@ import ArgmaxCore
         asrTask = Task { [weak self] in
             guard let self else { return }
             defer { self.asrTask = nil }
-            let started = ProcessInfo.processInfo.systemUptime
             do {
+                if let previousWarmup {
+                    _ = await previousWarmup.result
+                    self.stagedDecoderWarmup = nil
+                }
+                try Task.checkCancellation()
+                let started = ProcessInfo.processInfo.systemUptime
                 let directory: URL
                 switch selected {
                 case .phoWhisper:

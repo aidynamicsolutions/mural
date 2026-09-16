@@ -14,7 +14,8 @@ final class MeaningControllerTests: XCTestCase {
         }
 
         controller.update(MeaningRequest(sessionID: session.id, passage: passage,
-                                         learningLanguageID: "en", meaningLanguage: "Vietnamese"))
+                                         learningLanguageID: "en", meaningLanguage: "Vietnamese"),
+                          cached: "stale cached meaning")
 
         XCTAssertEqual(controller.text, "Chào bạn! Hôm nay bạn đã làm gì?")
         XCTAssertFalse(controller.isLoading)

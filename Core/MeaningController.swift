@@ -56,7 +56,7 @@ public struct MeaningResult: Sendable {
         let changedContext = desired.map { !$0.sharesContext(with: request) } ?? true
         if changedContext { reset() }
         desired = request
-        let immediate = cached.flatMap { $0.isEmpty ? nil : $0 } ?? request.builtInMeaning
+        let immediate = request.builtInMeaning ?? cached.flatMap { $0.isEmpty ? nil : $0 }
         if let immediate {
             cancelWorker(); text = immediate; rendered = request; error = nil; return
         }
