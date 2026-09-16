@@ -98,7 +98,8 @@ actor VietnameseEnglishRecognizer {
         return text
     }
 
-    nonisolated static func logMemory(stage: String, model: String = "parakeet") {
+    @discardableResult
+    nonisolated static func logMemory(stage: String, model: String = "parakeet") -> [String: UInt64] {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -106,9 +107,10 @@ actor VietnameseEnglishRecognizer {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        guard result == KERN_SUCCESS else { return }
+        guard result == KERN_SUCCESS else { return [:] }
         // Process lifetime RSS peak, not this model's isolated peak or system-model memory.
         Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("asr_memory model=\(model, privacy: .public) stage=\(stage, privacy: .public) footprint_bytes=\(info.phys_footprint, privacy: .public) process_rss_peak_bytes=\(info.resident_size_peak, privacy: .public) thermal_state=\(ProcessInfo.processInfo.thermalState.rawValue, privacy: .public)")
+        return ["footprintBytes": info.phys_footprint, "processRSSPeakBytes": info.resident_size_peak]
     }
 
     private enum RecognitionError: LocalizedError {

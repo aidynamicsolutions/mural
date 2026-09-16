@@ -25,6 +25,7 @@ parity is proven.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import time
@@ -150,7 +151,13 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--skip-optimize", action="store_true",
                         help="Diagnostic only. Normal exports should optimize.")
+    parser.add_argument("--diagnostic-prefix-length", type=int, choices=(1, 4),
+                        help="Export only a fixed-length decoder control, not a transcription model.")
+    parser.add_argument("--encoder-checkpoint", type=Path,
+                        help="FP16 phone checkpoint for the fixed-length diagnostic; adjacent .json required.")
     args = parser.parse_args()
+    if bool(args.diagnostic_prefix_length) != bool(args.encoder_checkpoint):
+        parser.error("diagnostic-prefix-length and encoder-checkpoint must be used together")
 
     model_dir = Path(args.model_dir).expanduser().resolve()
     if not model_dir.exists():
@@ -171,6 +178,54 @@ def main() -> None:
         str(model_dir), local_files_only=True
     )
     validate_model(model, processor)
+    if args.diagnostic_prefix_length:
+        # Bounded shape control only. Reuse the exact decoder, weights and phone hidden states.
+        with (model_dir / "model.safetensors").open("rb") as handle:
+            weights_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+        if weights_hash != "264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a":
+            raise ValueError("Fixed diagnostics require the frozen accepted weights")
+        data = args.encoder_checkpoint.read_bytes()
+        metadata = json.loads(args.encoder_checkpoint.with_suffix(".json").read_text())
+        if hashlib.sha256(data).hexdigest() != metadata["tensorSHA256"]:
+            raise ValueError("Encoder checkpoint SHA-256 differs")
+        values = np.frombuffer(data, dtype="<f2").copy()
+        if values.size != 1500 * 1280 or not np.isfinite(values).all():
+            raise ValueError("Invalid FP16 encoder checkpoint")
+        length = args.diagnostic_prefix_length
+        prefix = [50258, 50278, 50359, 50363][:length]
+        decoder = DecoderModule(model).eval()
+        inputs = {"decoder_input_ids": torch.tensor([prefix], dtype=torch.int32),
+                  "encoder_hidden_states": torch.from_numpy(values.reshape(1, 1500, 1280))}
+        with torch.inference_mode():
+            logits = decoder(**inputs)
+        if list(logits.shape) != [1, length, 51865] or not torch.isfinite(logits).all():
+            raise ValueError("Invalid fixed diagnostic reference logits")
+        with torch.autocast(device_type="cpu", dtype=torch.float16):
+            exported = torch.export.export(decoder, args=(), kwargs=inputs,
+                                           dynamic_shapes={key: {} for key in inputs})
+        with torch.inference_mode():
+            exported_logits = exported.module()(**inputs)
+        # This checks PyTorch graph capture only, not the Core AI conversion/runtime.
+        torch.testing.assert_close(exported_logits, logits, rtol=0, atol=0)
+        program = convert(exported, input_names=list(inputs), output_names=["logits"],
+                          optimize=not args.skip_optimize)
+        path = output_dir / f"{args.name}.decoder-fixed{length}.aimodel"
+        save_program(program, path, f"decoder-fixed{length}-diagnostic", args.overwrite)
+        top = torch.topk(logits[0, -1].float(), k=5)
+        report = {"diagnostic_only": True, "dtype": "float16", "use_cache": False,
+                  "weights_sha256": weights_hash, "checkpoint": metadata,
+                  "attention_implementation": model.config._attn_implementation,
+                  "torch_version": torch.__version__, "transformers_version": transformers.__version__,
+                  "input_shapes": {k: list(v.shape) for k, v in inputs.items()},
+                  "prefix": prefix, "output_shape": list(logits.shape),
+                  "pytorch_export_bit_exact": True, "all_reference_rows_finite": True,
+                  "reference_last_row_top5_ids": top.indices.tolist(),
+                  "reference_last_row_top5_logits": top.values.tolist(),
+                  "asset": str(path), "bytes": directory_size(path),
+                  "optimized": not args.skip_optimize}
+        path.with_suffix(".json").write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report, indent=2))
+        return
     features = deterministic_features(processor, torch.float16)
 
     encoder = EncoderModule(model).eval()
