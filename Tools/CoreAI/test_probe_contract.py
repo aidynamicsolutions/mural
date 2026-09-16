@@ -5,9 +5,9 @@ import subprocess
 import tempfile
 
 source = (Path(__file__).resolve().parents[2] / "App/MuralApp.swift").read_text()
-helpers = source.split("    private static func sha256", 1)[1].split(
-    "\n}\n\n@MainActor", 1
-)[0]
+shared = (Path(__file__).resolve().parents[2] / "App/LocalConversationEngine.swift").read_text()
+helpers = shared.split("    static func sha256", 1)[1].split("\n}\n#endif", 1)[0].replace("Failure(", "ProbeError(")
+helpers += "\n    private static func checkedArgmax" + source.split("    private static func checkedArgmax", 1)[1].split("\n}\n\n@MainActor", 1)[0]
 swift = '''import CryptoKit
 import Foundation
 struct ProbeError: Error { init(_ message: String) {} }

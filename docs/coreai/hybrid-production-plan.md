@@ -1,6 +1,10 @@
 # Hybrid ASR production plan
 
-Status: **Plan only. Do not integrate into normal Talk until every gate below passes.**
+Status: **GPU-preferred normal-Talk opt-in implemented and partially phone-verified. Default rollout remains gated.**
+
+Latest: [GPU Talk checkpoint](gpu-talk-checkpoint.md). The original ANE-backed cached-load failure was reproduced and preserved. A separate GPU-preferred FP16 encoder passed bounded qualification and enabled an explicit Release Talk experiment. Real-path preparation, repeated turns, persistence, offline and Finalizing Stop/retry passed after fixing verification-buffer accumulation. The background-restoration correction still needs its phone replay; full rollback and release gates remain open.
+
+Current assessment: [staged Talk assessment](staged-talk-assessment.md). The later [remaining-gates checkpoint](staged-remaining-gates-checkpoint.md) supersedes historical fixture-001-only evidence below: the staged corpus completed without warnings, and the user accepted fixture 007 as an explicit known-error exception. This does not clear reliability, integrated lifecycle, rollback, or Release gates.
 
 Goal: reduce PhoWhisper startup time with the Core AI encoder while preserving FP16 weights, the existing frontend and tokenizer, WhisperKit decoding behavior, transcript quality and offline operation.
 
@@ -55,7 +59,7 @@ If the decoder prewarm remains the dominant cost, isolate that cost before chang
 
 Use the frozen accepted corpus before enabling hybrid Talk. Compare the same audio through the existing and hybrid paths.
 
-1. Require `22/22` normalized matches using the repository's existing normalization only.
+1. Use the repository's existing normalization only. The user-approved corpus disposition is **21 exact historical-reference matches plus one explicit fixture-007 known-error exception**, not `22/22` exact parity: `seal tea` and `seoul tea` both misrecognize Vietnamese `siêu thị`. Preserve both raw outputs and this exception. The failed fresh phone comparator still blocks controlled same-device parity claims.
 2. Retain raw text, language, token and timing differences. Do not change punctuation, accents, prompts, thresholds or expected output to manufacture a pass.
 3. Compare frontend mel, encoder output, decoder inputs, logits where available, generated tokens and final text in that order.
 4. Keep separate checks for silence, Yes and No because the existing 22-file corpus does not cover all of those cases.
@@ -98,7 +102,7 @@ Rollback trigger: any Jetsam/per-process kill, native abort, transcript mismatch
 
 The hybrid path is production ready only when all of these are true:
 
-- Full accepted-corpus parity and explicit edge-case coverage pass.
+- The accepted corpus gate, with the explicit fixture-007 exception recorded separately from exact parity, and explicit edge-case coverage pass.
 - Cold and cached startup targets are met on controlled repeated samples.
 - Repeated turns, cancellation, backgrounding and relaunch are stable.
 - Peak memory stays below the device limit with tutor/TTS coexistence and no recurring warnings.

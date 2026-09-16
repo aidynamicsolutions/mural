@@ -163,6 +163,14 @@ import MuralCore
             guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, raw == AVAudioSession.InterruptionType.began.rawValue else { return }
             Task { @MainActor in self?.end(reason: "Conversation interrupted. Start again when ready.") }
         })
+        if mode == .local, localPairSupported,
+           let paused = store.sessions.first(where: { $0.canResumeLocalConversation && $0.languageID == language.id }) {
+            session = paused; sessionMode = .local
+            let lastOffset = paused.fragments.map(\.endMS).max() ?? 0
+            localStartedAt = ProcessInfo.processInfo.systemUptime - Double(lastOffset) / 1000
+            state = .active; localPhase = .paused; isMuted = true
+            localLogger.notice("local_session_restored paused=true")
+        }
     }
     var isRunning: Bool { state == .active || state == .connecting || state == .closing }
     var language: LanguageModule { store.language }
@@ -407,6 +415,7 @@ import MuralCore
         localLookupTask?.cancel()
         if eligible {
             if session?.endedAt == nil { session?.endedAt = .now; session?.endReason = reason }
+            session?.localPausedAt = nil
             saveIfEligible()
         } else {
             // An assistant greeting alone is not a conversation and never enters history.
@@ -550,6 +559,8 @@ import MuralCore
         cancelLocalSupporting()
         isMuted = true; inputLevel = 0; outputLevel = 0; working = false
         state = .active; localPhase = .paused; notice = nil
+        session?.localPausedAt = .now
+        saveIfEligible()
         localLogger.notice("local_paused")
     }
     func background() {
@@ -708,6 +719,8 @@ import MuralCore
             do {
                 try await self.localAudio.prepareConversation()
                 try self.checkLocal(id)
+                self.session?.localPausedAt = nil
+                self.saveIfEligible()
                 self.lastActivity = .now
                 self.localPhase = .ready
             } catch is CancellationError {

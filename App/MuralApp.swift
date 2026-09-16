@@ -1,4 +1,7 @@
+#if DEBUG && canImport(CoreAI)
 import CoreAI
+import ArgmaxCore
+#endif
 import CoreML
 import CryptoKit
 import Foundation
@@ -14,28 +17,44 @@ import WhisperKit
 
     init() {
         let args = ProcessInfo.processInfo.arguments
-        let inMemory = args.contains("--preview") || AudioVerification.requested || CoreAIASRProbe.requested
+        #if DEBUG && canImport(CoreAI)
+        let coreAIProbeRequested = CoreAIASRProbe.requested
+        #else
+        let coreAIProbeRequested = false
+        #endif
+        let inMemory = args.contains("--preview") || AudioVerification.requested || coreAIProbeRequested
         do { _store = State(initialValue: try LearningStore(inMemory: inMemory)) }
         catch { _startupError = State(initialValue: "Mural couldn’t open its learning record. Your existing data has not been replaced.") }
     }
 
+    @ViewBuilder private var mainContent: some View {
+        if let store {
+            RootView(store: store).preferredColorScheme(.light)
+        } else {
+            ContentUnavailableView(
+                "Let’s try again",
+                systemImage: "externaldrive.badge.exclamationmark",
+                description: Text(startupError ?? "The learning record is unavailable.")
+            ).preferredColorScheme(.light)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
+            #if DEBUG && canImport(CoreAI)
             if CoreAIASRProbe.requested {
                 CoreAIASRProbeView().preferredColorScheme(.light)
-            } else if let store {
-                RootView(store: store).preferredColorScheme(.light)
             } else {
-                ContentUnavailableView(
-                    "Let’s try again",
-                    systemImage: "externaldrive.badge.exclamationmark",
-                    description: Text(startupError ?? "The learning record is unavailable.")
-                ).preferredColorScheme(.light)
+                mainContent
             }
+            #else
+            mainContent
+            #endif
         }
     }
 }
 
+#if DEBUG && canImport(CoreAI)
 /// Development-only parity runner. Normal Talk/On-device still uses WhisperKit/Core ML.
 private actor CoreAIPhoWhisper {
     struct AssetTiming: Codable, Sendable {
@@ -163,6 +182,34 @@ private actor CoreAIPhoWhisper {
     private var fixture = ""
     private var encoderInvalidationAttempted = false
 
+    // Product-gate ownership is deliberately kept on this actor. The historical
+    // probe above remains unchanged; this state is only used by the bounded gate.
+    private var productState: ProductState = .idle
+    private var productKit: WhisperKit?
+    private var productEncoder: (any AudioEncoding)?
+    private var productModel: AIModel?
+    private var productFunction: InferenceFunction?
+    private var productInput: NDArrayDescriptor?
+    private var productSuppressionTokens: [Int] = []
+    private var productCancellationController: ProductCancellationController?
+    private var productRunDirectory: URL?
+    private var productSessionID = ""
+    private var productGeneration = 0
+    private var productTurnNumber = 0
+    private var productMelHashes: [String] = []
+    private var productHiddenHashes: [String] = []
+    private var productBeforeEncoderMemory: ProductMemory?
+    private var productAfterEncoderMemory: ProductMemory?
+    private var productAfterTranscriptMemory: ProductMemory?
+    private var productEncoderStarted: Double?
+    private var productEncoderElapsed = 0.0
+    private var productDecoderElapsed = 0.0
+    private var productWarningCount: (@Sendable () async -> Int)?
+    private var productCompanionStart: (@MainActor @Sendable () -> Void)?
+    private var productUnderlyingInferenceReturned = false
+    private var productActiveInferenceCount = 0
+    private var productEncoderBusy = false
+    private var productQuiescenceWaiters: [CheckedContinuation<Void, Never>] = []
     func prepare(_ config: Config, runDirectory: URL) async throws -> Preparation {
         unload()
         self.runDirectory = runDirectory
@@ -334,17 +381,7 @@ private actor CoreAIPhoWhisper {
     }
 
     private static func copyEncoderOutput(_ hidden: NDArray) throws -> [Float16] {
-        guard hidden.shape == [1, 1500, 1280], hidden.scalarType == .float16 else {
-            throw ProbeError("Encoder output must remain FP16 [1,1500,1280].")
-        }
-        var owned = [Float16](repeating: 0, count: 1500 * 1280)
-        hidden.view(as: Float16.self).withUnsafePointer { p, _, strides in
-            for t in 0..<1500 { for c in 0..<1280 {
-                owned[t * 1280 + c] = p[t * strides[1] + c * strides[2]]
-            }}
-        }
-        guard owned.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite encoder output.") }
-        return owned
+        try PhoWhisperStagedEncoder.copyEncoderOutput(hidden)
     }
 
     private func decodeTurn(_ encoded: Encoded, config: Config, melSeconds: Double,
@@ -450,32 +487,52 @@ private actor CoreAIPhoWhisper {
         suppressTokens = []
     }
 
-    private static func loadAsset(_ url: URL, options: SpecializationOptions = .default) async throws
+    private static func loadAsset(_ url: URL, options: SpecializationOptions = .default,
+                                  requireCached: Bool = false) async throws
       -> (model: AIModel, function: InferenceFunction, timing: AssetTiming) {
-        let cache = AIModelCache.default
-        let cacheStart = ProcessInfo.processInfo.systemUptime
-        let cached = try cache.model(for: url, options: options)
-        let lookup = ProcessInfo.processInfo.systemUptime - cacheStart
-        let model: AIModel
-        let specialization: Double
-        if let cached { model = cached; specialization = 0 }
-        else {
+        let logger = Logger(subsystem: "no.william.mural", category: "CoreAIProductGate")
+        var stage = "cache-access"
+        do {
+            let cache = AIModelCache.default
+            let cacheStart = ProcessInfo.processInfo.systemUptime
+            stage = "cache-lookup"
+            let cached = try cache.model(for: url, options: options)
+            let lookup = ProcessInfo.processInfo.systemUptime - cacheStart
+            logger.notice("coreai_cache_lookup asset=\(url.lastPathComponent, privacy: .public) hit=\(cached != nil, privacy: .public) required=\(requireCached, privacy: .public)")
+            guard !requireCached || cached != nil else {
+                throw ProbeError("Required cached specialization is absent; no specialization or inference attempted.")
+            }
+            let model: AIModel
+            let specialization: Double
+            if let cached { model = cached; specialization = 0 }
+            else {
+                let start = ProcessInfo.processInfo.systemUptime
+                stage = "specialization"
+                model = try await AIModel.specialize(
+                    contentsOf: url, options: options, cachePolicy: .persistent)
+                specialization = ProcessInfo.processInfo.systemUptime - start
+            }
             let start = ProcessInfo.processInfo.systemUptime
-            model = try await AIModel.specialize(
-                contentsOf: url, options: options, cachePolicy: .persistent)
-            specialization = ProcessInfo.processInfo.systemUptime - start
+            stage = "function-load"
+            logger.notice("coreai_function_load_begin asset=\(url.lastPathComponent, privacy: .public)")
+            guard let function = try model.loadFunction(named: "main") else {
+                throw ProbeError("Missing main function in \(url.lastPathComponent).")
+            }
+            logger.notice("coreai_function_load_complete asset=\(url.lastPathComponent, privacy: .public)")
+            return (
+                model, function,
+                AssetTiming(
+                    path: url.path, cacheHit: cached != nil, cacheLookupSeconds: lookup,
+                    specializationSeconds: specialization,
+                    functionLoadSeconds: ProcessInfo.processInfo.systemUptime - start)
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            let error = error as NSError
+            logger.error("coreai_load_failed stage=\(stage, privacy: .public) domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public)")
+            throw ProbeError("Core AI \(stage) failed for \(url.lastPathComponent): \(error.domain)(\(error.code)) \(error.userInfo)")
         }
-        let start = ProcessInfo.processInfo.systemUptime
-        guard let function = try model.loadFunction(named: "main") else {
-            throw ProbeError("Missing main function in \(url.lastPathComponent).")
-        }
-        return (
-            model, function,
-            AssetTiming(
-                path: url.path, cacheHit: cached != nil, cacheLookupSeconds: lookup,
-                specializationSeconds: specialization,
-                functionLoadSeconds: ProcessInfo.processInfo.systemUptime - start)
-        )
     }
 
     private static func validate(_ model: AIModel, role: String) throws {
@@ -669,24 +726,7 @@ private actor CoreAIPhoWhisper {
     }
 
     private static func readAcceptedMel(_ a: MLMultiArray) throws -> [Float] {
-        let shape = a.shape.map(\.intValue), strides = a.strides.map(\.intValue)
-        guard shape == [1, 80, 3000] || shape == [1, 80, 1, 3000] else {
-            throw ProbeError("Unexpected mel shape \(shape).")
-        }
-        var out = [Float](repeating: 0, count: 80 * 3000)
-        func copy<T: BinaryFloatingPoint>(_ type: T.Type) {
-            let p = a.dataPointer.assumingMemoryBound(to: type)
-            for m in 0..<80 { for t in 0..<3000 {
-                out[m * 3000 + t] = Float(p[m * strides[1] + t * strides[shape.count - 1]])
-            }}
-        }
-        switch a.dataType {
-        case .float16: copy(Float16.self) // Widening preserves every finite FP16 value exactly.
-        case .float32: copy(Float.self)
-        default: throw ProbeError("Unsupported mel type \(a.dataType).")
-        }
-        guard out.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite mel.") }
-        return out
+        try PhoWhisperStagedEncoder.readAcceptedMel(a)
     }
 
     private static func fillFloat(_ a: inout NDArray, values: [Float]) throws {
@@ -910,7 +950,7 @@ private actor CoreAIPhoWhisper {
         let kit = try await WhisperKit(WhisperKitConfig(modelFolder: support.path, tokenizerFolder: support,
             computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
                                                 textDecoderCompute: .cpuAndNeuralEngine),
-            audioEncoder: activeEncoder, verbose: false, prewarm: false, load: false, download: false))
+            audioEncoder: activeEncoder, textDecoder: ProductDecoder(owner: self), verbose: false, prewarm: false, load: false, download: false))
         do {
             let tokenizerStart = ProcessInfo.processInfo.systemUptime
             kit.tokenizer = try await PhoWhisperTokenizer.load(from: support)
@@ -1026,59 +1066,20 @@ private actor CoreAIPhoWhisper {
     }
 
     private static func decoderEmbeddings(_ values: [Float16]) throws -> MLMultiArray {
-        guard values.count == 1500 * 1280, values.allSatisfy(\.isFinite) else {
-            throw ProbeError("Expected finite FP16 [1,1500,1280] values.")
-        }
-        let result = try MLMultiArray(shape: [1, 1280, 1, 1500], dataType: .float16)
-        let strides = result.strides.map(\.intValue)
-        let p = result.dataPointer.assumingMemoryBound(to: Float16.self)
-        for t in 0..<1500 { for c in 0..<1280 {
-            p[c * strides[1] + t * strides[3]] = values[t * 1280 + c]
-        }}
-        return result
+        try PhoWhisperStagedEncoder.decoderEmbeddings(values)
     }
 
     private static func readDecoderEmbeddings(_ a: MLMultiArray) throws -> [Float16] {
-        guard a.shape.map(\.intValue) == [1, 1280, 1, 1500], a.dataType == .float16 else {
-            throw ProbeError("WhisperKit embeddings must be FP16 [1,1280,1,1500].")
-        }
-        let strides = a.strides.map(\.intValue)
-        let p = a.dataPointer.assumingMemoryBound(to: Float16.self)
-        var values = [Float16](repeating: 0, count: 1500 * 1280)
-        for t in 0..<1500 { for c in 0..<1280 {
-            values[t * 1280 + c] = p[c * strides[1] + t * strides[3]]
-        }}
-        guard values.allSatisfy(\.isFinite) else { throw ProbeError("Non-finite decoder embeddings.") }
-        return values
+        try PhoWhisperStagedEncoder.readDecoderEmbeddings(a)
     }
 
     private static func sha256(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        PhoWhisperStagedEncoder.sha256(data)
     }
 
     // Sorted child-name -> digest JSON recursively binds names and contents, independent of container URL.
     private static func fingerprint(_ url: URL) throws -> String {
-        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isSymbolicLink != true else { throw ProbeError("Symlinks are not diagnostic assets.") }
-        if values.isDirectory == true {
-            var children: [String: String] = [:]
-            for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil,
-                                                                     options: [.skipsHiddenFiles]) {
-                children[child.lastPathComponent] = try fingerprint(child)
-            }
-            return sha256(try JSONSerialization.data(withJSONObject: children, options: [.sortedKeys, .withoutEscapingSlashes]))
-        }
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hash = SHA256()
-        // FileHandle's Foundation buffers otherwise accumulate until this multi-GB scan returns.
-        while try autoreleasepool(invoking: { () throws -> Bool in
-            try Task.checkCancellation()
-            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
-            hash.update(data: data)
-            return true
-        }) {}
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        try PhoWhisperStagedEncoder.fingerprint(url)
     }
 
     private static func checkedArgmax(
@@ -1112,14 +1113,18 @@ private actor CoreAIPhoWhisper {
         let fixturesDirectory: String
         let files: [FileResult]
         let whisperKitProof: CoreAIPhoWhisper.WhisperKitProof?
+        let productGate: CoreAIPhoWhisper.ProductReport?
+        let memoryWarnings: Int
         let error: String?
     }
 
     static var requested: Bool {
-        ProcessInfo.processInfo.arguments.contains("--coreai-asr-probe")
+        ProcessInfo.processInfo.arguments.contains("--coreai-asr-probe") ||
+            CoreAIPhoWhisper.productGateRequested
     }
     static var autoRequested: Bool {
-        ProcessInfo.processInfo.arguments.contains("--coreai-asr-auto")
+        ProcessInfo.processInfo.arguments.contains("--coreai-asr-auto") ||
+            CoreAIPhoWhisper.productGateRequested
     }
 
     private(set) var running = false
@@ -1129,6 +1134,9 @@ private actor CoreAIPhoWhisper {
     private(set) var error: String?
     private(set) var reportPath = ""
     private(set) var whisperKitProof: CoreAIPhoWhisper.WhisperKitProof?
+    private(set) var productGate: CoreAIPhoWhisper.ProductReport?
+    private(set) var memoryWarnings = 0
+    @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
     static var whisperKitMode: String? {
         ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--coreai-whisperkit=") }
             .map { String($0.dropFirst("--coreai-whisperkit=".count)) }
@@ -1136,16 +1144,62 @@ private actor CoreAIPhoWhisper {
     @ObservationIgnored private var runDirectory: URL?
     @ObservationIgnored private let recognizer = CoreAIPhoWhisper()
 
+    init() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.memoryWarnings += 1
+                    Logger(subsystem: "no.william.mural", category: "CoreAIProductGate")
+                        .fault("ios_memory_warning count=\(self?.memoryWarnings ?? 0, privacy: .public)")
+                }
+            }
+    }
+
+    deinit {
+        if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
+    }
+
     func run() async {
         guard !running else { return }
         running = true; defer { running = false }
-        error = nil; results = []; preparation = nil; whisperKitProof = nil; status = "Preparing split Core AI PhoWhisper…"
+        error = nil; results = []; preparation = nil; whisperKitProof = nil; productGate = nil; memoryWarnings = 0; status = "Preparing split Core AI PhoWhisper…"
         runDirectory = URL.documentsDirectory.appending(path: "CoreAI/PhoWhisper/Runs/\(UUID().uuidString)")
         do {
             guard let runDirectory else { throw CoreAIPhoWhisper.ProbeError("Missing run directory.") }
             try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
             let directory = try Self.fixturesDirectory()
             try writeReport(directory: directory, error: nil)
+            if CoreAIPhoWhisper.productGateRequested {
+                let config = try CoreAIPhoWhisper.ProductConfig.resolve()
+                status = "Running Core AI hybrid product gate: \(config.mode)"
+                try writeReport(directory: directory, error: nil)
+                var companions: Task<Void, Error>?
+                defer { companions?.cancel() }
+                let coexistence = ProcessInfo.processInfo.arguments.contains("--coreai-product-coexistence")
+                let startCompanions: (@MainActor @Sendable () -> Void)?
+                if coexistence {
+                    startCompanions = { @MainActor in
+                        companions = Task { @MainActor in
+                            let audio = LocalConversationEngine()
+                            let tutor = LocalTutorModel()
+                            defer { audio.stop() }
+                            Logger().notice("coexistence_begin")
+                            async let speech: Void = audio.speak("Yesterday I went to the supermarket. I bought some apples and a loaf of bread. Today I am practising how to describe my shopping trip in English.")
+                            async let reply = tutor.reply(to: "Yesterday I went to the supermarket. Help me describe what I bought in one short sentence.")
+                            _ = try await (speech, reply)
+                            Logger().notice("coexistence_complete")
+                        }
+                    }
+                } else { startCompanions = nil }
+                productGate = try await recognizer.productGate(config, fixturesDirectory: directory,
+                    runDirectory: runDirectory, warningCount: { @MainActor [weak self] in self?.memoryWarnings ?? 0 },
+                    companionStart: startCompanions)
+                try await companions?.value
+                status = "Product gate complete: \(productGate?.status ?? "unknown")"
+                try writeReport(directory: directory, error: nil)
+                return
+            }
             if let mode = Self.whisperKitMode {
                 status = "Running WhisperKit \(mode) proof: fixture 001"
                 try writeReport(directory: directory, error: nil)
@@ -1204,7 +1258,8 @@ private actor CoreAIPhoWhisper {
                 (ProcessInfo.processInfo.arguments.contains("--coreai-encode-only") ? "encode-only" :
                 (ProcessInfo.processInfo.arguments.contains("--coreai-decode-only") ? "decode-only" : "sequential")),
             preparation: preparation,
-            fixturesDirectory: directory.path, files: results, whisperKitProof: whisperKitProof, error: error)
+            fixturesDirectory: directory.path, files: results, whisperKitProof: whisperKitProof,
+            productGate: productGate, memoryWarnings: memoryWarnings, error: error)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -1289,3 +1344,1070 @@ private struct CoreAIASRProbeView: View {
         }
     }
 }
+
+extension CoreAIPhoWhisper {
+    fileprivate enum ProductState: String, Codable, Sendable {
+        case idle, preparing, ready, transcribing, tearingDown, readyForRecreate
+    }
+
+    fileprivate static let productGateRequested = ProcessInfo.processInfo.arguments.contains(
+        "--coreai-hybrid-product-gate")
+    fileprivate static let productSupportManifestSHA256 =
+        "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
+    fileprivate static let productEncoderFingerprintByArchitecture = [
+        "h18p": "b13ccaf3fa91098a21bc81786843e138ad2e6cde4a9fdcccece6d531b0f9d034"
+    ]
+    fileprivate static let productFrozenAudioSHA256: [String: String] = [
+        "001.wav": "e9789f09cf31930239ff5842a1b502103844481d4669fb7e0de77b69966b597f",
+        "002.wav": "a4105a2051580587e2712c0b8aa49c8c82d8012b4128771b65683829cd3f9766",
+        "003.wav": "49183e01bc787544a7e6b1776d8590b27e83634b71dd6831864e8c480a73d482",
+        "004.wav": "760a6aaa4cd40db22d7ea317ed606e05a1a993fc4677fd34eed75a3ff261405a",
+        "005.wav": "ee6acf2a2f96151d709c78b680fc3a0007764dc4ef4817c49964975d10aced4c",
+        "006.wav": "b38f61202c920a2e21f503f1e303e5c1c3db31a817d89be4a2ae77cef854e3a5",
+        "007.wav": "93a8ddcb9373e56cd67a071f3ba0998b07b130718ab5229d6307f7bf9f904cc0",
+        "008.wav": "e7468cd7ade96870d94934102a95ea24e5c70b2acaf964950d08586e8b1101bf",
+        "009.wav": "fd2bf28ffd05745d9fa7b1675b0a15e9a0c816057b4c42f40a583532243b8505",
+        "010.wav": "1a98829d4262a53211e621079ef1ae069a9008a782970c4028d843695a0797a9",
+        "011.wav": "9b7ee366d6665c83955cc4c01afe9aaa41b6cecd26256b9ca5310d65016398c5",
+        "012.wav": "b199c59f745f1c79aa91814b6dde59d03a9c925a68de412ee159c5e52ae84b18",
+        "013.wav": "6100478ca5bc19192710fa08baa1929bb78eeae48094a4bdc741c4372131ec72",
+        "014.wav": "5fe4b1a6cbcde095b8cedb33dbc5ea3dc7a157795ab2a72645cb5320ea516fac",
+        "015.wav": "51fc170162f63f5fab38c35011bcf787aabb36d7e2dd556cad7be5843fba39b4",
+        "016.wav": "65ac106a3ffdd9d92cd8b368d8414b6732519bf0dd659a9f3cdd64c5be22d214",
+        "017.wav": "c599899c7a6b873135198363b1fad6096d457e23a352b41893fd100819e876fd",
+        "018.wav": "8ca9cb899430724dc90f1c9c61e5fe677470e6b1241c0c42073652da72d2a344",
+        "019.wav": "bc3a324e35577ac6ec16831edc02c2fe3c02ab13d17f684dfe6d7348beea6279",
+        "020.wav": "37c6d0dcfc414e3971fcf149698793af8488ed48c1970801252e517b05740415",
+        "021.wav": "92488954545250138b7591f8f26efdd996b6977f168cf6aaa0810c815214e732",
+        "022.wav": "b2966792f9b9feffb54bb5921b08c0fe1a86665b6b576927d50de80d9eb645bf"
+    ]
+
+    fileprivate struct ProductConfig: Sendable {
+        let mode: String
+        let corpus: Bool
+        let turns: Int
+        let lifecycle: String
+        let sequence: [String]
+        let cancelAt: String?
+
+        static func resolve() throws -> Self {
+            let args = ProcessInfo.processInfo.arguments
+            let productFlags = args.filter { $0.hasPrefix("--coreai-product-") }
+            let allowedExact = Set(["--coreai-product-corpus", "--coreai-product-coexistence"])
+            for flag in productFlags where !allowedExact.contains(flag) &&
+                !["--coreai-product-mode=", "--coreai-product-turns=", "--coreai-product-lifecycle=",
+                  "--coreai-product-sequence=", "--coreai-product-cancel-at="].contains(where: { flag.hasPrefix($0) }) {
+                throw ProbeError("Unknown product-gate flag: \(flag)")
+            }
+            let prohibited = args.contains { arg in
+                arg.hasPrefix("--coreai-decoder") || arg.hasPrefix("--coreai-stateful") ||
+                arg == "--coreai-encode-only" || arg == "--coreai-decode-only" ||
+                arg.hasPrefix("--coreai-hybrid-invalidate-encoder") ||
+                arg.hasPrefix("--coreai-hybrid-fresh-encoder") ||
+                arg.hasPrefix("--coreai-hybrid-release-after-first") ||
+                arg.hasPrefix("--coreai-hybrid-recreate-between-turns") ||
+                arg.hasPrefix("--coreai-support-dir=") || arg.hasPrefix("--coreai-encoder-path=") ||
+                arg == "--coreai-download" || arg == "--coreai-repair" ||
+                arg.hasPrefix("--coreai-fixture=")
+            }
+            guard !prohibited else {
+                throw ProbeError("Product-gate mode rejects decoder, diagnostic, cache, download, and legacy fixture flags.")
+            }
+
+            func values(_ prefix: String) -> [String] {
+                args.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+            }
+            func one(_ prefix: String) throws -> String? {
+                let result = values(prefix)
+                guard result.count <= 1 else { throw ProbeError("Duplicate product-gate flag: \(prefix)") }
+                return result.first
+            }
+            let mode = try one("--coreai-product-mode=") ?? "hybrid"
+            guard ["baseline", "hybrid", "encoder-only", "encoder-gpu-only", "decoder-only", "encoder-rebuild-only", "staged", "staged-gpu"].contains(mode) else {
+                throw ProbeError("Unknown product-gate mode.")
+            }
+            if args.contains("--coreai-product-coexistence"), !mode.hasPrefix("staged") {
+                throw ProbeError("Coexistence qualification requires staged mode.")
+            }
+            let corpusCount = args.filter { $0 == "--coreai-product-corpus" }.count
+            guard corpusCount <= 1 else { throw ProbeError("Duplicate --coreai-product-corpus.") }
+            let corpus = corpusCount == 1
+            let rawTurns = try one("--coreai-product-turns=") ?? "1"
+            guard let turns = Int(rawTurns), (1...20).contains(turns) else {
+                throw ProbeError("Product-gate turns must be an integer from 1 through 20.")
+            }
+            let lifecycle = try one("--coreai-product-lifecycle=") ?? "recreate"
+            guard lifecycle == "recreate" else {
+                throw ProbeError("Product-gate only permits the explicit recreate lifecycle.")
+            }
+            let rawSequence = try one("--coreai-product-sequence=")
+            let sequence = rawSequence.map { $0.split(separator: ",", omittingEmptySubsequences: false).map(String.init) } ?? []
+            guard sequence.allSatisfy({ !$0.isEmpty && !$0.contains("/") && !$0.contains("\\") }) else {
+                throw ProbeError("Product-gate sequence entries must be local filenames.")
+            }
+            guard !(corpus && !sequence.isEmpty) else {
+                throw ProbeError("Corpus and explicit product sequence cannot be combined.")
+            }
+            let cancelAt = try one("--coreai-product-cancel-at=")
+            if let cancelAt {
+                guard ["prepare", "encoder", "decoder"].contains(cancelAt) else {
+                    throw ProbeError("Unknown cancellation boundary.")
+                }
+                guard !corpus && turns == 1 && (sequence.isEmpty || sequence == ["001.wav"]) else {
+                    throw ProbeError("Cancellation runs must use one explicit local turn.")
+                }
+            }
+            guard !corpus || turns == 1 else {
+                throw ProbeError("Corpus runs visit all 22 fixtures once; do not combine with a turn count.")
+            }
+            if mode.hasPrefix("staged") {
+                guard sequence.isEmpty, turns <= 10 else {
+                    throw ProbeError("Staged qualification permits the frozen corpus or up to ten fixture-001 turns.")
+                }
+            }
+            if mode.hasSuffix("-only") {
+                guard !corpus, turns == 1, sequence.isEmpty, cancelAt == nil else {
+                    throw ProbeError("Loading-only decomposition rejects inference and cancellation options.")
+                }
+            }
+            guard CoreAIPhoWhisper.productEncoderFingerprintByArchitecture[AIModel.deviceArchitectureName] != nil || mode == "baseline" else {
+                throw ProbeError("No bound production encoder fingerprint for architecture \(AIModel.deviceArchitectureName).")
+            }
+            return Self(mode: mode, corpus: corpus, turns: turns, lifecycle: lifecycle,
+                        sequence: sequence, cancelAt: cancelAt)
+        }
+
+        func withoutCancellation() -> Self {
+            Self(mode: mode, corpus: false, turns: 1, lifecycle: "recreate",
+                 sequence: sequence.isEmpty ? ["001.wav"] : [sequence[0]], cancelAt: nil)
+        }
+    }
+
+    fileprivate struct ProductMemory: Codable, Sendable {
+        let footprintBytes: UInt64
+        let processRSSPeakBytes: UInt64
+    }
+    fileprivate struct ProductPreparation: Codable, Sendable {
+        let index: Int
+        let state: String
+        let totalSeconds: Double
+        let assetVerificationSeconds: Double
+        let coreAICacheHit: Bool?
+        let coreAICacheLookupSeconds: Double?
+        let coreAISpecializationSeconds: Double?
+        let coreAIFunctionLoadSeconds: Double?
+        let tokenizerSeconds: Double
+        let whisperKitPrewarmSeconds: Double
+        let whisperKitLoadSeconds: Double
+        let readySeconds: Double
+        let memoryBefore: ProductMemory
+        let memoryAfter: ProductMemory
+        let thermalBefore: Int
+        let thermalAfter: Int
+    }
+    fileprivate struct ProductTurnTiming: Codable, Sendable {
+        let totalSeconds: Double
+        let melSeconds: Double
+        let encoderSeconds: Double
+        let decoderSeconds: Double
+        let decodingInitSeconds: Double
+        let decodingLoopSeconds: Double
+        let decodingPredictionsSeconds: Double
+        let decodingNonPredictionSeconds: Double
+        let pipelineSeconds: Double
+    }
+    fileprivate struct ProductTurn: Codable, Sendable {
+        let turn: Int
+        let file: String
+        let sampleCount: Int
+        let audioSHA256: String
+        let rawTranscript: String?
+        let normalizedTranscript: String?
+        let detectedLanguages: [String]
+        let generatedTokens: [[Int]]
+        let segmentTokens: [[Int]]
+        let melSHA256: [String]
+        let encoderHiddenSHA256: [String]
+        let timings: ProductTurnTiming?
+        let memoryBeforeEncoder: ProductMemory?
+        let memoryAfterEncoder: ProductMemory?
+        let memoryAfterTranscript: ProductMemory?
+        let thermalBefore: Int
+        let thermalAfter: Int
+        let termination: String
+        let error: String?
+    }
+    fileprivate struct ProductCancellation: Codable, Sendable {
+        let requested: Bool
+        let point: String?
+        let requestedUptime: Double?
+        let underlyingExecutionReturned: Bool
+        var teardownCompleted: Bool
+        var recoverySucceeded: Bool
+        var recoveryTurnCount: Int
+    }
+    fileprivate struct ProductReport: Codable, Sendable {
+        let date: Date
+        let runID: String
+        let mode: String
+        let lifecycle: String
+        let requestedTurns: Int
+        let corpusRequested: Bool
+        let expectedCorpusCount: Int
+        let architecture: String
+        let supportManifestSHA256: String
+        let encoderArtifactSHA256: String?
+        let expectedEncoderArtifactSHA256: String?
+        let modelPrecision: String
+        let melBoundary: String
+        let tokenizer: String
+        let decodingOptions: [String: String]
+        var terminal = false
+        var status: String
+        var stateAtEnd: String
+        var preparations: [ProductPreparation]
+        var turns: [ProductTurn]
+        var cancellation: ProductCancellation?
+        var errors: [String]
+    }
+
+    fileprivate actor ProductCancellationController {
+        let target: String?
+        private var operation: Task<ProductReport, Never>?
+        private(set) var requestedPoint: String?
+        private(set) var requestedUptime: Double?
+        private var armed = false
+
+        init(target: String?) { self.target = target }
+
+        func install(_ operation: Task<ProductReport, Never>) {
+            self.operation = operation
+            if requestedPoint != nil { operation.cancel() }
+        }
+
+        func reached(_ point: String) {
+            guard target == point, !armed else { return }
+            armed = true
+            Task {
+                // Inject while the operation is active; event timestamps must confirm overlap.
+                try? await Task.sleep(for: .milliseconds(10))
+                request(point)
+            }
+        }
+
+        private func request(_ point: String) {
+            requestedPoint = point
+            requestedUptime = ProcessInfo.processInfo.systemUptime
+            operation?.cancel()
+            Logger(subsystem: "no.william.mural", category: "CoreAIProductGate")
+                .notice("swift_task_cancellation_requested point=\(point, privacy: .public) uptime=\(self.requestedUptime ?? 0, privacy: .public)")
+        }
+
+        func snapshot() -> (point: String?, uptime: Double?) {
+            (requestedPoint, requestedUptime)
+        }
+    }
+
+    private final class ProductReplayEncoder: AudioEncoding {
+        let embedSize: Int? = 1280
+        let hidden: [Float16]
+        let melHash: String
+        weak var owner: CoreAIPhoWhisper?
+        init(hidden: [Float16], melHash: String, owner: CoreAIPhoWhisper) {
+            self.hidden = hidden; self.melHash = melHash; self.owner = owner
+        }
+        func encodeFeatures(_ features: any FeatureExtractorOutputType) async throws -> (any AudioEncoderOutputType)? {
+            guard let array = features as? MLMultiArray, let owner else { throw ProbeError("Missing replay mel/owner") }
+            let values = try CoreAIPhoWhisper.readAcceptedMel(array)
+            guard CoreAIPhoWhisper.productFloatHash(values) == melHash else { throw ProbeError("Staged mel differs from accepted WhisperKit frontend") }
+            await owner.productReplayConsumed(melHash: melHash, hidden: hidden)
+            return try CoreAIPhoWhisper.decoderEmbeddings(hidden)
+        }
+    }
+
+    // Delegates every decoding operation to the existing accepted decoder.
+    private final class ProductDecoder: TextDecoding, WhisperMLModel {
+        let decoder = TextDecoder()
+        weak var owner: CoreAIPhoWhisper?
+        init(owner: CoreAIPhoWhisper) { self.owner = owner }
+        var model: MLModel? { get { decoder.model } set { decoder.model = newValue } }
+        var tokenizer: (any WhisperTokenizer)? { get { decoder.tokenizer } set { decoder.tokenizer = newValue } }
+        var isModelMultilingual: Bool { get { decoder.isModelMultilingual } set { decoder.isModelMultilingual = newValue } }
+        var logitsFilters: [any LogitsFiltering]? { get { decoder.logitsFilters } set { decoder.logitsFilters = newValue } }
+        var supportsWordTimestamps: Bool { decoder.supportsWordTimestamps }
+        var logitsSize: Int? { decoder.logitsSize }
+        var kvCacheEmbedDim: Int? { decoder.kvCacheEmbedDim }
+        var kvCacheMaxSequenceLength: Int? { decoder.kvCacheMaxSequenceLength }
+        var windowSize: Int? { decoder.windowSize }
+        var embedSize: Int? { decoder.embedSize }
+        func predictLogits(_ inputs: any TextDecoderInputType) async throws -> (any TextDecoderOutputType)? {
+            try await decoder.predictLogits(inputs)
+        }
+        func prepareDecoderInputs(withPrompt prompt: [Int]) throws -> any DecodingInputsType {
+            try decoder.prepareDecoderInputs(withPrompt: prompt)
+        }
+        func prefillDecoderInputs(_ inputs: any DecodingInputsType, withOptions options: DecodingOptions?) async throws -> any DecodingInputsType {
+            try await decoder.prefillDecoderInputs(inputs, withOptions: options)
+        }
+        func detectLanguage(from output: any AudioEncoderOutputType, using inputs: any DecodingInputsType,
+                            sampler: any TokenSampling, options: DecodingOptions, temperature: FloatType) async throws -> DecodingResult {
+            let start = ProcessInfo.processInfo.systemUptime
+            try await owner?.productDecoderBegin(phase: "language")
+            do {
+                let result = try await decoder.detectLanguage(from: output, using: inputs, sampler: sampler, options: options, temperature: temperature)
+                await owner?.productDecoderEnd(start: start, phase: "language")
+                return result
+            } catch {
+                await owner?.productDecoderEnd(start: start, phase: "language", error: error.localizedDescription)
+                throw error
+            }
+        }
+        func decodeText(from output: any AudioEncoderOutputType, using inputs: any DecodingInputsType,
+                        sampler: any TokenSampling, options: DecodingOptions, callback: TranscriptionCallback?) async throws -> DecodingResult {
+            let start = ProcessInfo.processInfo.systemUptime
+            try await owner?.productDecoderBegin(phase: "text")
+            do {
+                let result = try await decoder.decodeText(from: output, using: inputs, sampler: sampler, options: options, callback: callback)
+                await owner?.productDecoderEnd(start: start, phase: "text")
+                return result
+            } catch {
+                await owner?.productDecoderEnd(start: start, phase: "text", error: error.localizedDescription)
+                throw error
+            }
+        }
+    }
+
+    private func productRequireNoWarnings() async throws {
+        guard await productWarningCount?() == 0 else { throw ProbeError("Memory warning observed; stop qualification, no further turn/recovery permitted.") }
+    }
+
+    private func productDecoderBegin(phase: String) async throws {
+        try await productRequireNoWarnings()
+        try productEvent("decoder-run-begin", fields: ["phase": phase])
+        await productCancellationController?.reached("decoder")
+    }
+    private func productDecoderEnd(start: Double, phase: String, error: String? = nil) {
+        let seconds = ProcessInfo.processInfo.systemUptime - start
+        productDecoderElapsed += seconds
+        try? productEvent("decoder-run-end", fields: ["phase": phase, "seconds": seconds, "error": error ?? "none"])
+    }
+    private func productReplayConsumed(melHash: String, hidden: [Float16]) {
+        productMelHashes.append(melHash)
+        productHiddenHashes.append(Self.productFloat16Hash(hidden))
+        try? productEvent("owned-encoder-output-consumed")
+    }
+
+    private func productStageEncoder(_ samples: [Float], support: URL, encoderURL: URL,
+                                     gpuPreferred: Bool = false) async throws -> ProductReplayEncoder {
+        guard samples.count <= 480_000, !samples.isEmpty, samples.allSatisfy(\.isFinite), productKit == nil else {
+            throw ProbeError("Staged encoder requires a short finite fixture with no decoder resident")
+        }
+        // Cancellation belongs to the outer operation. Always await the underlying scope's return.
+        let worker = Task { try await self.productOwnedEncoderScope(samples, support: support, encoderURL: encoderURL, gpuPreferred: gpuPreferred) }
+        defer {
+            // Also sample the throwing path, after the worker has unwound its local resources.
+            try? productEvent("encoder-scope-returned", fields: ["runtimeRetirementVerified": false])
+        }
+        let replay = try await worker.value
+        // All Core AI references and model-backed arrays were local to the awaited scope.
+        try productEvent("encoder-function-released", fields: ["runtimeRetirementVerified": false])
+        try productEvent("encoder-post-release-footprint")
+        try Task.checkCancellation()
+        try await productRequireNoWarnings()
+        return ProductReplayEncoder(hidden: replay.hidden, melHash: replay.melHash, owner: self)
+    }
+
+    private func productOwnedEncoderScope(_ samples: [Float], support: URL, encoderURL: URL,
+                                         gpuPreferred: Bool) async throws -> PhoWhisperStagedEncoder.Encoded {
+        let mel = FeatureExtractor()
+        try await mel.loadModel(at: support.appending(path: "MelSpectrogram.mlmodelc"), computeUnits: .cpuAndGPU)
+        defer { mel.unloadModel() }
+        guard let padded = AudioProcessor.padOrTrimAudio(fromArray: samples, startAt: 0, toLength: 480_000, saveSegment: false),
+              let features = try await mel.logMelSpectrogram(fromAudio: padded) as? MLMultiArray else {
+            throw ProbeError("Staged frontend produced no mel")
+        }
+        let values = try Self.readAcceptedMel(features)
+        // Start companion preparation early enough to measure actual generation overlap.
+        if let start = productCompanionStart {
+            productCompanionStart = nil
+            await start()
+        }
+        try productEvent("encoder-load-begin", fields: ["gpuPreferred": gpuPreferred])
+        let options: SpecializationOptions = gpuPreferred ? SpecializationOptions(preferredComputeUnitKind: .gpu) : .default
+        let loaded = try await Self.loadAsset(encoderURL, options: options, requireCached: gpuPreferred)
+        try Self.validate(loaded.model, role: "encoder")
+        let descriptor = try Self.inputDescriptor(loaded.model, name: "input_features")
+        guard descriptor.scalarType == .float16, descriptor.shape == [1, 80, 3000] else { throw ProbeError("Staged encoder input contract changed") }
+        try productEvent("encoder-load-complete", fields: ["cacheHit": loaded.timing.cacheHit])
+        try await productRequireNoWarnings()
+        var input = NDArray(descriptor: descriptor)
+        try Self.fillFloat(&input, values: values)
+        try productEvent("encoder-run-begin")
+        await productCancellationController?.reached("encoder")
+        var outputs = try await loaded.function.run(inputs: ["input_features": input])
+        guard let hidden = outputs.remove("encoder_hidden_states")?.ndArray else { throw ProbeError("Staged encoder has no output") }
+        let owned = try Self.copyEncoderOutput(hidden)
+        productUnderlyingInferenceReturned = true
+        try productEvent("encoder-run-end")
+        try productEvent("encoder-function-release-begin")
+        return PhoWhisperStagedEncoder.Encoded(hidden: owned, melHash: Self.productFloatHash(values))
+    }
+
+    private final class ProductCoreMLEncoder: AudioEncoding, WhisperMLModel {
+        let encoder = AudioEncoder()
+        weak var owner: CoreAIPhoWhisper?
+        var model: MLModel? {
+            get { encoder.model }
+            set { encoder.model = newValue }
+        }
+        var embedSize: Int? { encoder.embedSize }
+        init(owner: CoreAIPhoWhisper) { self.owner = owner }
+
+        func encodeFeatures(_ features: any FeatureExtractorOutputType) async throws -> (any AudioEncoderOutputType)? {
+            guard let mel = features as? MLMultiArray, let owner else {
+                throw ProbeError("Expected accepted mel array and live product owner.")
+            }
+            let values = try CoreAIPhoWhisper.readAcceptedMel(mel)
+            try await owner.productEncoderBegin(values)
+            do {
+                guard let hiddenArray = try await encoder.encodeFeatures(mel) else {
+                    await owner.productEncoderFailure("Core ML encoder returned no output.")
+                    throw ProbeError("Core ML encoder returned no output.")
+                }
+                let hidden = try CoreAIPhoWhisper.readDecoderEmbeddings(hiddenArray)
+                await owner.productEncoderFinish(hidden)
+                return hiddenArray
+            } catch {
+                await owner.productEncoderFailure(error.localizedDescription)
+                throw error
+            }
+        }
+    }
+
+    private final class ProductHybridEncoder: AudioEncoding {
+        nonisolated let embedSize: Int? = 1280
+        weak var owner: CoreAIPhoWhisper?
+        init(owner: CoreAIPhoWhisper) { self.owner = owner }
+
+        nonisolated(nonsending) func encodeFeatures(_ features: any FeatureExtractorOutputType) async throws -> (any AudioEncoderOutputType)? {
+            guard let mel = features as? MLMultiArray, let owner else {
+                throw ProbeError("Expected accepted mel array and live product owner.")
+            }
+            let values = try CoreAIPhoWhisper.readAcceptedMel(mel)
+            let hidden = try await owner.productRunHybridEncoder(values)
+            return try CoreAIPhoWhisper.decoderEmbeddings(hidden)
+        }
+    }
+
+    fileprivate func productGate(_ config: ProductConfig, fixturesDirectory: URL,
+                                 runDirectory: URL, warningCount: @escaping @Sendable () async -> Int,
+                                 companionStart: (@MainActor @Sendable () -> Void)? = nil) async throws -> ProductReport {
+        productWarningCount = warningCount
+        productCompanionStart = companionStart
+        defer { productWarningCount = nil; productCompanionStart = nil }
+        let controller = ProductCancellationController(target: config.cancelAt)
+        let operation: Task<ProductReport, Never> = Task { [self] in
+            await self.productExecute(config, fixturesDirectory: fixturesDirectory,
+                                      runDirectory: runDirectory, controller: controller,
+                                      label: "primary")
+        }
+        await controller.install(operation)
+        var report = await operation.value
+        let cancellation = await controller.snapshot()
+        guard cancellation.point != nil else {
+            report.terminal = true
+            productWriteReport(report)
+            return report
+        }
+        guard report.status == "cancelled" else {
+            if report.status == "complete" { report.status = "cancellation-request-too-late" }
+            report.cancellation = ProductCancellation(requested: true, point: cancellation.point,
+                requestedUptime: cancellation.uptime, underlyingExecutionReturned: productUnderlyingInferenceReturned,
+                teardownCompleted: report.stateAtEnd == ProductState.idle.rawValue,
+                recoverySucceeded: false, recoveryTurnCount: 0)
+            report.terminal = true
+            productWriteReport(report)
+            return report
+        }
+
+        let recovery = await productExecute(config.withoutCancellation(), fixturesDirectory: fixturesDirectory,
+                                            runDirectory: runDirectory, controller: nil, label: "recovery")
+        report.preparations.append(contentsOf: recovery.preparations)
+        report.turns.append(contentsOf: recovery.turns)
+        report.errors.append(contentsOf: recovery.errors)
+        let recovered = recovery.status == "complete" && !recovery.turns.isEmpty &&
+            recovery.turns.allSatisfy { Self.productRecoveryMatches($0) }
+        report.status = recovered ? "cancelled-recovered" : "cancelled-recovery-failed"
+        report.cancellation = ProductCancellation(requested: true, point: cancellation.point,
+            requestedUptime: cancellation.uptime, underlyingExecutionReturned: report.cancellation?.underlyingExecutionReturned ?? false,
+            teardownCompleted: recovery.stateAtEnd == ProductState.idle.rawValue,
+            recoverySucceeded: recovered, recoveryTurnCount: recovery.turns.count)
+        report.terminal = true
+        report.stateAtEnd = recovery.stateAtEnd
+        productWriteReport(report)
+        return report
+    }
+
+    private func productExecute(_ config: ProductConfig, fixturesDirectory: URL,
+                                runDirectory: URL, controller: ProductCancellationController?,
+                                label: String) async -> ProductReport {
+        await Task.yield()
+        if productState != .idle { await productTeardown(next: .idle) }
+        productRunDirectory = runDirectory
+        productSessionID = "\(label)-\(UUID().uuidString)"
+        productGeneration += 1
+        productTurnNumber = 0
+        productMelHashes = []; productHiddenHashes = []
+        productBeforeEncoderMemory = nil; productAfterEncoderMemory = nil
+        productAfterTranscriptMemory = nil; productEncoderStarted = nil
+        productEncoderElapsed = 0; productDecoderElapsed = 0
+        productUnderlyingInferenceReturned = false
+        productCancellationController = controller
+        let support = URL.applicationSupportDirectory.appending(
+            path: "PhoWhisperCS/phowhisper-cs-fp16-v1", directoryHint: .isDirectory)
+        let architecture = AIModel.deviceArchitectureName
+        let gpuEncoder = config.mode == "encoder-gpu-only" || config.mode == "staged-gpu"
+        let expectedEncoderHash = gpuEncoder
+            ? (architecture == "h18p" ? "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829" : nil)
+            : Self.productEncoderFingerprintByArchitecture[architecture]
+        var report = ProductReport(
+            date: Date(), runID: runDirectory.lastPathComponent, mode: config.mode,
+            lifecycle: config.lifecycle, requestedTurns: config.turns, corpusRequested: config.corpus,
+            expectedCorpusCount: 22, architecture: architecture,
+            supportManifestSHA256: "unverified", encoderArtifactSHA256: nil,
+            expectedEncoderArtifactSHA256: expectedEncoderHash, modelPrecision: "FP16",
+            melBoundary: "WhisperKit accepted mel tensor is read without frontend replacement; Core AI boundary is FP16 [1,80,3000]",
+            tokenizer: "PhoWhisperTokenizer", decodingOptions: [
+                "task": "transcribe", "detectLanguage": "true", "skipSpecialTokens": "true",
+                "windowClipTime": "0", "concurrentWorkerCount": "1", "temperatureFallbackCount": "0",
+                "withoutTimestamps": "true", "suppressBlank": "true", "compressionRatioThreshold": "nil",
+                "logProbThreshold": "nil", "firstTokenLogProbThreshold": "nil", "noSpeechThreshold": "nil"
+            ], status: "running", stateAtEnd: ProductState.idle.rawValue,
+            preparations: [], turns: [], cancellation: nil, errors: [])
+        do {
+            let verificationStart = ProcessInfo.processInfo.systemUptime
+            let manifestHash = try productVerifySupport(support)
+            var encoderURL: URL?
+            var encoderHash: String?
+            if config.mode == "hybrid" || config.mode.hasPrefix("staged") || config.mode.hasPrefix("encoder-") {
+                guard let expectedEncoderHash else {
+                    throw ProbeError("No bound production encoder fingerprint for architecture \(architecture).")
+                }
+                let folder = gpuEncoder ? "PhoWhisperGPU" : "PhoWhisperSplit"
+                let url = URL.applicationSupportDirectory.appending(path:
+                    "CoreAI/\(folder)/phowhisper-cs-fp16-v1.encoder.\(architecture).aimodelc")
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    throw ProbeError("Missing bound Core AI encoder artifact: \(url.path)")
+                }
+                let hash = try Self.fingerprint(url)
+                guard hash == expectedEncoderHash else {
+                    throw ProbeError("Core AI encoder fingerprint is not the bound production artifact: \(hash)")
+                }
+                encoderURL = url; encoderHash = hash
+            }
+            report = ProductReport(date: report.date, runID: report.runID, mode: report.mode,
+                lifecycle: report.lifecycle, requestedTurns: report.requestedTurns,
+                corpusRequested: report.corpusRequested, expectedCorpusCount: report.expectedCorpusCount,
+                architecture: report.architecture, supportManifestSHA256: manifestHash,
+                encoderArtifactSHA256: encoderHash, expectedEncoderArtifactSHA256: expectedEncoderHash,
+                modelPrecision: report.modelPrecision, melBoundary: report.melBoundary,
+                tokenizer: report.tokenizer, decodingOptions: report.decodingOptions,
+                status: report.status, stateAtEnd: report.stateAtEnd, preparations: report.preparations,
+                turns: report.turns, cancellation: report.cancellation, errors: report.errors)
+            let assetVerificationSeconds = ProcessInfo.processInfo.systemUptime - verificationStart
+            let suppression = try productSuppressionTokens(support)
+            if config.mode.hasSuffix("-only") {
+                try await productLoadOnly(config, support: support, encoderURL: encoderURL,
+                                          suppression: suppression)
+                report.status = "complete"
+                report.stateAtEnd = productState.rawValue
+                return report
+            }
+            let jobs = try productJobs(config, directory: fixturesDirectory)
+            guard !jobs.isEmpty else { throw ProbeError("No product-gate fixtures.") }
+            try? productEvent("asset-verification-complete", fields: [
+                "seconds": assetVerificationSeconds, "supportManifestSHA256": manifestHash,
+                "encoderArtifactSHA256": encoderHash ?? "not-applicable", "mode": config.mode])
+            for (index, file) in jobs.enumerated() {
+                productTurnNumber = index + 1
+                if index > 0 { try? productEvent("recreate-begin", fields: ["turn": index + 1]) }
+                try await productRequireNoWarnings()
+                let samples = try await Task.detached {
+                    try AudioProcessor.loadAudioAsFloatArray(fromPath: file.path)
+                }.value
+                let replay: ProductReplayEncoder?
+                if config.mode.hasPrefix("staged") {
+                    guard let encoderURL, try Self.fingerprint(file) == Self.productFrozenAudioSHA256[file.lastPathComponent] else {
+                        throw ProbeError("Staged qualification requires the frozen fixture and encoder.")
+                    }
+                    replay = try await productStageEncoder(samples, support: support, encoderURL: encoderURL, gpuPreferred: gpuEncoder)
+                } else { replay = nil }
+                let preparation = try await productPrepare(config, support: support,
+                    encoderURL: encoderURL, replay: replay, suppression: suppression,
+                    assetVerificationSeconds: index == 0 ? assetVerificationSeconds : 0,
+                    controller: controller, index: index + 1)
+                report.preparations.append(preparation)
+                try? productEvent("recreate-end", fields: ["turn": index + 1,
+                    "readySeconds": preparation.readySeconds])
+                productWriteReport(report)
+                try await productRequireNoWarnings()
+                let audioHash = try Self.fingerprint(file)
+                let turn = try await productTranscribe(samples, file: file,
+                    audioSHA256: audioHash, controller: controller)
+                report.turns.append(turn)
+                if config.mode.hasPrefix("staged"), file.lastPathComponent == "001.wav", !Self.productRecoveryMatches(turn) {
+                    throw ProbeError("Staged fixture-001 parity failed.")
+                }
+                productWriteReport(report)
+                try await productRequireNoWarnings()
+                if index + 1 < jobs.count { await productTeardown(next: .readyForRecreate) }
+            }
+            await productTeardown(next: .idle)
+            try await productRequireNoWarnings()
+            report.status = "complete"
+        } catch {
+            let cancellation = await controller?.snapshot()
+            let point = cancellation?.point
+            report.errors.append(error.localizedDescription)
+            report.status = error is CancellationError && point != nil ? "cancelled" : "failed"
+            if let point {
+                report.cancellation = ProductCancellation(requested: true, point: point,
+                    requestedUptime: cancellation?.uptime,
+                    underlyingExecutionReturned: productUnderlyingInferenceReturned,
+                    teardownCompleted: false, recoverySucceeded: false, recoveryTurnCount: 0)
+            }
+            await productTeardown(next: .idle)
+            if var value = report.cancellation { value.teardownCompleted = productState == .idle; report.cancellation = value }
+        }
+        report.stateAtEnd = productState.rawValue
+        productCancellationController = nil
+        productWriteReport(report)
+        return report
+    }
+
+    private static func productRecoveryMatches(_ turn: ProductTurn) -> Bool {
+        turn.error == nil && turn.file == "001.wav" &&
+        turn.audioSHA256 == productFrozenAudioSHA256["001.wav"] &&
+        turn.rawTranscript == "Yesterday I went to the supermarket." &&
+        turn.normalizedTranscript == "yesterday i went to the supermarket" &&
+        turn.detectedLanguages == ["vi"] &&
+        turn.generatedTokens == [[50258,50278,50359,50363,56,4690,286,1437,220,1353,220,3322,25180,13,50257]]
+    }
+
+    private func productLoadOnly(_ config: ProductConfig, support: URL, encoderURL: URL?,
+                                 suppression: [Int]) async throws {
+        try productEvent("loading-only-begin", fields: ["mode": config.mode, "inferencePermitted": false])
+        try await productLoadComponent(config, support: support, encoderURL: encoderURL, suppression: suppression)
+        try productEvent("component-loaded", fields: ["mode": config.mode])
+        await productTeardown(next: .idle)
+        // Observation only: no sleep is used to grant permission to load another model.
+        let start = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(100))
+            try productEvent("post-release-observation", fields: [
+                "elapsedSeconds": ProcessInfo.processInfo.systemUptime - start,
+                "runtimeRetirementVerified": false])
+        }
+        try productEvent("loading-only-end", fields: ["mode": config.mode])
+    }
+
+    private func productLoadComponent(_ config: ProductConfig, support: URL, encoderURL: URL?,
+                                      suppression: [Int]) async throws {
+        if config.mode.hasPrefix("encoder-") {
+            guard let encoderURL else { throw ProbeError("Missing verified encoder") }
+            productState = .preparing
+            if config.mode == "encoder-rebuild-only" {
+                // Explicit one-off repair mode, never an automatic retry on load failure.
+                try productEvent("approved-encoder-cache-delete-begin")
+                try AIModelCache.default.deleteEntry(for: encoderURL, options: .default)
+                try productEvent("approved-encoder-cache-delete-end")
+            }
+            let options: SpecializationOptions = config.mode == "encoder-gpu-only"
+                ? SpecializationOptions(preferredComputeUnitKind: .gpu) : .default
+            try productEvent("encoder-load-options", fields: ["gpuPreferred": config.mode == "encoder-gpu-only"])
+            let loaded = try await Self.loadAsset(encoderURL, options: options, requireCached: config.mode == "encoder-only")
+            try Self.validate(loaded.model, role: "encoder")
+            productModel = loaded.model
+            productFunction = loaded.function
+            try productEvent("encoder-load-complete", fields: ["cacheHit": loaded.timing.cacheHit,
+                "functionLoadSeconds": loaded.timing.functionLoadSeconds])
+        } else {
+            _ = try await productPrepare(config, support: support, encoderURL: nil,
+                suppression: suppression, assetVerificationSeconds: 0, controller: nil, index: 1)
+        }
+    }
+
+    private func productPrepare(_ config: ProductConfig, support: URL, encoderURL: URL?,
+                                replay: ProductReplayEncoder? = nil, suppression: [Int], assetVerificationSeconds: Double,
+                                controller: ProductCancellationController?, index: Int) async throws -> ProductPreparation {
+        guard productState == .idle || productState == .readyForRecreate,
+              productKit == nil, productFunction == nil else {
+            throw ProbeError("Product owner is not idle before prepare: \(productState.rawValue)")
+        }
+        productState = .preparing
+        productGeneration += 1
+        productSuppressionTokens = suppression
+        let start = ProcessInfo.processInfo.systemUptime
+        let before = productMemorySnapshot(stage: "before-prepare")
+        let thermalBefore = ProcessInfo.processInfo.thermalState.rawValue
+        try? productEvent("prepare-begin", fields: ["mode": config.mode, "turn": index,
+            "lifecycle": config.lifecycle])
+        var assetTiming: AssetTiming?
+        if config.mode == "hybrid" || config.mode.hasPrefix("encoder-") {
+            guard let encoderURL else { throw ProbeError("Missing product encoder URL.") }
+            try? productEvent("encoder-load-begin", fields: ["path": encoderURL.path])
+            let loaded = try await Self.loadAsset(encoderURL)
+            try Self.validate(loaded.model, role: "encoder")
+            let input = try Self.inputDescriptor(loaded.model, name: "input_features")
+            guard input.scalarType == .float16, input.shape == [1, 80, 3000] else {
+                throw ProbeError("Product encoder input must remain FP16 [1,80,3000].")
+            }
+            guard let descriptor = loaded.model.functionDescriptor(for: "main"),
+                  case .ndArray(let output) = descriptor.outputDescriptor(of: "encoder_hidden_states"),
+                  output.scalarType == .float16, output.shape == [1, 1500, 1280] else {
+                throw ProbeError("Product encoder output must remain FP16 [1,1500,1280].")
+            }
+            productModel = loaded.model; productFunction = loaded.function; productInput = input
+            assetTiming = loaded.timing
+            try? productEvent("encoder-load-complete", fields: [
+                "cacheHit": loaded.timing.cacheHit, "cacheLookupSeconds": loaded.timing.cacheLookupSeconds,
+                "specializationSeconds": loaded.timing.specializationSeconds,
+                "functionLoadSeconds": loaded.timing.functionLoadSeconds])
+        }
+        let activeEncoder: any AudioEncoding
+        if let replay { activeEncoder = replay }
+        else if config.mode != "baseline" { activeEncoder = ProductHybridEncoder(owner: self) }
+        else { activeEncoder = ProductCoreMLEncoder(owner: self) }
+        productEncoder = activeEncoder
+        let kit = try await WhisperKit(WhisperKitConfig(modelFolder: support.path,
+            tokenizerFolder: support,
+            computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
+                                                textDecoderCompute: .cpuAndNeuralEngine),
+            audioEncoder: activeEncoder, textDecoder: ProductDecoder(owner: self), verbose: false, prewarm: false, load: false, download: false))
+        productKit = kit
+        let tokenizerStart = ProcessInfo.processInfo.systemUptime
+        kit.tokenizer = try await PhoWhisperTokenizer.load(from: support)
+        kit.textDecoder.isModelMultilingual = true
+        let tokenizerSeconds = ProcessInfo.processInfo.systemUptime - tokenizerStart
+        try? productEvent("whisperkit-load-complete", fields: ["phase": "configuration-and-tokenizer",
+            "tokenizerSeconds": tokenizerSeconds])
+        await controller?.reached("prepare")
+        try Task.checkCancellation()
+        try? productEvent("decoder-load/prewarm-begin")
+        let prewarmStart = ProcessInfo.processInfo.systemUptime
+        let prewarmTask = Task { try await kit.prewarmModels() }
+        try await prewarmTask.value
+        let prewarmSeconds = ProcessInfo.processInfo.systemUptime - prewarmStart
+        try? productEvent("whisperkit-prewarm-complete", fields: ["seconds": prewarmSeconds,
+            "decoderSpecializationSeconds": kit.currentTimings.decoderSpecializationTime,
+            "encoderSpecializationSeconds": kit.currentTimings.encoderSpecializationTime])
+        try Task.checkCancellation()
+        let loadStart = ProcessInfo.processInfo.systemUptime
+        let loadTask = Task { try await kit.loadModels() }
+        try await loadTask.value
+        let loadSeconds = ProcessInfo.processInfo.systemUptime - loadStart
+        guard kit.featureExtractor.melCount == 80, kit.featureExtractor.windowSamples == 480_000,
+              kit.audioEncoder.embedSize == 1280, kit.textDecoder.logitsSize == 51865 else {
+            throw ProbeError("WhisperKit PhoWhisper mel/decoder contract changed.")
+        }
+        let after = productMemorySnapshot(stage: "after-prepare")
+        let thermalAfter = ProcessInfo.processInfo.thermalState.rawValue
+        productState = .ready
+        let preparation = ProductPreparation(index: index, state: productState.rawValue,
+            totalSeconds: ProcessInfo.processInfo.systemUptime - start,
+            assetVerificationSeconds: assetVerificationSeconds,
+            coreAICacheHit: assetTiming?.cacheHit,
+            coreAICacheLookupSeconds: assetTiming?.cacheLookupSeconds,
+            coreAISpecializationSeconds: assetTiming?.specializationSeconds,
+            coreAIFunctionLoadSeconds: assetTiming?.functionLoadSeconds,
+            tokenizerSeconds: tokenizerSeconds, whisperKitPrewarmSeconds: prewarmSeconds,
+            whisperKitLoadSeconds: loadSeconds,
+            readySeconds: ProcessInfo.processInfo.systemUptime - start,
+            memoryBefore: before, memoryAfter: after,
+            thermalBefore: thermalBefore, thermalAfter: thermalAfter)
+        try? productEvent("whisperkit-load-complete", fields: ["phase": "models", "loadSeconds": loadSeconds,
+            "readySeconds": preparation.readySeconds])
+        return preparation
+    }
+
+    private func productTranscribe(_ samples: [Float], file: URL, audioSHA256: String,
+                                   controller: ProductCancellationController?) async throws -> ProductTurn {
+        guard productState == .ready, let kit = productKit else {
+            throw ProbeError("Product owner is not ready to transcribe.")
+        }
+        guard samples.count <= 480_000, samples.allSatisfy(\.isFinite), !samples.isEmpty else {
+            throw ProbeError("Product audio must be finite 16 kHz mono and at most 30 seconds.")
+        }
+        productState = .transcribing
+        productMelHashes = []; productHiddenHashes = []
+        productBeforeEncoderMemory = nil; productAfterEncoderMemory = nil
+        productAfterTranscriptMemory = nil; productEncoderStarted = nil
+        productEncoderElapsed = 0; productDecoderElapsed = 0
+        productUnderlyingInferenceReturned = false
+        let thermalBefore = ProcessInfo.processInfo.thermalState.rawValue
+        let started = ProcessInfo.processInfo.systemUptime
+        try? productEvent("transcribe-begin", fields: ["file": file.lastPathComponent,
+            "sampleCount": samples.count])
+        let options = productDecodingOptions()
+        productActiveInferenceCount += 1
+        defer { productFinishInference() }
+        let transcriptionTask = Task {
+            try await kit.transcribe(audioArray: samples, decodeOptions: options)
+        }
+        do {
+            try? productEvent("transcription-await-begin")
+            let results = try await transcriptionTask.value
+            productUnderlyingInferenceReturned = true
+            try Task.checkCancellation()
+            let decoderSeconds = productDecoderElapsed
+            let raw = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let languages = results.map(\.language)
+            let tokens = results.flatMap { $0.segments.map(\.tokens) }
+            let timing = ProductTurnTiming(totalSeconds: ProcessInfo.processInfo.systemUptime - started,
+                melSeconds: results.reduce(0) { $0 + $1.timings.logmels },
+                encoderSeconds: productEncoderElapsed, decoderSeconds: decoderSeconds,
+                decodingInitSeconds: results.reduce(0) { $0 + $1.timings.decodingInit },
+                decodingLoopSeconds: results.reduce(0) { $0 + $1.timings.decodingLoop },
+                decodingPredictionsSeconds: results.reduce(0) { $0 + $1.timings.decodingPredictions },
+                decodingNonPredictionSeconds: results.reduce(0) { $0 + $1.timings.decodingNonPrediction },
+                pipelineSeconds: results.reduce(0) { $0 + $1.timings.fullPipeline })
+            productAfterTranscriptMemory = productMemorySnapshot(stage: "after-transcript")
+            try? productEvent("transcription-await-end", fields: ["seconds": decoderSeconds,
+                "windows": results.count, "underlyingExecutionReturned": true])
+            productState = .ready
+            let termination = tokens.last?.last == 50257 ? "endToken" : "returned"
+            let turn = ProductTurn(turn: productTurnNumber, file: file.lastPathComponent,
+                sampleCount: samples.count, audioSHA256: audioSHA256, rawTranscript: raw,
+                normalizedTranscript: Self.productNormalize(raw), detectedLanguages: languages,
+                generatedTokens: tokens, segmentTokens: tokens, melSHA256: productMelHashes,
+                encoderHiddenSHA256: productHiddenHashes, timings: timing,
+                memoryBeforeEncoder: productBeforeEncoderMemory, memoryAfterEncoder: productAfterEncoderMemory,
+                memoryAfterTranscript: productAfterTranscriptMemory, thermalBefore: thermalBefore,
+                thermalAfter: ProcessInfo.processInfo.thermalState.rawValue, termination: termination, error: nil)
+            try? productEvent("transcribe-end", fields: ["seconds": timing.totalSeconds,
+                "underlyingExecutionReturned": true])
+            return turn
+        } catch {
+            productUnderlyingInferenceReturned = true
+            try? productEvent("transcription-await-end", fields: ["error": error.localizedDescription,
+                "underlyingExecutionReturned": true])
+            productState = .ready
+            throw error
+        }
+    }
+
+    private func productRunHybridEncoder(_ values: [Float]) async throws -> [Float16] {
+        try await productEncoderBegin(values)
+        do {
+            guard let function = productFunction, let input = productInput else {
+                await productEncoderFailure("Core AI encoder was released before run.")
+                throw ProbeError("Core AI encoder is unavailable.")
+            }
+            var array = NDArray(descriptor: input)
+            try Self.fillFloat(&array, values: values)
+            let hidden: [Float16]
+            do {
+                var outputs = try await function.run(inputs: ["input_features": array])
+                guard let output = outputs.remove("encoder_hidden_states")?.ndArray else {
+                    throw ProbeError("Missing Core AI encoder output.")
+                }
+                hidden = try Self.copyEncoderOutput(output)
+            }
+            productUnderlyingInferenceReturned = true
+            await productEncoderFinish(hidden)
+            return hidden
+        } catch {
+            productUnderlyingInferenceReturned = true
+            await productEncoderFailure(error.localizedDescription)
+            throw error
+        }
+    }
+
+    private func productEncoderBegin(_ values: [Float]) async throws {
+        guard productState == .transcribing, !productEncoderBusy else {
+            throw ProbeError("Overlapping product encoder execution.")
+        }
+        productEncoderBusy = true
+        productActiveInferenceCount += 1
+        if productMelHashes.isEmpty { productBeforeEncoderMemory = productMemorySnapshot(stage: "before-encoder") }
+        productMelHashes.append(Self.productFloatHash(values))
+        productEncoderStarted = ProcessInfo.processInfo.systemUptime
+        try? productEvent("encoder-run-begin", fields: ["underlyingExecutionReturned": false])
+        await productCancellationController?.reached("encoder")
+    }
+
+    private func productEncoderFinish(_ hidden: [Float16]) async {
+        guard productEncoderBusy else { return }
+        productHiddenHashes.append(Self.productFloat16Hash(hidden))
+        productAfterEncoderMemory = productMemorySnapshot(stage: "after-encoder")
+        if let started = productEncoderStarted { productEncoderElapsed += ProcessInfo.processInfo.systemUptime - started }
+        productUnderlyingInferenceReturned = true
+        try? productEvent("encoder-run-end", fields: ["underlyingExecutionReturned": true])
+        productEncoderBusy = false
+        productFinishInference()
+    }
+
+    private func productEncoderFailure(_ message: String) async {
+        guard productEncoderBusy else { return }
+        productUnderlyingInferenceReturned = true
+        try? productEvent("encoder-run-end", fields: ["error": message,
+            "underlyingExecutionReturned": true])
+        productEncoderBusy = false
+        productFinishInference()
+    }
+
+    private func productFinishInference() {
+        precondition(productActiveInferenceCount > 0, "Unbalanced product inference completion")
+        productActiveInferenceCount -= 1
+        guard productActiveInferenceCount == 0, !productEncoderBusy else { return }
+        let waiters = productQuiescenceWaiters
+        productQuiescenceWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func productWaitForQuiescence() async {
+        guard productActiveInferenceCount > 0 || productEncoderBusy else { return }
+        await withCheckedContinuation { continuation in
+            productQuiescenceWaiters.append(continuation)
+        }
+    }
+
+    private func productTeardown(next: ProductState) async {
+        guard productKit != nil || productFunction != nil || productEncoder != nil || productState != .idle else {
+            productState = next
+            return
+        }
+        productState = .tearingDown
+        try? productEvent("teardown-begin", fields: ["activeInferenceCount": productActiveInferenceCount])
+        await productWaitForQuiescence()
+        if let kit = productKit {
+            await kit.unloadModels()
+            kit.tokenizer = nil
+        }
+        try? productEvent("whisperkit-unloaded")
+        productKit = nil
+        productEncoder = nil
+        productFunction = nil
+        productModel = nil
+        productInput = nil
+        productEncoderBusy = false
+        try? productEvent("references-released", fields: ["runtimeRetirementVerified": false])
+        productState = next
+        try? productEvent("teardown-end", fields: ["state": next.rawValue,
+            "activeInferenceCount": productActiveInferenceCount])
+    }
+
+    private func productMemorySnapshot(stage: String) -> ProductMemory {
+        let memory = VietnameseEnglishRecognizer.logMemory(stage: stage, model: "coreai-product-gate")
+        return ProductMemory(footprintBytes: memory["footprintBytes"] ?? 0,
+            processRSSPeakBytes: memory["processRSSPeakBytes"] ?? 0)
+    }
+
+    private func productEvent(_ stage: String, fields: [String: Any] = [:]) throws {
+        guard let directory = productRunDirectory else { throw ProbeError("Missing product run directory.") }
+        var entry = fields
+        entry["stage"] = stage; entry["runID"] = directory.lastPathComponent
+        entry["sessionID"] = productSessionID; entry["generation"] = productGeneration
+        entry["turn"] = productTurnNumber; entry["state"] = productState.rawValue
+        entry["uptime"] = ProcessInfo.processInfo.systemUptime
+        entry["memory"] = VietnameseEnglishRecognizer.logMemory(stage: stage, model: "coreai-product-gate")
+        entry["thermalState"] = ProcessInfo.processInfo.thermalState.rawValue
+        let data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) + Data([10])
+        let url = directory.appending(path: "events.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) { try Data().write(to: url) }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd(); try handle.write(contentsOf: data); try handle.synchronize()
+    }
+
+    private func productVerifySupport(_ support: URL) throws -> String {
+        let manifestURL = support.appending(path: "manifest.json")
+        let manifest = try Data(contentsOf: manifestURL)
+        let hash = Self.sha256(manifest)
+        guard hash == Self.productSupportManifestSHA256 else { throw ProbeError("Accepted support manifest changed.") }
+        struct Manifest: Decodable {
+            struct File: Decodable { let bytes: Int; let sha256: String }
+            let files: [String: File]
+        }
+        for (path, expected) in try JSONDecoder().decode(Manifest.self, from: manifest).files {
+            let url = support.appending(path: path)
+            guard try url.resourceValues(forKeys: [.fileSizeKey]).fileSize == expected.bytes,
+                  try Self.fingerprint(url) == expected.sha256 else {
+                throw ProbeError("Support mismatch: \(path)")
+            }
+        }
+        return hash
+    }
+
+    private func productSuppressionTokens(_ support: URL) throws -> [Int] {
+        struct Generation: Decodable { let suppress_tokens: [Int] }
+        return try JSONDecoder().decode(Generation.self,
+            from: Data(contentsOf: support.appending(path: "generation_config.json"))).suppress_tokens
+    }
+
+    private func productJobs(_ config: ProductConfig, directory: URL) throws -> [URL] {
+        let extensions = Set(["wav", "m4a", "caf", "mp3"])
+        if config.corpus {
+            let expectedNames = (1...22).map { String(format: "%03d.wav", $0) }
+            let files = try FileManager.default.contentsOfDirectory(at: directory,
+                includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+                .filter { extensions.contains($0.pathExtension.lowercased()) }
+                .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            guard files.map(\.lastPathComponent) == expectedNames else {
+                throw ProbeError("Frozen product corpus must contain exactly 001.wav through 022.wav.")
+            }
+            for file in files {
+                guard let expected = Self.productFrozenAudioSHA256[file.lastPathComponent],
+                      try Self.fingerprint(file) == expected else {
+                    throw ProbeError("Frozen corpus audio changed: \(file.lastPathComponent)")
+                }
+            }
+            return files
+        }
+        let names = config.sequence.isEmpty ? ["001.wav"] : config.sequence
+        let files = try names.map { name -> URL in
+            let file = directory.appending(path: name)
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                throw ProbeError("Missing product fixture: \(file.path)")
+            }
+            return file
+        }
+        return (0..<config.turns).map { files[$0 % files.count] }
+    }
+
+    private func productDecodingOptions() -> DecodingOptions {
+        var options = DecodingOptions(task: .transcribe, detectLanguage: true,
+            skipSpecialTokens: true, windowClipTime: 0, concurrentWorkerCount: 1)
+        options.temperatureFallbackCount = 0; options.withoutTimestamps = true
+        options.suppressBlank = true; options.suppressTokens = productSuppressionTokens
+        options.compressionRatioThreshold = nil; options.logProbThreshold = nil
+        options.firstTokenLogProbThreshold = nil; options.noSpeechThreshold = nil
+        return options
+    }
+
+    private func productWriteReport(_ report: ProductReport) {
+        guard let directory = productRunDirectory else { return }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try? encoder.encode(report).write(to: directory.appending(path: "product-report.json"), options: .atomic)
+        let transcripts = report.turns.map { $0 }
+        try? encoder.encode(transcripts).write(to: directory.appending(path: "transcripts.json"), options: .atomic)
+    }
+
+    private static func productFloatHash(_ values: [Float]) -> String {
+        values.withUnsafeBufferPointer { sha256(Data(buffer: $0)) }
+    }
+    private static func productFloat16Hash(_ values: [Float16]) -> String {
+        values.withUnsafeBufferPointer { sha256(Data(buffer: $0)) }
+    }
+    private static func productNormalize(_ text: String) -> String {
+        // Match the frozen corpus benchmark: NFC, lowercase, punctuation and whitespace only.
+        let value = text.precomposedStringWithCanonicalMapping.lowercased()
+        let output = value.unicodeScalars.map {
+            CharacterSet.punctuationCharacters.contains($0) ? " " : String($0)
+        }.joined()
+        return output.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+}
+
+#endif

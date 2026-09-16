@@ -5,6 +5,11 @@ import Observation
 import OSLog
 import FluidAudio
 import WhisperKit
+#if canImport(CoreAI)
+import CoreAI
+import CoreML
+import ArgmaxCore
+#endif
 
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
@@ -48,7 +53,9 @@ import WhisperKit
     private var audioRelease: Task<Void, Never>?
     var asrBusy: Bool { asrTask != nil }
     var canRecord: Bool { (asr != nil || whisper != nil || parakeet != nil) && asrTask == nil && completion == nil }
-    var canPrepare: Bool { asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil }
+    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil }
+    private var stagedMemoryWarning = false
+    @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
     private let synthesizer = AVSpeechSynthesizer()
     private var utterance: AVSpeechUtterance?
     private var completion: CheckedContinuation<Void, Error>?
@@ -60,6 +67,26 @@ import WhisperKit
         super.init()
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
+        #if canImport(CoreAI)
+        if PhoWhisperStagedEncoder.enabled {
+            memoryWarningObserver = NotificationCenter.default.addObserver(
+                forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
+                object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.stagedMemoryWarning = true
+                        self.stop()
+                        self.asrState = .failed
+                        self.asrError = "Speech stopped after a memory warning. End this session and use the default build; no automatic fallback was attempted."
+                        self.logger.fault("asr_staged_memory_warning stopped=true")
+                    }
+                }
+        }
+        #endif
+    }
+
+    deinit {
+        if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
     }
 
     func speak(_ text: String) async throws {
@@ -164,6 +191,9 @@ import WhisperKit
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
     func prepareConversation() async throws {
         try Task.checkCancellation()
+        guard !stagedMemoryWarning else {
+            throw CaptureError.operation(asrError ?? "Speech is disabled after a memory warning. Use the default build.")
+        }
         guard canPrepare else { throw SpeechError.busy }
         selectASR(.phoWhisper)
         submittedAt = nil; sendToPlaybackSeconds = nil
@@ -215,7 +245,9 @@ import WhisperKit
                 let directory: URL
                 switch selected {
                 case .phoWhisper:
+                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-begin", model: "phowhisper-cs-fp16-v1")
                     directory = try await WhisperRecognizer.localPhoWhisperDirectory()
+                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-end", model: "phowhisper-cs-fp16-v1")
                 case .parakeet:
                     directory = try await VietnameseEnglishRecognizer.download(repair: repairDownload)
                 case .whisper:
@@ -249,7 +281,15 @@ import WhisperKit
                     try Task.checkCancellation()
                     guard self.generation == token else { return }
                     self.whisper = recognizer
+                    #if canImport(CoreAI)
+                    if selected == .phoWhisper, PhoWhisperStagedEncoder.enabled {
+                        self.preparationDetail += " · Experimental Core AI GPU: models load after Send, release after each turn."
+                    } else {
+                        self.preparationDetail += String(format: " · Prewarm: %.2f s · Load/tokenizer: %.2f s", timing.prewarm, timing.load)
+                    }
+                    #else
                     self.preparationDetail += String(format: " · Prewarm: %.2f s · Load/tokenizer: %.2f s", timing.prewarm, timing.load)
+                    #endif
                 case .nemotron:
                     self.variantDirectory = directory
                     let manager = StreamingNemotronMultilingualAsrManager()
@@ -453,6 +493,12 @@ import WhisperKit
         private let phoWhisper: Bool
         private var suppressedTokens: [Int] = []
         private var inferenceCount = 0
+        #if canImport(CoreAI)
+        private var stagedDirectory: URL?
+        private var stagedEncoderURL: URL?
+        private var stagedTokenizer: (any WhisperTokenizer)?
+        private var usesStagedEncoder: Bool { phoWhisper && PhoWhisperStagedEncoder.enabled }
+        #endif
 
         init(phoWhisper: Bool = false) { self.phoWhisper = phoWhisper }
 
@@ -472,10 +518,13 @@ import WhisperKit
                 let handle = try FileHandle(forReadingFrom: folder.appending(path: path))
                 defer { try? handle.close() }
                 var hash = SHA256(), bytes = 0
-                while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
+                // Foundation read buffers must drain per chunk, not after the multi-GB scan.
+                while try autoreleasepool(invoking: { () throws -> Bool in
                     try Task.checkCancellation()
+                    guard let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty else { return false }
                     hash.update(data: chunk); bytes += chunk.count
-                }
+                    return true
+                }) {}
                 guard bytes == expected.bytes,
                       hash.finalize().map({ String(format: "%02x", $0) }).joined() == expected.sha256
                 else { throw CocoaError(.fileReadCorruptFile) }
@@ -505,6 +554,22 @@ import WhisperKit
         }
 
         func prepare(directory: URL) async throws -> (prewarm: Double, load: Double) {
+            #if canImport(CoreAI)
+            if usesStagedEncoder {
+                let started = ProcessInfo.processInfo.systemUptime
+                let encoderURL = try await PhoWhisperStagedEncoder.verifiedURL()
+                struct Generation: Decodable { let suppress_tokens: [Int] }
+                suppressedTokens = try JSONDecoder().decode(Generation.self,
+                    from: Data(contentsOf: directory.appending(path: "generation_config.json"))).suppress_tokens
+                let tokenizer = try await PhoWhisperTokenizer.load(from: directory)
+                try Task.checkCancellation()
+                stagedDirectory = directory; stagedEncoderURL = encoderURL; stagedTokenizer = tokenizer
+                inferenceCount = 0
+                Logger(subsystem: "no.william.mural", category: "LocalAudio")
+                    .notice("asr_staged_prepared backend=coreai-gpu models_deferred_until_send=true")
+                return (0, ProcessInfo.processInfo.systemUptime - started)
+            }
+            #endif
             // Only Prepare can fetch missing tokenizer assets. Loaded inference uses
             // in-memory weights/tokenizer; no hosted endpoint or automatic fallback.
             let config = WhisperKitConfig(modelFolder: directory.path,
@@ -552,11 +617,53 @@ import WhisperKit
             return (prewarm, loadSeconds + localTokenizerSeconds)
         }
 
-        func transcribe(_ samples: [Float]) async throws -> String {
-            guard let kit else { throw SpeechError.busy }
-            try Task.checkCancellation()
+        #if canImport(CoreAI)
+        private func transcribeStaged(_ samples: [Float]) async throws -> String {
+            guard let directory = stagedDirectory, let encoderURL = stagedEncoderURL,
+                  let tokenizer = stagedTokenizer else { throw SpeechError.busy }
             guard samples.count <= 480_000, samples.allSatisfy(\.isFinite) else { throw CaptureError.tooLong }
             guard !samples.isEmpty else { return "" }
+            let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+            inferenceCount += 1
+            let turn = inferenceCount, started = ProcessInfo.processInfo.systemUptime
+            logger.notice("asr_staged_turn_begin turn=\(turn, privacy: .public)")
+            // Always await the scope, even when Stop cancels its outer owner.
+            let encoderTask = Task { try await PhoWhisperStagedEncoder.encode(samples, support: directory, encoderURL: encoderURL) }
+            let encoded = try await encoderTask.value
+            try Task.checkCancellation()
+            logger.notice("asr_staged_encoder_released turn=\(turn, privacy: .public)")
+            let loaded = try await WhisperKit(WhisperKitConfig(modelFolder: directory.path,
+                tokenizerFolder: directory,
+                computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
+                                                    textDecoderCompute: .cpuAndNeuralEngine),
+                audioEncoder: PhoWhisperStagedEncoder.Replay(encoded),
+                verbose: false, prewarm: false, load: false, download: false))
+            loaded.tokenizer = tokenizer
+            loaded.textDecoder.isModelMultilingual = true
+            do {
+                try Task.checkCancellation()
+                try await loaded.prewarmModels()
+                try Task.checkCancellation()
+                try await loaded.loadModels()
+                try Task.checkCancellation()
+                guard loaded.textDecoder.logitsSize == 51865 else { throw CocoaError(.fileReadCorruptFile) }
+                let results = try await loaded.transcribe(audioArray: samples, decodeOptions: decodingOptions())
+                try Task.checkCancellation()
+                await loaded.unloadModels()
+                loaded.tokenizer = nil
+                logger.notice("asr_staged_turn_complete turn=\(turn, privacy: .public) end_to_end_seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+                return results.map(\.text).joined(separator: " ")
+            } catch {
+                // No fallback or new turn can start until this task and its locals return.
+                await loaded.unloadModels()
+                loaded.tokenizer = nil
+                logger.notice("asr_staged_turn_drained turn=\(turn, privacy: .public)")
+                throw error
+            }
+        }
+        #endif
+
+        private func decodingOptions() -> DecodingOptions {
             // No expected words, translation, or cross-turn prompt. Zero clipping
             // allows sub-second Yes/No; retain native no-speech/fallback thresholds.
             var options = DecodingOptions(task: .transcribe, detectLanguage: true,
@@ -573,6 +680,20 @@ import WhisperKit
                 options.firstTokenLogProbThreshold = nil
                 options.noSpeechThreshold = nil
             }
+            return options
+        }
+
+        func transcribe(_ samples: [Float]) async throws -> String {
+            try Task.checkCancellation()
+            #if canImport(CoreAI)
+            if usesStagedEncoder {
+                return try await transcribeStaged(samples)
+            }
+            #endif
+            guard let kit else { throw SpeechError.busy }
+            guard samples.count <= 480_000, samples.allSatisfy(\.isFinite) else { throw CaptureError.tooLong }
+            guard !samples.isEmpty else { return "" }
+            let options = decodingOptions()
             inferenceCount += 1
             let turn = inferenceCount
             let started = ProcessInfo.processInfo.systemUptime
@@ -621,3 +742,179 @@ import WhisperKit
         }
     }
 }
+
+#if canImport(CoreAI)
+/// Shared frozen tensor/asset contracts; no decoder or provider ownership.
+enum PhoWhisperStagedEncoder {
+    static var enabled: Bool {
+        #if MURAL_COREAI_TALK
+        true
+        #elseif DEBUG
+        ProcessInfo.processInfo.arguments.contains("--coreai-talk-gpu")
+        #else
+        false
+        #endif
+    }
+
+    @concurrent static func verifiedURL() async throws -> URL {
+        guard AIModel.deviceArchitectureName == "h18p" else {
+            throw Failure("The experimental speech encoder is not qualified for this device. Use the default build.")
+        }
+        let url = URL.applicationSupportDirectory.appending(path:
+            "CoreAI/PhoWhisperGPU/phowhisper-cs-fp16-v1.encoder.h18p.aimodelc")
+        guard try fingerprint(url) == "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829" else {
+            throw Failure("The experimental speech encoder is missing or changed. Use the default build; no automatic repair was attempted.")
+        }
+        return url
+    }
+
+    struct Encoded: Sendable {
+        let hidden: [Float16]
+        let melHash: String
+    }
+
+    @concurrent static func encode(_ samples: [Float], support: URL, encoderURL: URL) async throws -> Encoded {
+        guard !samples.isEmpty, samples.count <= 480_000, samples.allSatisfy(\.isFinite) else {
+            throw Failure("Expected finite 16 kHz audio of at most 30 seconds.")
+        }
+        let mel = FeatureExtractor()
+        try await mel.loadModel(at: support.appending(path: "MelSpectrogram.mlmodelc"), computeUnits: .cpuAndGPU)
+        defer { mel.unloadModel() }
+        guard let padded = AudioProcessor.padOrTrimAudio(fromArray: samples, startAt: 0, toLength: 480_000, saveSegment: false),
+              let features = try await mel.logMelSpectrogram(fromAudio: padded) as? MLMultiArray else {
+            throw Failure("The speech frontend produced no mel tensor.")
+        }
+        let values = try readAcceptedMel(features)
+        let options = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        guard let model = try AIModelCache.default.model(for: encoderURL, options: options) else {
+            throw Failure("The experimental speech encoder cache is unavailable. Use the default build; no automatic specialization or fallback was attempted.")
+        }
+        guard let descriptor = model.functionDescriptor(for: "main"),
+              case .ndArray(let inputDescriptor) = descriptor.inputDescriptor(of: "input_features"),
+              inputDescriptor.scalarType == .float16, inputDescriptor.shape == [1, 80, 3000],
+              let function = try model.loadFunction(named: "main") else {
+            throw Failure("The experimental speech encoder could not load its frozen FP16 function.")
+        }
+        var input = NDArray(descriptor: inputDescriptor)
+        do {
+            var view = input.mutableView(as: Float16.self)
+            view.copyElements(fromContentsOf: values.map(Float16.init))
+        }
+        var outputs = try await function.run(inputs: ["input_features": input])
+        guard let hidden = outputs.remove("encoder_hidden_states")?.ndArray else {
+            throw Failure("The speech encoder produced no embeddings.")
+        }
+        return Encoded(hidden: try copyEncoderOutput(hidden),
+                       melHash: values.withUnsafeBufferPointer { sha256(Data(buffer: $0)) })
+    }
+
+    final class Replay: AudioEncoding {
+        let embedSize: Int? = 1280
+        private let encoded: Encoded
+        init(_ encoded: Encoded) { self.encoded = encoded }
+        func encodeFeatures(_ features: any FeatureExtractorOutputType) async throws -> (any AudioEncoderOutputType)? {
+            guard let array = features as? MLMultiArray else { throw Failure("Missing replay mel tensor.") }
+            let values = try readAcceptedMel(array)
+            guard values.withUnsafeBufferPointer({ sha256(Data(buffer: $0)) }) == encoded.melHash else {
+                throw Failure("Replay mel differs from the accepted frontend; no mismatched window was decoded.")
+            }
+            return try decoderEmbeddings(encoded.hidden)
+        }
+    }
+
+    struct Failure: LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
+    }
+    static func copyEncoderOutput(_ hidden: NDArray) throws -> [Float16] {
+        guard hidden.shape == [1, 1500, 1280], hidden.scalarType == .float16 else {
+            throw Failure("Encoder output must remain FP16 [1,1500,1280].")
+        }
+        var owned = [Float16](repeating: 0, count: 1500 * 1280)
+        hidden.view(as: Float16.self).withUnsafePointer { p, _, strides in
+            for t in 0..<1500 { for c in 0..<1280 {
+                owned[t * 1280 + c] = p[t * strides[1] + c * strides[2]]
+            }}
+        }
+        guard owned.allSatisfy(\.isFinite) else { throw Failure("Non-finite encoder output.") }
+        return owned
+    }
+
+    static func readAcceptedMel(_ a: MLMultiArray) throws -> [Float] {
+        let shape = a.shape.map(\.intValue), strides = a.strides.map(\.intValue)
+        guard shape == [1, 80, 3000] || shape == [1, 80, 1, 3000] else {
+            throw Failure("Unexpected mel shape \(shape).")
+        }
+        var out = [Float](repeating: 0, count: 80 * 3000)
+        func copy<T: BinaryFloatingPoint>(_ type: T.Type) {
+            let p = a.dataPointer.assumingMemoryBound(to: type)
+            for m in 0..<80 { for t in 0..<3000 {
+                out[m * 3000 + t] = Float(p[m * strides[1] + t * strides[shape.count - 1]])
+            }}
+        }
+        switch a.dataType {
+        case .float16: copy(Float16.self) // Widening preserves every finite FP16 value exactly.
+        case .float32: copy(Float.self)
+        default: throw Failure("Unsupported mel type \(a.dataType).")
+        }
+        guard out.allSatisfy(\.isFinite) else { throw Failure("Non-finite mel.") }
+        return out
+    }
+
+    static func decoderEmbeddings(_ values: [Float16]) throws -> MLMultiArray {
+        guard values.count == 1500 * 1280, values.allSatisfy(\.isFinite) else {
+            throw Failure("Expected finite FP16 [1,1500,1280] values.")
+        }
+        let result = try MLMultiArray(shape: [1, 1280, 1, 1500], dataType: .float16)
+        let strides = result.strides.map(\.intValue)
+        let p = result.dataPointer.assumingMemoryBound(to: Float16.self)
+        for t in 0..<1500 { for c in 0..<1280 {
+            p[c * strides[1] + t * strides[3]] = values[t * 1280 + c]
+        }}
+        return result
+    }
+
+    static func readDecoderEmbeddings(_ a: MLMultiArray) throws -> [Float16] {
+        guard a.shape.map(\.intValue) == [1, 1280, 1, 1500], a.dataType == .float16 else {
+            throw Failure("WhisperKit embeddings must be FP16 [1,1280,1,1500].")
+        }
+        let strides = a.strides.map(\.intValue)
+        let p = a.dataPointer.assumingMemoryBound(to: Float16.self)
+        var values = [Float16](repeating: 0, count: 1500 * 1280)
+        for t in 0..<1500 { for c in 0..<1280 {
+            values[t * 1280 + c] = p[c * strides[1] + t * strides[3]]
+        }}
+        guard values.allSatisfy(\.isFinite) else { throw Failure("Non-finite decoder embeddings.") }
+        return values
+    }
+
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func fingerprint(_ url: URL) throws -> String {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isSymbolicLink != true else { throw Failure("Symlinks are not diagnostic assets.") }
+        if values.isDirectory == true {
+            var children: [String: String] = [:]
+            for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil,
+                                                                     options: [.skipsHiddenFiles]) {
+                children[child.lastPathComponent] = try fingerprint(child)
+            }
+            return sha256(try JSONSerialization.data(withJSONObject: children, options: [.sortedKeys, .withoutEscapingSlashes]))
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        // FileHandle's Foundation buffers otherwise accumulate until this multi-GB scan returns.
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            try Task.checkCancellation()
+            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
+            hash.update(data: data)
+            return true
+        }) {}
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+#endif

@@ -11,6 +11,29 @@ final class LearningTests: XCTestCase {
         s.assessments = [Assessment(passageID: p.id, revisionKey: p.revisionKey, outcome: .success, suggestedLevel: 2, nextGoal: "Fortell mer.", capability: "Describes a past outing", words: [WordProposal(lemma: "å gå", meaning: "to go", form: "gikk", kind: kind, confidence: 0.95, sourceIDs: p.fragments.map(\.id), quote: "Jeg gikk i skogen.")], createdAt: date, context: theme)]
         return s
     }
+    func testOnlyExplicitlyPausedUnfinishedLocalConversationCanResume() throws {
+        var session = SessionRecord(languageID: "en")
+        session.append(Fragment(speaker: .assistant, text: "Hi!", startMS: 0, endMS: 100, turnID: UUID()))
+        session.localPausedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        XCTAssertFalse(session.canResumeLocalConversation) // Greeting-only drafts remain disposable.
+        session.append(Fragment(speaker: .user, text: "I bought apples.", startMS: 100, endMS: 200, turnID: UUID()))
+        let data = try JSONEncoder().encode(session)
+        let restored = try JSONDecoder().decode(SessionRecord.self, from: data)
+        XCTAssertTrue(restored.canResumeLocalConversation)
+        XCTAssertEqual(restored.id, session.id)
+        XCTAssertEqual(restored.fragments.map(\.id), session.fragments.map(\.id))
+        session.endedAt = .now
+        XCTAssertFalse(session.canResumeLocalConversation)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "localPausedAt")
+        let old = try JSONDecoder().decode(SessionRecord.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(old.localPausedAt)
+        XCTAssertFalse(old.canResumeLocalConversation)
+        var premium = SessionRecord(languageID: "en")
+        premium.append(Fragment(speaker: .user, text: "Hello", startMS: 0, endMS: 100))
+        premium.localPausedAt = .now
+        XCTAssertFalse(premium.canResumeLocalConversation)
+    }
     func testDuplicateProviderEventsDoNotChangeTranscript() {
         var s = SessionRecord()
         let f = Fragment(id: "same", speaker: .user, text: "Hei", startMS: 0, endMS: 100)

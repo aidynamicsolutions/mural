@@ -34,7 +34,11 @@ import MuralCore
                     try existing.payload.write(to: backup, options: [.atomic, .completeFileProtection])
                 }
             }
-            for i in archive.sessions.indices where archive.sessions[i].endedAt == nil {
+            // Preserve only the newest explicitly paused local session. Premium and
+            // unmarked interrupted sessions keep their existing finalization behavior.
+            let pausedID = archive.sessions.filter { $0.canResumeLocalConversation }
+                .max { $0.localPausedAt! < $1.localPausedAt! }?.id
+            for i in archive.sessions.indices where archive.sessions[i].endedAt == nil && archive.sessions[i].id != pausedID {
                 archive.sessions[i].endedAt = .now; archive.sessions[i].endReason = "App closed before finalization"
             }
         } else {

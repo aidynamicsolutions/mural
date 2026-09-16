@@ -5,9 +5,10 @@ import subprocess
 import tempfile
 
 source = (Path(__file__).resolve().parents[2] / "App/MuralApp.swift").read_text()
-helpers = source.split("    private static func decoderEmbeddings", 1)[1].split(
-    "    private static func sha256", 1
-)[0]
+shared = (Path(__file__).resolve().parents[2] / "App/LocalConversationEngine.swift").read_text()
+helpers = shared.split("    static func decoderEmbeddings", 1)[1].split(
+    "    static func sha256", 1
+)[0].replace("Failure(", "ProbeError(")
 arguments = source.split("    private static func whisperKitProofUsesFreshEncoder", 1)[1].split(
     "    // Deliberately only fixture 001", 1
 )[0]

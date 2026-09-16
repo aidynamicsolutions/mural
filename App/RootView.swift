@@ -47,6 +47,7 @@ struct RootView: View {
             }
             #endif
             onboarding = !coordinator.store.preferences.hasOnboarded && !arguments.contains("--preview") && !AudioVerification.requested
+            if !onboarding, scenePhase == .active { coordinator.resume() }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { coordinator.background() }

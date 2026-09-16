@@ -38,6 +38,10 @@ from coreai.runtime import AIModelAssetMetadata
 from coreai_torch import TorchConverter, get_decomp_table
 
 
+FROZEN_SOURCE_WEIGHTS_SHA256 = (
+    "264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a"
+)
+
 EXPECTED = {
     "model_type": "whisper",
     "num_mel_bins": 80,
@@ -162,6 +166,16 @@ def main() -> None:
     model_dir = Path(args.model_dir).expanduser().resolve()
     if not model_dir.exists():
         raise FileNotFoundError(model_dir)
+    source_weights = model_dir / "model.safetensors"
+    if not source_weights.is_file():
+        raise FileNotFoundError(source_weights)
+    with source_weights.open("rb") as handle:
+        source_weights_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+    if source_weights_sha256 != FROZEN_SOURCE_WEIGHTS_SHA256:
+        raise ValueError(
+            "Refusing to export non-frozen PhoWhisper merged weights: "
+            f"{source_weights_sha256}"
+        )
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,9 +194,8 @@ def main() -> None:
     validate_model(model, processor)
     if args.diagnostic_prefix_length:
         # Bounded shape control only. Reuse the exact decoder, weights and phone hidden states.
-        with (model_dir / "model.safetensors").open("rb") as handle:
-            weights_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-        if weights_hash != "264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a":
+        weights_hash = source_weights_sha256
+        if weights_hash != FROZEN_SOURCE_WEIGHTS_SHA256:
             raise ValueError("Fixed diagnostics require the frozen accepted weights")
         data = args.encoder_checkpoint.read_bytes()
         metadata = json.loads(args.encoder_checkpoint.with_suffix(".json").read_text())

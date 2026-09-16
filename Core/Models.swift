@@ -120,6 +120,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
     public var providerID: String?
     public var startedAt = Date()
     public var endedAt: Date?
+    public var localPausedAt: Date?
     public var themeID: String?
     public var title: String
     public var fragments: [Fragment] = []
@@ -137,6 +138,9 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
         self.title = title ?? LanguageRegistry.module(for: languageID)?.defaultTitle ?? "A conversation"
     }
     public var isLocalConversation: Bool { fragments.contains { $0.turnID != nil } }
+    public var canResumeLocalConversation: Bool {
+        endedAt == nil && localPausedAt != nil && isLocalConversation && hasUserMessage
+    }
     public var hasUserMessage: Bool {
         fragments.contains { $0.speaker == .user && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
