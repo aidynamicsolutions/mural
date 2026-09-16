@@ -14,6 +14,11 @@ public struct MeaningRequest: Equatable, Sendable {
     }
     public var cacheKey: String { Self.cacheKey(revisionKey: revisionKey, language: meaningLanguage) }
     public static func cacheKey(revisionKey: String, language: String) -> String { language + "::" + revisionKey }
+    var builtInMeaning: String? {
+        guard learningLanguageID == "en", meaningLanguage == "Vietnamese",
+              text == "Hi! What did you do today?" else { return nil }
+        return "Chào bạn! Hôm nay bạn đã làm gì?"
+    }
     func sharesContext(with other: Self) -> Bool {
         sessionID == other.sessionID && passageID == other.passageID &&
         learningLanguageID == other.learningLanguageID && meaningLanguage == other.meaningLanguage
@@ -51,8 +56,9 @@ public struct MeaningResult: Sendable {
         let changedContext = desired.map { !$0.sharesContext(with: request) } ?? true
         if changedContext { reset() }
         desired = request
-        if let cached, !cached.isEmpty {
-            cancelWorker(); text = cached; rendered = request; error = nil; return
+        let immediate = cached.flatMap { $0.isEmpty ? nil : $0 } ?? request.builtInMeaning
+        if let immediate {
+            cancelWorker(); text = immediate; rendered = request; error = nil; return
         }
         if rendered == request { return }
         // Do not display a translation of text that was subsequently corrected.

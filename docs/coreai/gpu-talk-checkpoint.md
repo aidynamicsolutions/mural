@@ -1,8 +1,8 @@
 # GPU-preferred staged ASR and normal Talk checkpoint
 
-Status: **Explicit opt-in works in normal Talk on the test phone. Not approved as the default. Paused-session restoration replay is pending.**
+Status: **Explicit opt-in works in normal Talk on the test phone. Not approved as the default. Latest user testing accepts the paused-session restoration correction; this is human-confirmed acceptance, not agent-observed verification of every prolonged-suspension scenario. The first-turn prewarm change below still requires device qualification.**
 
-This follows [staged Talk assessment](staged-talk-assessment.md). The workaround uses a separate GPU-preferred compilation of the same frozen FP16 encoder, not a repair of the failing default/ANE-backed specialization. The Core ML decoder, frontend, tokenizer and decoding policy are unchanged. No Core AI decoder experiment, cache deletion, uninstall, data reset, commit or publication occurred.
+This follows [staged Talk assessment](staged-talk-assessment.md). The workaround uses a separate GPU-preferred compilation of the same frozen FP16 encoder, not a repair of the failing default/ANE-backed specialization. The Core ML decoder, frontend, tokenizer and decoding policy are unchanged. No Core AI decoder experiment, cache deletion, uninstall or data reset occurred.
 
 ## Loading diagnosis and workaround
 
@@ -84,11 +84,13 @@ First-turn timing was **not** a startup performance pass:
 - Decoder-side interval included ANE compiler-service activity from about 15:03:09 to 15:03:43, before decoder model loading completed.
 - Second/third Send-to-final: 5.54/5.84 seconds.
 
-The observed delay is on the existing Core ML decoder cold-preparation path, deferred to Send. These logs do not isolate every decoder subphase or prove that compilation will never recur. Moving prewarm into Prepare and releasing it before encoding would shift the wait, not remove its total cost. No such latency change was made here.
+The observed delay is on the existing Core ML decoder cold-preparation path, deferred to Send. These logs do not isolate every decoder subphase or prove that compilation will never recur.
 
-## Background failure and pending correction
+A first-turn latency experiment is now implemented but **not yet phone-qualified**. The fixed application greeting uses an exact built-in Vietnamese meaning so it does not invoke the local meaning model. After greeting TTS finishes, the recognizer starts a decoder-only Core ML `TextDecoder` prewarm using the existing `.cpuAndNeuralEngine` compute choice. Record is allowed while it runs. Send awaits that exact task before starting the staged Core AI encoder, so speculative decoder residency cannot overlap the encoder. The existing Send-time WhisperKit prewarm/load/decode/unload sequence remains unchanged. See [first-turn readiness/prewarm handoff](first-turn-readiness-prewarm-plan.md).
 
-The user reported losing active Talk after roughly one minute in the background. Captured logs show PID 45747 paused, briefly resumed preparation, paused again, and a new PID 45813 later opened the app. No matching new Mural crash or Jetsam report was exposed in the retrieved inventory. The reason for process replacement is unknown; do not label it a proven Core AI crash or Jetsam.
+## Background restoration correction and human acceptance
+
+The user previously reported losing active Talk after roughly one minute in the background. Captured logs showed PID 45747 paused, briefly resumed preparation, paused again, and a new PID 45813 later opened the app. No matching new Mural crash or Jetsam report was exposed in the retrieved inventory. The reason for process replacement remains unknown; do not label it a proven Core AI crash or Jetsam.
 
 The durable text path was already separate from active Talk state. `LearningStore.init` finalized all unfinished records, while the coordinator only resumed an in-memory session. Implemented a small persistence correction:
 
@@ -98,7 +100,7 @@ The durable text path was already separate from active Talk state. `LearningStor
 - Clear the marker on successful resume and explicit End.
 - Old archive records without the field still decode; the focused regression checks local eligibility, stable IDs, ended/premium exclusion and legacy decoding.
 
-**The final phone replay is pending.** The paired form timed out with no reported result and no captured new ASR/lifecycle actions. A passing build and 64 passing core tests are not proof that the background fix works on the phone. The requested replay is: completed turn -> background one minute -> return and second turn; background again -> close/reopen -> same session without repeated speech; End -> reopen -> history retained but not active.
+Latest user testing accepts this background-restoration correction. Record that as **human-confirmed acceptance**. It is not agent-observed verification and does not prove every prolonged-suspension, process-replacement, or lifecycle scenario. Do not repeat the old full replay checklist unless a new lifecycle regression or a release-gate decision specifically requires broader coverage.
 
 ## Rollback and remaining release gates
 
@@ -108,21 +110,22 @@ Rollback procedure: End/Stop and wait for hybrid work to drain, install the defa
 
 Before recommending default rollout, still require:
 
-- Actual replay of the background/restoration correction, prolonged suspension and app lifecycle behavior.
+- Broader prolonged-suspension/process-replacement lifecycle coverage beyond the human-confirmed background-restoration acceptance.
 - Integrated cancellation across preparation/decoder phases, beyond the user-tested Finalizing stop and bounded probe checks.
 - End-to-end rollback and missing/changed-asset failure checks without deleting user assets.
 - Silence/Yes/No coverage, sustained coexistence/thermal testing and a supported OS/device matrix.
 - Controlled Release cold/cached/full Send-to-final distributions and a safe comparator. Debug samples are not these distributions.
+- Physical qualification of the new first-turn meaning-cache and post-greeting decoder-prewarm behavior before treating its latency or memory characteristics as established.
 
 ## Validation and evidence
 
 Evidence root: `.build/verification/coreai-load-reliability/`. Includes preserved cache bytes/hashes, Apple API documentation, source/AOT fingerprints, compiler/build/install logs, all run reports/events, corpus comparison, cancellation checks, scoped app/ANE logs and private phone-check evidence. No personal transcript/audio dump was added to Talk logging. All owned captures were stopped.
 
-Passed:
+Prior checkpoint validation, before the new first-turn optimization:
 
 - Debug, default Release and explicit opt-in Release builds.
 - `swift test`: 64 tests, zero failures.
 - CoreAI cached-load, product-config, tensor-layout, probe-contract, Talk opt-in and bounded asset-verification-memory checks.
 - `git diff --check` and staged diff whitespace check.
 
-Existing staged/unstaged work remains preserved. The original ANE-backed loading defect remains unresolved; the GPU-preferred path is a qualified alternative for the limited evidence above, not a blanket production-readiness claim.
+The new first-turn optimization has not been built or phone-tested by this connector-only change. Existing staged/unstaged work on the developer Mac remains outside this connector's visibility and must be preserved when syncing. The original ANE-backed loading defect remains unresolved; the GPU-preferred path is a qualified alternative for the limited evidence above, not a blanket production-readiness claim.

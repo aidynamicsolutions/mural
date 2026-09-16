@@ -40,6 +40,7 @@ import ArgmaxCore
     private(set) var inputDescription = "Microphone off"
     private var asr: StreamingNemotronMultilingualAsrManager?
     private var asrTask: Task<Void, Never>?
+    private var stagedDecoderWarmup: Task<Void, Error>?
     private var limitTask: Task<Void, Never>?
     private var tapInstalled = false
     private var audioEngine: AVAudioEngine?
@@ -121,6 +122,7 @@ import ArgmaxCore
         stopCapture()
         capture?.finish(throwing: CancellationError()); capture = nil
         asrTask?.cancel()
+        stagedDecoderWarmup?.cancel()
         asr = nil; whisper = nil; parakeet = nil
         asrState = .ended
         asrNotice = "Stopped. Prepare speech models again to restart."
@@ -161,6 +163,7 @@ import ArgmaxCore
             self.utterance = nil
             let pending = self.completion; self.completion = nil
             self.releaseAudio()
+            self.startStagedDecoderPrewarmIfNeeded()
             pending?.resume()
         }
     }
@@ -170,6 +173,13 @@ import ArgmaxCore
             guard let self, self.utterance === utterance else { return }
             self.stop()
         }
+    }
+
+    private func startStagedDecoderPrewarmIfNeeded() {
+        #if canImport(CoreAI)
+        guard PhoWhisperStagedEncoder.enabled, stagedDecoderWarmup == nil, let whisper else { return }
+        stagedDecoderWarmup = Task { try await whisper.prewarmStagedDecoder() }
+        #endif
     }
 
     private func activateAudio(category: AVAudioSession.Category) async throws {
@@ -191,6 +201,11 @@ import ArgmaxCore
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
     func prepareConversation() async throws {
         try Task.checkCancellation()
+        if let warmup = stagedDecoderWarmup {
+            warmup.cancel()
+            _ = await warmup.result
+            stagedDecoderWarmup = nil
+        }
         guard !stagedMemoryWarning else {
             throw CaptureError.operation(asrError ?? "Speech is disabled after a memory warning. Use the default build.")
         }
@@ -322,6 +337,7 @@ import ArgmaxCore
     func record() {
         guard canRecord else { return }
         let manager = asr, whisper = whisper, parakeet = parakeet
+        let decoderWarmup = stagedDecoderWarmup
         let limit = recordingLimitSeconds
         let model = asrModel.rawValue
         let token = UUID(); generation = token
@@ -365,7 +381,9 @@ import ArgmaxCore
                     self.asrNotice = "\(limit)-second limit reached. Your turn was sent automatically."
                     self.finishRecording()
                 }
-                let result = try await Self.transcribe(stream, manager: manager, whisper: whisper, parakeet: parakeet, limitSeconds: limit, sampleRate: format.sampleRate, channelCount: format.channelCount) { [weak self] in
+                let result = try await Self.transcribe(stream, manager: manager, whisper: whisper,
+                    decoderWarmup: decoderWarmup, parakeet: parakeet, limitSeconds: limit,
+                    sampleRate: format.sampleRate, channelCount: format.channelCount) { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.asrNotice = "\(limit)-second limit reached. Your turn was sent automatically."
                     self.finishRecording()
@@ -413,7 +431,9 @@ import ArgmaxCore
     private struct Recognition: Sendable { let text: String; let seconds: Double; let finalizeSeconds: Double }
 
     @concurrent private static func transcribe(_ stream: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>,
-        manager: StreamingNemotronMultilingualAsrManager?, whisper: WhisperRecognizer?, parakeet: VietnameseEnglishRecognizer?, limitSeconds: Int, sampleRate: Double, channelCount: AVAudioChannelCount,
+        manager: StreamingNemotronMultilingualAsrManager?, whisper: WhisperRecognizer?,
+        decoderWarmup: Task<Void, Error>?, parakeet: VietnameseEnglishRecognizer?, limitSeconds: Int,
+        sampleRate: Double, channelCount: AVAudioChannelCount,
         onLimit: @MainActor @Sendable () -> Void) async throws -> Recognition {
         guard let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channelCount, interleaved: false),
               let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
@@ -462,6 +482,18 @@ import ArgmaxCore
             text = try await parakeet.transcribe(turnSamples)
         } else if let whisper {
             turnSamples.append(contentsOf: tail)
+            if let decoderWarmup {
+                let waitStarted = ProcessInfo.processInfo.systemUptime
+                logger.notice("asr_staged_decoder_wait_begin")
+                do {
+                    try await decoderWarmup.value
+                } catch {
+                    logger.error("asr_staged_decoder_wait_failed")
+                    throw error
+                }
+                try Task.checkCancellation()
+                logger.notice("asr_staged_decoder_wait_complete wait_seconds=\(ProcessInfo.processInfo.systemUptime - waitStarted, privacy: .public)")
+            }
             text = try await whisper.transcribe(turnSamples)
         } else { throw SpeechError.busy }
         let finalizeSeconds = ProcessInfo.processInfo.systemUptime - started
@@ -618,6 +650,28 @@ import ArgmaxCore
         }
 
         #if canImport(CoreAI)
+        func prewarmStagedDecoder() async throws {
+            guard usesStagedEncoder, let directory = stagedDirectory else { return }
+            let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+            let started = ProcessInfo.processInfo.systemUptime
+            logger.notice("asr_staged_decoder_speculative_begin")
+            let decoder = TextDecoder()
+            defer { decoder.unloadModel() }
+            do {
+                try Task.checkCancellation()
+                try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"),
+                                            computeUnits: .cpuAndNeuralEngine, prewarmMode: true)
+                try Task.checkCancellation()
+                logger.notice("asr_staged_decoder_speculative_complete seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+            } catch is CancellationError {
+                logger.notice("asr_staged_decoder_speculative_cancelled")
+                throw CancellationError()
+            } catch {
+                logger.error("asr_staged_decoder_speculative_failed")
+                throw error
+            }
+        }
+
         private func transcribeStaged(_ samples: [Float]) async throws -> String {
             guard let directory = stagedDirectory, let encoderURL = stagedEncoderURL,
                   let tokenizer = stagedTokenizer else { throw SpeechError.busy }
@@ -642,15 +696,23 @@ import ArgmaxCore
             loaded.textDecoder.isModelMultilingual = true
             do {
                 try Task.checkCancellation()
+                let prewarmStarted = ProcessInfo.processInfo.systemUptime
                 try await loaded.prewarmModels()
                 try Task.checkCancellation()
+                logger.notice("asr_staged_decoder_send_prewarm_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - prewarmStarted, privacy: .public)")
+                let loadStarted = ProcessInfo.processInfo.systemUptime
                 try await loaded.loadModels()
                 try Task.checkCancellation()
+                logger.notice("asr_staged_decoder_send_load_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - loadStarted, privacy: .public)")
                 guard loaded.textDecoder.logitsSize == 51865 else { throw CocoaError(.fileReadCorruptFile) }
+                let decodeStarted = ProcessInfo.processInfo.systemUptime
                 let results = try await loaded.transcribe(audioArray: samples, decodeOptions: decodingOptions())
                 try Task.checkCancellation()
+                logger.notice("asr_staged_decoder_decode_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - decodeStarted, privacy: .public)")
+                let unloadStarted = ProcessInfo.processInfo.systemUptime
                 await loaded.unloadModels()
                 loaded.tokenizer = nil
+                logger.notice("asr_staged_decoder_unload_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - unloadStarted, privacy: .public)")
                 logger.notice("asr_staged_turn_complete turn=\(turn, privacy: .public) end_to_end_seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
                 return results.map(\.text).joined(separator: " ")
             } catch {
