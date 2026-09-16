@@ -1,4 +1,6 @@
 import SwiftUI
+import AVFoundation
+import Combine
 import UniformTypeIdentifiers
 import MuralCore
 
@@ -295,6 +297,8 @@ struct EditableTranscriptView: View {
 struct SettingsView: View {
     let coordinator: ConversationCoordinator
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(LocalSpeechVoice.preferenceKey) private var localVoiceIdentifier = ""
     @State private var key = ""
     @State private var hasKey = CredentialStore.hasKey
     @State private var message: String?
@@ -304,8 +308,17 @@ struct SettingsView: View {
     @State private var deleting = false
     @State private var notices = false
     @State private var showingAPIKey = false
+    @State private var showingVoiceUpgrade = false
+    @State private var localVoiceOptions = LocalSpeechVoice.availableOptions()
     private var store: LearningStore { coordinator.store }
     private var totalVoiceSeconds: Double { store.sessions.reduce(0) { $0 + $1.voiceSeconds } }
+    private var hasPremiumVoice: Bool { localVoiceOptions.contains(where: \.isPremium) }
+    private var selectedVoiceSummary: String {
+        if localVoiceIdentifier.isEmpty {
+            return localVoiceOptions.first.map { "Best available · \($0.label)" } ?? "Best available"
+        }
+        return localVoiceOptions.first(where: { $0.id == localVoiceIdentifier })?.label ?? "Best available"
+    }
     var body: some View {
         NavigationStack {
             Form {
@@ -318,6 +331,28 @@ struct SettingsView: View {
                          : "GPT-Live: separate OpenAI consent and your API key are required. Audio and selected text are processed by OpenAI.")
                         .font(.footnote)
                 } header: { Text("Conversation") }
+                Section {
+                    Picker("Voice", selection: $localVoiceIdentifier) {
+                        Text("Best available").tag("")
+                        ForEach(localVoiceOptions) { voice in Text(voice.label).tag(voice.id) }
+                    }
+                    .disabled(coordinator.isLocal && coordinator.isRunning)
+                    .accessibilityIdentifier("local-voice-picker")
+                    LabeledContent("Current choice", value: selectedVoiceSummary)
+                    if hasPremiumVoice {
+                        Label("Premium voice installed", systemImage: "checkmark.circle.fill")
+                            .accessibilityIdentifier("local-voice-premium-ready")
+                    } else {
+                        Button("Upgrade voice quality", systemImage: "arrow.down.circle") { showingVoiceUpgrade = true }
+                            .accessibilityIdentifier("local-voice-upgrade")
+                    }
+                    Button("Refresh installed voices", systemImage: "arrow.clockwise") { refreshLocalVoices() }
+                        .accessibilityIdentifier("local-voice-refresh")
+                } header: { Text("On-device voice") } footer: {
+                    Text(hasPremiumVoice
+                         ? "Best available automatically prefers a Premium English (US) voice. You can also pin any installed regular voice above."
+                         : "Enhanced and Premium voices are downloaded by iOS in Settings. Mural can use them as soon as they are installed.")
+                }
                 Section {
                     LearningLanguagePicker(coordinator: coordinator)
                     Toggle("Meaning subtitles", isOn: Binding(get: { store.preferences.meaningVisible }, set: { value in
@@ -403,6 +438,9 @@ struct SettingsView: View {
                 .navigationTitle("Make yourself comfortable").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { key = ""; dismiss() } } }
         }
+        .onAppear { refreshLocalVoices() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refreshLocalVoices() } }
+        .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in refreshLocalVoices() }
         .fileExporter(isPresented: $exporting, document: backup, contentType: .json, defaultFilename: "Mural-learning-backup") { result in if case .failure(let error) = result { message = error.localizedDescription } }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             do {
@@ -419,6 +457,52 @@ struct SettingsView: View {
                     .navigationTitle("Open-source notices").navigationBarTitleDisplayMode(.inline)
             }
         }
+        .sheet(isPresented: $showingVoiceUpgrade) { LocalVoiceUpgradeView(refresh: refreshLocalVoices) }
+    }
+
+    private func refreshLocalVoices() {
+        let refreshed = LocalSpeechVoice.availableOptions()
+        localVoiceOptions = refreshed
+        if !localVoiceIdentifier.isEmpty, !refreshed.isEmpty,
+           !refreshed.contains(where: { $0.id == localVoiceIdentifier }) {
+            localVoiceIdentifier = ""
+        }
+    }
+}
+
+private struct LocalVoiceUpgradeView: View {
+    let refresh: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Apple installs Enhanced and Premium system voices through iPhone Settings. Mural can select them after iOS finishes the download, but it cannot download Apple’s voice files itself.")
+                        .accessibilityIdentifier("local-voice-upgrade-instructions")
+                }
+                Section("On your iPhone") {
+                    Text("1. Open Settings.")
+                    Text("2. Go to Accessibility → Read & Speak. On some iOS versions this may be called Spoken Content.")
+                    Text("3. Tap Voices → English → English (US).")
+                    Text("4. Download a Premium voice. An Enhanced voice is also an upgrade over Standard.")
+                    Text("5. Return to Mural. The installed voice list refreshes automatically.")
+                }
+                Section {
+                    Button("I’ve downloaded a voice") {
+                        refresh()
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("local-voice-upgrade-done")
+                } footer: {
+                    Text("If Premium is available, Best available will prefer it automatically. You can also select a specific installed voice in Mural Settings.")
+                }
+            }
+            .navigationTitle("Upgrade voice quality")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 

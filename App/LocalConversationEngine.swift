@@ -11,6 +11,74 @@ import CoreML
 import ArgmaxCore
 #endif
 
+enum LocalSpeechVoice {
+    static let preferenceKey = "localTTSVoiceIdentifier"
+    static let language = "en-US"
+
+    struct Option: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let language: String
+        let qualityLabel: String
+        let qualityRank: Int
+
+        var label: String { "\(name) · \(qualityLabel)" }
+        var isPremium: Bool { qualityRank == 3 }
+    }
+
+    static func availableVoices() -> [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices()
+            .filter(isEligible)
+            .sorted { lhs, rhs in
+                let leftRank = qualityRank(lhs.quality)
+                let rightRank = qualityRank(rhs.quality)
+                if leftRank != rightRank { return leftRank > rightRank }
+                let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+                return lhs.identifier < rhs.identifier
+            }
+    }
+
+    static func availableOptions() -> [Option] {
+        availableVoices().map { voice in
+            Option(id: voice.identifier, name: voice.name, language: voice.language,
+                   qualityLabel: qualityLabel(voice.quality), qualityRank: qualityRank(voice.quality))
+        }
+    }
+
+    static func resolvedVoice() -> AVSpeechSynthesisVoice? {
+        if let identifier = UserDefaults.standard.string(forKey: preferenceKey),
+           !identifier.isEmpty,
+           let voice = AVSpeechSynthesisVoice(identifier: identifier),
+           isEligible(voice) {
+            return voice
+        }
+        return availableVoices().first ?? AVSpeechSynthesisVoice(language: language)
+    }
+
+    static func description(for voice: AVSpeechSynthesisVoice) -> String {
+        "\(voice.name) (\(voice.language)) · \(qualityLabel(voice.quality))"
+    }
+
+    private static func isEligible(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        voice.language == language &&
+        !voice.voiceTraits.contains(.isNoveltyVoice) &&
+        !voice.voiceTraits.contains(.isPersonalVoice)
+    }
+
+    private static func qualityRank(_ quality: AVSpeechSynthesisVoiceQuality) -> Int {
+        if quality == .premium { return 3 }
+        if quality == .enhanced { return 2 }
+        return 1
+    }
+
+    private static func qualityLabel(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
+        if quality == .premium { return "Premium" }
+        if quality == .enhanced { return "Enhanced" }
+        return "Standard"
+    }
+}
+
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
     @ObservationIgnored var onPlayback: ((Double, Double?, Bool) -> Void)?
@@ -93,12 +161,12 @@ import ArgmaxCore
     func speak(_ text: String) async throws {
         try Task.checkCancellation()
         guard completion == nil else { throw SpeechError.busy }
-        guard let voice = AVSpeechSynthesisVoice(language: "en-US") else { throw SpeechError.noVoice }
+        guard let voice = LocalSpeechVoice.resolvedVoice() else { throw SpeechError.noVoice }
         guard asrTask == nil else { throw SpeechError.busy }
         try await activateAudio(category: .playback)
         let current = AVSpeechUtterance(string: text)
         current.voice = voice
-        voiceDescription = "\(voice.name) (\(voice.language))"
+        voiceDescription = LocalSpeechVoice.description(for: voice)
         utterance = current
         playbackStartSeconds = nil; playbackDurationSeconds = nil; playbackStartedAt = nil
         requestedAt = ProcessInfo.processInfo.systemUptime
