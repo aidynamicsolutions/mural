@@ -1,5 +1,41 @@
 # Local conversation feasibility probes
 
+## Current phone build: explicit Core AI Release
+
+For the user's paired iPhone 17/h18p on iOS 27, preserve the explicitly opted-in staged Core AI GPU-preferred encoder with the existing Core ML decoder. This supersedes the historical baseline-only build instructions below, not the safety or release gates in `docs/coreai/gpu-talk-checkpoint.md` and `docs/coreai/first-turn-readiness-prewarm-plan.md`.
+
+A normal Release install of `a4de800` omitted the opt-in and reproduced 179.454 s preparation (172.205 s Core ML prewarm), followed by 9.309 s cached preparation. All optimization commits were present. A commit hash, bundle version or successful build does not identify the runtime backend.
+
+After discovering the phone, build from the intended checkout with its existing signing configuration:
+
+```sh
+: "${DEVICE_UDID:?Set the freshly discovered paired iPhone 17 UDID}"
+export APP_BUNDLE_ID=com.kevintruong.mural.dev
+export DEVICE_DERIVED_DATA="$PWD/.build/local-mvp-phase-1-device-derived-data"
+xcodebuild \
+  -project Mural.xcodeproj -scheme Mural -configuration Release \
+  -destination "platform=iOS,id=$DEVICE_UDID" \
+  -derivedDataPath "$DEVICE_DERIVED_DATA" \
+  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID" \
+  OTHER_SWIFT_FLAGS='$(inherited) -D MURAL_COREAI_TALK' \
+  build
+export DEVICE_APP="$DEVICE_DERIVED_DATA/Build/Products/Release-iphoneos/Mural.app"
+```
+
+- Save the command and build log under a fresh `.build/verification/` directory. Before installation, confirm the actual `swiftc -module-name Mural` invocation has `-D MURAL_COREAI_TALK`; do not check only the requested command. Pass the flag explicitly even when using a detached worktree. Keep the existing bundle identity when installing/launching with the parent skill's device commands.
+- Start or reuse the scoped capture below before launch. Confirm `local_talk_asr_backend` reports `Core AI GPU-preferred encoder + Core ML decoder (staged)`. After Prepare, confirm `asr_staged_prepared backend=coreai-gpu` and `asr_ready` in that process. Backend selection alone does not prove successful preparation/inference.
+- **On-device details & diagnostics > ASR backend** identifies the selected Talk backend before preparation. The existing preparation breakdown remains below the total. Both backends still use the PhoWhisper CS model name; the model name alone is insufficient.
+- Preserve all assets, caches and history. A missing/changed staged asset or missing specialization is a blocker, not permission to clear caches, re-export models or silently substitute the baseline.
+- Public/default Release stays baseline. `--coreai-talk-gpu` only opts in Debug; it cannot enable a default Release executable. An explicitly requested baseline/rollback build must omit the compile flag and run in a fresh process after draining old work. Do not apply this phone-specific opt-in to unrelated devices or simulator checks.
+- Measure Prepare plus first and subsequent Send-to-final, decoder warmup wait, and memory warnings. A fresh process with retained caches is not an uncached benchmark; do not erase caches to simulate one. Fast preparation alone does not prove the deferred decoder cost disappeared.
+
+### Regression-fix phone checkpoint (September 16, 2026)
+
+- Corrected explicit opt-in Release from `a4de800` plus the backend-diagnostics diff was built, installed in place and launched; actual compiler flag and runtime backend confirmed. Evidence: `.build/verification/asr-preparation-fix-20260916-222340/`.
+- Phone log: Prepare **2.991 s**, next conversation **2.855 s**, background resume **2.817 s**. The user confirms two spoken turns plus restart/background recovery worked. Agent-captured diagnostics screenshot shows the staged backend and readable, unclipped timing text. No memory warning was recorded in that batch.
+- **Remaining latency limitation:** first Send-to-final **32.775 s**, including **26.677 s** awaiting speculative decoder prewarm (total prewarm **32.576 s**). Second Send-to-final **5.506 s**. Send-to-audio was **38.405 / 10.422 s**. This restores preparation performance, not instant first-turn response or a controlled cold-cache distribution.
+- Logs show speculative prewarm completed before encoder entry on both turns. The background action occurred after prewarm completed, so cancellation during active prewarm remains unqualified. No asset/cache reset, decoder-policy change, model transfer, public-default promotion or new fallback.
+
 ## Current UX and lifecycle follow-up
 
 This section records the current behavior after the Phase 5 UI feedback. The historical checkpoints below retain their original evidence and wording.
@@ -163,7 +199,24 @@ The diagnostic patch changes no ASR settings or UI. Correlate results with `asr_
 
 ## Logs
 
-A scoped `idevicesyslog -u "$DEVICE_UDID" --no-colors -x -p Mural` capture can run detached while the user tests. Keep its PID/evidence file, and stop only that process afterward. New local timing events use notice level with content-free numbers. Inspect `asr_ready`, `capture_started`, `asr_send`, `asr_final`, model/TTS events, and `OpenAI request attempted`. System logs may redact or omit events; absence in an incomplete log is not proof of zero requests. Never log keys, raw microphone audio, or personal transcript text intentionally.
+Use log-first paired debugging so the user does not have to transcribe diagnostics:
+
+1. Before another replay, inspect the installing session (use `session-reader` when its ID/path is supplied) and the relevant existing `.build/verification/` reports, build commands and Mural logs. Search known evidence directories first, not the entire home directory. Ignored `.build/` files may be invisible to the indexed search tools; use scoped `rg -n` on the exact evidence files when needed.
+2. For a new phone check, discover the device and check for an existing `idevicesyslog` capture. Reuse it only after confirming its command/UDID, output file and liveness; record the starting byte offset/time to separate fresh evidence. Never signal an old PID without verifying ownership and do not start duplicate captures.
+3. If no suitable capture exists, start the following in the background before launch/reproduction (never as a persistent foreground tool call). Keep a finite test window; record PID, command, start time, output path and who owns cleanup. Stop an owned capture after the batch or agreed timeout.
+
+   ```sh
+   : "${EVIDENCE:?Set a fresh local evidence directory}"
+   : "${DEVICE_UDID:?Discover the paired phone first}"
+   nohup idevicesyslog -u "$DEVICE_UDID" --no-colors -x -p Mural \
+     > "$EVIDENCE/mural-device.log" 2>&1 < /dev/null &
+   printf '%s\n' "$!" > "$EVIDENCE/mural-device-log.pid"
+   ```
+
+4. Verify the capture actually receives fresh Mural events, not just `[connected]`. Keep Device Hub fully closed for microphone checks. Give one short batch through `interview`; ask the user only for “done”, the failing step/approximate time, and audible or visible behavior absent from logs. Collect timings and device screenshots yourself when available. Never imply continuous observation between replies.
+5. Read the fresh slice and correlate the app PID/timestamps with build identity and `local_talk_asr_backend`, `asr_assets_ready`, `asr_prewarmed`, `asr_model_timing`, `asr_ready`, staged decoder/turn events, `capture_started`, `asr_send`, `asr_final`, tutor/TTS events and memory warnings. Inspect `OpenAI request attempted` when checking the local/premium boundary. Save only focused evidence and distinguish observed, human-confirmed and blocked results.
+
+`idevicesyslog` streams current device logs; it does not recover arbitrary past activity. This regression's old timings were recoverable because an earlier session had already saved a capture on the Mac. If evidence is missing/redacted, request one targeted replay with capture ready rather than guessing. App/framework logs and screenshots can still contain personal information: keep them local/uncommitted, do not intentionally log keys, raw audio or personal transcripts, and never silently collect a device-wide archive. Absence in an incomplete capture is not proof of success or zero provider requests.
 
 ## Approved WhisperKit comparison (human gate pending)
 

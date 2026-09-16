@@ -132,8 +132,16 @@ enum LocalSpeechVoice {
     private var playbackStartedAt: Double?
     private let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
 
+    nonisolated static var conversationASRBackend: String {
+        #if canImport(CoreAI)
+        if PhoWhisperStagedEncoder.enabled { return "Core AI GPU-preferred encoder + Core ML decoder (staged)" }
+        #endif
+        return "WhisperKit / Core ML (eager)"
+    }
+
     override init() {
         super.init()
+        logger.notice("local_talk_asr_backend backend=\(Self.conversationASRBackend, privacy: .public)")
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
         #if canImport(CoreAI)

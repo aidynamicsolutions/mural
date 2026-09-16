@@ -208,6 +208,8 @@ struct TalkView: View {
             }
             DisclosureGroup("On-device details & diagnostics") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("ASR backend: \(LocalConversationEngine.conversationASRBackend)")
+                        .accessibilityIdentifier("local-asr-backend")
                     Text("PhoWhisper CS FP16 → Apple tutor → English system voice. Tap Record only after Mural finishes speaking; tap Send when done.")
                     Text("Microphone is off except while recording. On-device conversations do not end for inactivity; tap End when you are done.")
                     Text("Silence can produce invented text and an unsolicited tutor reply. Recognition is accepted for MVP with this known limitation; silence detection is not implemented.")
