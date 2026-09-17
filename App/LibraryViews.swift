@@ -7,7 +7,7 @@ import MuralCore
 
 enum OnDeviceSpeechVoiceCatalog {
     static let preferenceKey = "localTTSVoiceIdentifier"
-    static let preferredLanguage = "en-US"
+    static let fallbackLanguage = "en-US"
     private static let logger = Logger(subsystem: "no.william.mural", category: "LocalTTS")
 
     struct Option: Identifiable, Hashable {
@@ -30,8 +30,8 @@ enum OnDeviceSpeechVoiceCatalog {
             .filter(isEligible)
             .sorted { lhs, rhs in
                 if lhs.language != rhs.language {
-                    if lhs.language == preferredLanguage { return true }
-                    if rhs.language == preferredLanguage { return false }
+                    if lhs.language == fallbackLanguage { return true }
+                    if rhs.language == fallbackLanguage { return false }
                     let leftLocale = localeName(for: lhs.language)
                     let rightLocale = localeName(for: rhs.language)
                     let localeOrder = leftLocale.localizedCaseInsensitiveCompare(rightLocale)
@@ -56,7 +56,18 @@ enum OnDeviceSpeechVoiceCatalog {
     }
 
     static func bestAvailableOption(from options: [Option]) -> Option? {
-        options.first(where: { $0.language == preferredLanguage }) ?? options.first
+        let region = deviceRegionCode
+        return options.sorted { lhs, rhs in
+            if lhs.qualityRank != rhs.qualityRank { return lhs.qualityRank > rhs.qualityRank }
+            let leftMatchesRegion = region != nil && regionCode(for: lhs.language) == region
+            let rightMatchesRegion = region != nil && regionCode(for: rhs.language) == region
+            if leftMatchesRegion != rightMatchesRegion { return leftMatchesRegion }
+            let localeOrder = lhs.localeName.localizedCaseInsensitiveCompare(rhs.localeName)
+            if localeOrder != .orderedSame { return localeOrder == .orderedAscending }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.id < rhs.id
+        }.first
     }
 
     static func resolvedVoice() -> AVSpeechSynthesisVoice? {
@@ -68,9 +79,9 @@ enum OnDeviceSpeechVoiceCatalog {
             return voice
         }
         let voices = availableVoices()
-        let voice = voices.first(where: { $0.language == preferredLanguage })
-            ?? voices.first
-            ?? AVSpeechSynthesisVoice(language: preferredLanguage)
+        let voice = bestAvailableVoice(from: voices)
+            ?? deviceRegionCode.flatMap { AVSpeechSynthesisVoice(language: "en-\($0)") }
+            ?? AVSpeechSynthesisVoice(language: fallbackLanguage)
         if let voice { logSelection(voice, mode: "best-available") }
         return voice
     }
@@ -92,7 +103,7 @@ enum OnDeviceSpeechVoiceCatalog {
 
     static func logEnglishCatalog() {
         let voices = AVSpeechSynthesisVoice.speechVoices().filter(isEnglish)
-        logger.notice("voice_catalog_begin count=\(voices.count, privacy: .public)")
+        logger.notice("voice_catalog_begin count=\(voices.count, privacy: .public) device_region=\(deviceRegionCode ?? "none", privacy: .public)")
         for voice in voices.sorted(by: { $0.identifier < $1.identifier }) {
             var traits: [String] = []
             if voice.voiceTraits.contains(.isNoveltyVoice) { traits.append("novelty") }
@@ -104,8 +115,35 @@ enum OnDeviceSpeechVoiceCatalog {
         logger.notice("voice_catalog_end")
     }
 
+    private static var deviceRegionCode: String? {
+        Locale.autoupdatingCurrent.region?.identifier
+    }
+
+    private static func regionCode(for language: String) -> String? {
+        Locale(identifier: language).region?.identifier
+    }
+
+    private static func bestAvailableVoice(from voices: [AVSpeechSynthesisVoice]) -> AVSpeechSynthesisVoice? {
+        let region = deviceRegionCode
+        return voices.sorted { lhs, rhs in
+            let leftRank = qualityRank(lhs.quality)
+            let rightRank = qualityRank(rhs.quality)
+            if leftRank != rightRank { return leftRank > rightRank }
+            let leftMatchesRegion = region != nil && regionCode(for: lhs.language) == region
+            let rightMatchesRegion = region != nil && regionCode(for: rhs.language) == region
+            if leftMatchesRegion != rightMatchesRegion { return leftMatchesRegion }
+            let leftLocale = localeName(for: lhs.language)
+            let rightLocale = localeName(for: rhs.language)
+            let localeOrder = leftLocale.localizedCaseInsensitiveCompare(rightLocale)
+            if localeOrder != .orderedSame { return localeOrder == .orderedAscending }
+            let nameOrder = displayName(lhs.name).localizedCaseInsensitiveCompare(displayName(rhs.name))
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.identifier < rhs.identifier
+        }.first
+    }
+
     private static func logSelection(_ voice: AVSpeechSynthesisVoice, mode: String) {
-        logger.notice("tts_voice_selected mode=\(mode, privacy: .public) name=\(voice.name, privacy: .public) identifier=\(voice.identifier, privacy: .public) language=\(voice.language, privacy: .public) quality=\(qualityLabel(voice.quality), privacy: .public)")
+        logger.notice("tts_voice_selected mode=\(mode, privacy: .public) name=\(voice.name, privacy: .public) identifier=\(voice.identifier, privacy: .public) language=\(voice.language, privacy: .public) quality=\(qualityLabel(voice.quality), privacy: .public) device_region=\(deviceRegionCode ?? "none", privacy: .public)")
     }
 
     private static func isEnglish(_ voice: AVSpeechSynthesisVoice) -> Bool {
@@ -496,10 +534,8 @@ struct SettingsView: View {
                     }
                     Button("Get more Apple voices", systemImage: "arrow.down.circle") { showingVoiceUpgrade = true }
                         .accessibilityIdentifier("local-voice-upgrade")
-                    Button("Refresh installed voices", systemImage: "arrow.clockwise") { refreshLocalVoices() }
-                        .accessibilityIdentifier("local-voice-refresh")
                 } header: { Text("On-device voice") } footer: {
-                    Text("Best available prefers the highest-quality English (US) voice. Choose any installed English accent manually; Siri voices appear when iOS exposes them to third-party speech synthesis.")
+                    Text("Best available prefers Premium, then Enhanced, then Standard. Within the highest available quality, it prefers a voice matching your iPhone region. You can also pin any installed English accent manually.")
                 }
                 Section {
                     LearningLanguagePicker(coordinator: coordinator)
@@ -650,9 +686,11 @@ private struct LocalVoicePickerView: View {
                         Spacer()
                         if selection.isEmpty { Image(systemName: "checkmark").fontWeight(.semibold) }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("local-voice-best-available")
             } header: { Text("Automatic") } footer: {
-                Text("Best available stays with English (US) when one is installed, preferring Premium, then Enhanced, then Standard.")
+                Text("Best available prefers Premium, then Enhanced, then Standard. Within the highest available quality, your iPhone region wins the tie.")
             }
 
             ForEach(languages, id: \.self) { language in
@@ -671,6 +709,8 @@ private struct LocalVoicePickerView: View {
                                 Spacer()
                                 if selection == option.id { Image(systemName: "checkmark").fontWeight(.semibold) }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                 }
@@ -711,7 +751,7 @@ private struct LocalVoiceUpgradeView: View {
                     }
                     .accessibilityIdentifier("local-voice-upgrade-done")
                 } footer: {
-                    Text("Best available continues to prefer English (US). To use Lee, another regional accent, or a Siri voice, select it explicitly in Mural after iOS exposes it.")
+                    Text("Best available prefers the highest-quality English voice and uses your iPhone region as a tie-breaker. To pin Lee, another regional accent, or a Siri voice, select it explicitly after iOS exposes it.")
                 }
             }
             .navigationTitle("Get more Apple voices")
