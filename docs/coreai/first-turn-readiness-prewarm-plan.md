@@ -1,13 +1,13 @@
 # First-turn readiness and staged decoder prewarm handoff
 
-Status: **implementation prepared for `coreai-hybrid-product-gate`; physical-device qualification is still required.**
+Status: **early-start implementation retained after five early/late physical-device trial pairs; cold-start benefit remains bounded by one cold observation.**
 
 ## Goal
 
 Remove two avoidable sources of first-turn friction in On-device Talk without changing ASR quality, decoder policy, model weights, model precision, tokenizer behavior, frontend behavior, fallback policy, or the default build backend:
 
 1. Do not invoke the local meaning model for the fixed application-authored greeting `Hi! What did you do today?`. Its Vietnamese meaning is deterministic and can be served as an immutable built-in cache entry.
-2. Start a decoder-only Core ML prewarm only after the greeting has finished speaking. Let that work overlap the user's thinking/recording time, then require it to drain before the staged Core AI encoder begins after Send.
+2. Start a decoder-only Core ML prewarm as the greeting begins. Let that work overlap the greeting and the user's thinking/recording time, then require it to drain before the staged Core AI encoder begins after Send.
 
 ## Required ownership and safety invariants
 
@@ -23,10 +23,10 @@ Remove two avoidable sources of first-turn friction in On-device Talk without ch
 ## Intended first-turn timeline
 
 1. Prepare verifies local assets and tokenizer as before.
-2. Mural appends and speaks the fixed greeting.
-3. TTS finishes.
-4. The fixed Vietnamese meaning is rendered synchronously from the built-in cache, so no meaning-model load gates Record.
-5. Decoder-only speculative prewarm starts after TTS has finished; Record remains enabled.
+2. Mural appends and begins speaking the fixed greeting.
+3. Decoder-only speculative prewarm starts with the greeting; Record remains enabled.
+4. TTS finishes.
+5. The fixed Vietnamese meaning is rendered synchronously from the built-in cache, so no meaning-model load gates Record.
 6. User records while decoder prewarm may continue.
 7. User taps Send; accepted microphone packets drain and resampling completes.
 8. ASR awaits the exact speculative decoder-prewarm task. If it failed, surface the existing turn failure rather than silently retrying/falling back.
@@ -84,7 +84,7 @@ Latest user testing accepts the background-restoration correction. Treat that as
 ## Success criteria
 
 - Record becomes available as soon as the fixed greeting TTS/start task finishes; no initial meaning-model loading gate remains.
-- Speculative decoder prewarm begins only after greeting TTS finishes.
+- Speculative decoder prewarm begins with greeting TTS, not after it.
 - Recording can proceed while speculative prewarm runs.
 - Send waits for speculative prewarm to finish before the Core AI encoder begins.
 - Existing staged quality and decode settings are unchanged.

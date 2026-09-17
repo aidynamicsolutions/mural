@@ -182,6 +182,9 @@ enum LocalSpeechVoice {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 completion = continuation
+                #if canImport(CoreAI)
+                startStagedDecoderPrewarmIfNeeded()
+                #endif
                 synthesizer.speak(current)
             }
         } onCancel: {
@@ -225,7 +228,7 @@ enum LocalSpeechVoice {
             if let gap = self.sendToPlaybackSeconds {
                 self.logger.notice("local_audio_started send_to_audio_seconds=\(gap, privacy: .public)")
             }
-            self.logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public)")
+            self.logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public) uptime=\(time, privacy: .public)")
         }
     }
 
@@ -235,11 +238,10 @@ enum LocalSpeechVoice {
             guard let self, self.utterance === utterance else { return }
             self.playbackDurationSeconds = self.playbackStartedAt.map { time - $0 }
             if let start = self.playbackStartedAt { self.onPlayback?(start, time, true) }
-            self.logger.notice("tts_finished")
+            self.logger.notice("tts_finished uptime=\(time, privacy: .public)")
             self.utterance = nil
             let pending = self.completion; self.completion = nil
             self.releaseAudio()
-            self.startStagedDecoderPrewarmIfNeeded()
             pending?.resume()
         }
     }
@@ -251,12 +253,13 @@ enum LocalSpeechVoice {
         }
     }
 
+    #if canImport(CoreAI)
     private func startStagedDecoderPrewarmIfNeeded() {
-        #if canImport(CoreAI)
         guard PhoWhisperStagedEncoder.enabled, stagedDecoderWarmup == nil, let whisper else { return }
+        logger.notice("asr_staged_decoder_schedule schedule=with-greeting")
         stagedDecoderWarmup = Task { try await whisper.prewarmStagedDecoder() }
-        #endif
     }
+    #endif
 
     private func activateAudio(category: AVAudioSession.Category) async throws {
         await audioRelease?.value
@@ -738,7 +741,7 @@ enum LocalSpeechVoice {
             guard usesStagedEncoder, let directory = stagedDirectory else { return }
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             let started = ProcessInfo.processInfo.systemUptime
-            logger.notice("asr_staged_decoder_speculative_begin")
+            logger.notice("asr_staged_decoder_speculative_begin uptime=\(started, privacy: .public)")
             let decoder = TextDecoder()
             defer { decoder.unloadModel() }
             do {
