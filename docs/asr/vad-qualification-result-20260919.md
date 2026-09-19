@@ -2,9 +2,9 @@
 
 ## Disposition
 
-**INCOMPLETE. VAD DEFAULT REMAINS OFF.** The user accepted the targeted fast silence UX and asked to retain it despite the recorded memory warnings. This is not a memory-safety pass. See the follow-up below; the original matrix results retain their original source/build identity.
+**TARGETED FIX HUMAN-ACCEPTED; BROAD QUALIFICATION REMAINS INCOMPLETE.** The user approved VAD gate as the normal default and accepted the documented memory-warning risk. A later aggregate policy passed the focused room-silence, fan, breathing/movement, quiet Yes and quiet No block. This is not a memory-safety, lifecycle, offline or full-matrix pass. See the follow-ups below; the original matrix results retain their original source/build identity.
 
-The opt-in Silero gate prevented the known hallucinated silence turn in the bounded gate check and preserved one quiet short answer. It did not satisfy the complete qualification: observation classified the prescribed fan-noise and breathing/movement cases as speech, the second quiet short answer was not run, and lifecycle/offline coverage was stopped at the user's request. No threshold, Whisper heuristic, ASR precision, decoder policy, model, package, or default-mode change was made.
+The initial opt-in Silero gate prevented low-probability silence hallucinations but allowed brief fan, breathing and room-noise spikes to reach ASR. The focused follow-up replaces the single-window decision with the mean of the three strongest windows, while retaining the same VAD model, per-window threshold and ASR. The original qualification remained incomplete when that policy was selected.
 
 ## Source and build identity
 
@@ -79,7 +79,7 @@ No memory-warning or native-abort event appeared in the original `e545ee6` matri
 
 Not run or incomplete: quiet No in gate, full gate matrix, boundary speech, End/background cancellation, fresh cached offline launch/Prepare, deterministic same-byte FP8/PAL8 replay, and promoted-default replay. Radios were not deliberately disabled for a recorded offline arm. The existing local facility was not shown to provide the required same-byte retained-pipeline replay, so deterministic replay is not claimed.
 
-The initial threshold cannot reject the prescribed fan and breathing/movement cases. Raising it was not attempted because no complete corrected-threshold matrix was authorized or run. Default remains off. The gate is useful as an explicit experiment for ordinary silence, but this result is not approval for ordinary-use promotion.
+The initial single-window policy could not reject the prescribed fan and breathing/movement cases. Raising only the per-window threshold was not attempted because their peak probabilities overlapped real quiet speech. The later user-approved default promotion and aggregate-policy follow-up are recorded below; they do not retroactively complete the original matrix.
 
 ## Follow-up: fast notice and memory-warning investigation
 
@@ -106,4 +106,24 @@ Tested follow-up executable: `fa9fbc8f2da3e8c9525c186d5df63769978032c4cc848de340
 - `swift test`: **77 passed**. Focused ASR source-contract checks: **6 passed**, including the unchanged warning stop/latch and corrected recovery text. These source checks do not simulate actual memory pressure. Retained Release build passed.
 - The new warning message itself was not displayed on the phone because no warning recurred. No warning was injected into the personal device, and no safety check was bypassed.
 
-Evidence remains local under `.build/verification/memory-warning-20260919-171606/` and the original `vad-20260919-162329-530/fast-reject/`. Owned log captures were stopped. Memory-pressure root cause remains open; no cache/data reset, model/package change, default promotion, or claim of a warning-free soak was made. The original missing full-matrix and offline evidence is not filled by these brief replays.
+Evidence remains local under `.build/verification/memory-warning-20260919-171606/` and the original `vad-20260919-162329-530/fast-reject/`. Owned log captures were stopped. Memory-pressure root cause remains open; no cache/data reset, model/package change or claim of a warning-free soak was made. No default promotion had occurred at this follow-up stage. The original missing full-matrix and offline evidence is not filled by these brief replays.
+
+## Follow-up: default gate and transient-noise policy
+
+The user explicitly approved making gate mode the normal default, with `--asr-vad=off` retained as the rollback. Commit `a84a24a2e65b36010ea63f6d95ab9e42488ba468` made that mode change. A normal launch with no VAD argument confirmed `mode=gate`, but two room/fan silence attempts still reached ASR because the initial policy accepted any single window at or above `0.30`. Their maximum probabilities were `0.345215` and `0.582031`; the latter had only one active 256 ms window. Both produced the known Vietnamese hallucination. An additional attempt with user-reported deliberate noise reached `0.823730` and also produced text; it remains labeled rather than replacing either failure.
+
+The tested correction in `04f6fbdab2227838921547818ed91b394d321d17` keeps the `0.30` window threshold for evidence and requires the mean of the three strongest windows to be at least `0.85`. Replay tests over the recorded probability rows reject the prior fan, breathing and room-noise cases while preserving the recorded quiet Yes and quiet No cases. This is an aggregate Silero-only rule, not a Whisper threshold or combined gate.
+
+The selected Release executable SHA-256 was `5fc4cad46f7085e105213acb1fdbb2da65d66abde55f323cc64a94ce36203292`. It used the retained FP8/PAL8 ASR and `prewarm=always`, launched without a VAD argument, and logged `mode=gate`, window threshold `0.30` and speech-score threshold `0.85`.
+
+Focused human phone block:
+
+- Normal room silence: rejected, `0.042859 s` Send-to-final.
+- Usual fan without speech: rejected, `0.035968 s`.
+- Breathing and ordinary movement without words: rejected, `0.043010 s`.
+- Quiet Yes: accepted, speech score `0.978841`, `2.580201 s`.
+- Quiet No: accepted, speech score `0.939779`, `2.929009 s`.
+- Human result: all five passed. No memory warning appeared in the scoped capture.
+- `swift test`: 78 passed, including 13 policy tests. Final-review source checks: 10 passed. Selected Release build passed.
+
+Evidence is local under `.build/verification/vad-default-20260919-175401/` and `.build/verification/vad-score-candidate-20260919-180822/`; all owned captures were stopped. Remaining gaps include full boundary/lifecycle/offline replay, especially unusually brief speech that does not produce three strong windows, and the unresolved prior memory-warning cause.
