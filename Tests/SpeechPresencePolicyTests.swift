@@ -30,45 +30,58 @@ final class SpeechPresencePolicyTests: XCTestCase {
         XCTAssertNil(result.firstActiveSample)
     }
 
-    func testAnySingleActiveWindowPreservesShortBurstsAtEveryPosition() {
-        // Synthetic probabilities test policy semantics, NOT recognition of quiet Yes/No.
+    func testOneBriefSpikeRejectsAtEveryPosition() {
         for position in 0..<12 {
             var probabilities = Array(repeating: Float(0.001), count: 12)
-            probabilities[position] = SpeechPresencePolicy.threshold
+            probabilities[position] = 1
             let result = evidence(probabilities, tail: 2944) // 3 s.
-            XCTAssertFalse(result.wouldReject)
+            XCTAssertTrue(result.wouldReject)
             XCTAssertEqual(result.activeWindows, 1)
             XCTAssertEqual(result.firstActiveSample, position * 4096)
         }
     }
 
-    func testOneSampleActiveTailIsNotDroppedOrCountedAs256Milliseconds() {
+    func testOneSampleActiveTailIsTrackedButCannotQualifySpeech() {
         let result = evidence([0, 0.8], tail: 1)
-        XCTAssertFalse(result.wouldReject)
+        XCTAssertTrue(result.wouldReject)
         XCTAssertEqual(result.activeWindowSamples, 1)
         XCTAssertEqual(result.firstActiveSample, 4096)
         XCTAssertEqual(result.lastActiveSampleExclusive, 4097)
     }
 
-    func testInitialAndFinalSilenceDoNotUndoSpeechEvidence() {
-        let result = evidence([0, 0.6, 0, 0, 0.8, 0])
+    func testInitialAndFinalSilenceDoNotUndoThreeStrongWindows() {
+        let result = evidence([0, 0.9, 0.9, 0, 0.9, 0])
         XCTAssertFalse(result.wouldReject)
-        XCTAssertEqual(result.activeWindows, 2)
-        XCTAssertEqual(result.activeWindowSamples, 8192)
+        XCTAssertEqual(result.activeWindows, 3)
+        XCTAssertEqual(result.activeWindowSamples, 12_288)
         XCTAssertEqual(result.firstActiveSample, 4096)
-        XCTAssertEqual(result.lastActiveSampleExclusive, 20480)
-        XCTAssertEqual(result.meanProbability, 1.4 / 6, accuracy: 0.000001)
+        XCTAssertEqual(result.lastActiveSampleExclusive, 20_480)
+        XCTAssertEqual(result.speechScore, 0.9, accuracy: 0.000001)
     }
 
-    func testNoDurationOrVolumeMinimum() {
-        let result = evidence([0.31], tail: 320) // A 20 ms capture is not rejected by length.
-        XCTAssertFalse(result.wouldReject)
-        XCTAssertEqual(result.activeWindowSamples, 320)
+    func testFewerThanThreeWindowsCannotQualifySpeech() {
+        XCTAssertTrue(evidence([1], tail: 320).wouldReject)
+        XCTAssertTrue(evidence([1, 1], tail: 320).wouldReject)
+        XCTAssertFalse(evidence([1, 1, 1], tail: 320).wouldReject)
     }
 
-    func testThresholdBoundary() {
-        XCTAssertTrue(evidence([SpeechPresencePolicy.threshold.nextDown]).wouldReject)
-        XCTAssertFalse(evidence([SpeechPresencePolicy.threshold]).wouldReject)
+    func testSpeechScoreBoundary() {
+        XCTAssertTrue(evidence(Array(repeating: SpeechPresencePolicy.speechScoreThreshold.nextDown, count: 3)).wouldReject)
+        XCTAssertFalse(evidence(Array(repeating: SpeechPresencePolicy.speechScoreThreshold, count: 3)).wouldReject)
+    }
+
+    func testRecordedFanAndBreathingRejectWhileQuietYesAndNoPass() {
+        let fan: [Float] = [0.058594, 0.042480, 0.156738, 0.160645, 0.853516, 0.430664, 0.229492, 0.194824, 0.139160, 0.033691, 0.014160, 0.012207, 0.009766, 0.007324, 0.003906, 0.004395, 0.002441]
+        let breathing: [Float] = [0.053223, 0.045898, 0.045410, 0.039062, 0.990723, 0.993164, 0.424805, 0.113281, 0.065918, 0.043457, 0.020996, 0.036621, 0.023438, 0.013184, 0.013672, 0.016113, 0.006348, 0.004395]
+        let roomNoise: [Float] = [0.086426, 0.044922, 0.037598, 0.041992, 0.028809, 0.026367, 0.041992, 0.036133, 0.088379, 0.085449, 0.040039, 0.013672, 0.039062, 0.209961, 0.032715, 0.077637, 0.582031, 0.241211, 0.036621]
+        let quietYes: [Float] = [0.064941, 0.032715, 1, 1, 0.925781, 0.823242, 0.225586]
+        let quietNo: [Float] = [0.063965, 0.031738, 0.029785, 0.029785, 0.999512, 1, 0.769043, 0.237305, 0.229492]
+
+        XCTAssertTrue(evidence(fan, tail: 1664).wouldReject)
+        XCTAssertTrue(evidence(breathing, tail: 3968).wouldReject)
+        XCTAssertTrue(evidence(roomNoise, tail: 1472).wouldReject)
+        XCTAssertFalse(evidence(quietYes, tail: 2624).wouldReject)
+        XCTAssertFalse(evidence(quietNo, tail: 2432).wouldReject)
     }
 
     func testMissingEvidenceFailsOpen() {
@@ -110,10 +123,11 @@ final class SpeechPresencePolicyTests: XCTestCase {
     }
 
     func testEvidenceDoesNotLeakBetweenTurns() {
-        let first = evidence([1])
-        let second = evidence([0])
+        let first = evidence([1, 1, 1])
+        let second = evidence([0, 0, 0])
         XCTAssertFalse(first.wouldReject)
         XCTAssertTrue(second.wouldReject)
         XCTAssertEqual(second.activeWindows, 0)
+        XCTAssertEqual(second.speechScore, 0)
     }
 }

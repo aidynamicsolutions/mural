@@ -790,7 +790,7 @@ enum LocalSpeechVoice {
                     defaultThreshold: SpeechPresencePolicy.threshold, computeUnits: .cpuAndNeuralEngine))
                 try Task.checkCancellation()
                 vad = prepared
-                logger.notice("asr_vad_prepared mode=\(self.vadMode.rawValue, privacy: .public) model=\(ModelNames.VAD.sileroVadFile, privacy: .public) threshold=\(SpeechPresencePolicy.threshold, privacy: .public) permitted=CPU_AND_NE")
+                logger.notice("asr_vad_prepared mode=\(self.vadMode.rawValue, privacy: .public) model=\(ModelNames.VAD.sileroVadFile, privacy: .public) threshold=\(SpeechPresencePolicy.threshold, privacy: .public) speech_score_threshold=\(SpeechPresencePolicy.speechScoreThreshold, privacy: .public) permitted=CPU_AND_NE")
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -830,7 +830,7 @@ enum LocalSpeechVoice {
                 VietnameseEnglishRecognizer.logMemory(stage: "vad-end", model: ModelNames.VAD.sileroVadFile)
                 let elapsed = ProcessInfo.processInfo.systemUptime - started
                 let rejected = evidence.rejects(in: vadMode)
-                logger.notice("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) duration_seconds=\(Double(samples.count) / 16000, privacy: .public) windows=\(evidence.windowCount, privacy: .public) max_probability=\(evidence.maxProbability, privacy: .public) mean_probability=\(evidence.meanProbability, privacy: .public) active_windows=\(evidence.activeWindows, privacy: .public) active_window_seconds=\(Double(evidence.activeWindowSamples) / 16000, privacy: .public) first_active_sample=\(evidence.firstActiveSample ?? -1, privacy: .public) last_active_sample_exclusive=\(evidence.lastActiveSampleExclusive ?? -1, privacy: .public) complete=\(evidence.complete, privacy: .public) would_reject=\(evidence.wouldReject, privacy: .public) rejected=\(rejected, privacy: .public) analysis_seconds=\(elapsed, privacy: .public)")
+                logger.notice("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) duration_seconds=\(Double(samples.count) / 16000, privacy: .public) windows=\(evidence.windowCount, privacy: .public) max_probability=\(evidence.maxProbability, privacy: .public) mean_probability=\(evidence.meanProbability, privacy: .public) speech_score=\(evidence.speechScore, privacy: .public) active_windows=\(evidence.activeWindows, privacy: .public) active_window_seconds=\(Double(evidence.activeWindowSamples) / 16000, privacy: .public) first_active_sample=\(evidence.firstActiveSample ?? -1, privacy: .public) last_active_sample_exclusive=\(evidence.lastActiveSampleExclusive ?? -1, privacy: .public) complete=\(evidence.complete, privacy: .public) would_reject=\(evidence.wouldReject, privacy: .public) rejected=\(rejected, privacy: .public) analysis_seconds=\(elapsed, privacy: .public)")
                 return !rejected
             } catch is CancellationError {
                 logger.notice("asr_vad_cancelled id=\(turnID.uuidString, privacy: .public)")

@@ -4,7 +4,8 @@ import Foundation
 public enum SpeechPresencePolicy {
     public static let sampleRate = 16_000
     public static let chunkSize = 4_096 // FluidAudio 0.15.7 Silero, not upstream's 512.
-    public static let threshold: Float = 0.30 // Hypothesis, NOT device-qualified.
+    public static let threshold: Float = 0.30
+    public static let speechScoreThreshold: Float = 0.85 // Mean of the three strongest windows.
 
     public enum Mode: String, Sendable {
         case off, observe, gate
@@ -37,6 +38,9 @@ public enum SpeechPresencePolicy {
         public private(set) var maxProbability: Float = 0
         public private(set) var valid = true
         private var probabilitySum: Double = 0
+        private var strongestProbability: Float = 0
+        private var secondStrongestProbability: Float = 0
+        private var thirdStrongestProbability: Float = 0
 
         public init(sampleCount: Int) {
             self.sampleCount = sampleCount
@@ -54,6 +58,16 @@ public enum SpeechPresencePolicy {
             windowCount += 1
             probabilitySum += Double(probability)
             maxProbability = max(maxProbability, probability)
+            if probability > strongestProbability {
+                thirdStrongestProbability = secondStrongestProbability
+                secondStrongestProbability = strongestProbability
+                strongestProbability = probability
+            } else if probability > secondStrongestProbability {
+                thirdStrongestProbability = secondStrongestProbability
+                secondStrongestProbability = probability
+            } else if probability > thirdStrongestProbability {
+                thirdStrongestProbability = probability
+            }
             if probability >= threshold {
                 activeWindows += 1
                 activeWindowSamples += count // Never count repeat-last padding as captured audio.
@@ -63,9 +77,12 @@ public enum SpeechPresencePolicy {
         }
 
         public var meanProbability: Double { windowCount == 0 ? 0 : probabilitySum / Double(windowCount) }
+        public var speechScore: Float {
+            windowCount < 3 ? 0 : (strongestProbability + secondStrongestProbability + thirdStrongestProbability) / 3
+        }
         public var complete: Bool { valid && processedSamples == sampleCount }
-        // One brief active window is enough. Missing/invalid evidence cannot reject speech.
-        public var wouldReject: Bool { complete && activeWindows == 0 }
+        // Three strong windows preserve tested quiet Yes/No while rejecting observed fan and breathing spikes.
+        public var wouldReject: Bool { complete && speechScore < speechScoreThreshold }
         public func rejects(in mode: Mode) -> Bool { mode == .gate && wouldReject }
     }
 }
