@@ -99,9 +99,13 @@ struct TalkView: View {
                     MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing)
                         .frame(width: typeSize.isAccessibilitySize ? 170 : 220, height: typeSize.isAccessibilitySize ? 180 : 222).padding(.vertical, 8)
                     Text(coordinator.status).font(.system(.caption, design: .rounded)).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
-                        .contentTransition(.numericText()).padding(.top, 6).padding(.bottom, 16).accessibilityAddTraits(.updatesFrequently)
+                        .contentTransition(.numericText()).padding(.top, 6).accessibilityAddTraits(.updatesFrequently)
                         .accessibilityIdentifier("conversation-status")
-                    captionArea
+                    if let notice = coordinator.notice {
+                        Text(notice).font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
+                            .padding(.top, 6).accessibilityIdentifier("conversation-notice")
+                    }
+                    captionArea.padding(.top, 16)
                     Spacer(minLength: 12)
                     if coordinator.isLocal { localControls } else { controls }
                     HStack(spacing: 24) {
@@ -117,9 +121,6 @@ struct TalkView: View {
                                 .accessibilityIdentifier("new-conversation").disabled(!coordinator.canChangeMode)
                         }
                     }.font(.caption).padding(.top, 6).padding(.bottom, 12)
-                    if let notice = coordinator.notice {
-                        Text(notice).font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center).padding(.bottom, 12)
-                    }
                 }.padding(.horizontal, 30).frame(maxWidth: .infinity).frame(minHeight: geometry.size.height)
             }.scrollIndicators(.hidden)
         }
