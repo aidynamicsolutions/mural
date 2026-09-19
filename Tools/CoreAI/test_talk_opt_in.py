@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the real Talk backend gate and diagnostic for each build configuration."""
+"""Compile the default Talk backend and diagnostic for each build configuration."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,19 +14,19 @@ swift = ('import Foundation\nenum PhoWhisperStagedEncoder {\n    static var enab
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / 'check.swift'
     path.write_text(swift)
-    for name, flags, without_flag, with_flag in [
-        ('release', [], 'false', 'false'),
-        ('debug', ['-D', 'DEBUG'], 'false', 'true'),
-        ('opt-in-release', ['-D', 'MURAL_COREAI_TALK'], 'true', 'true'),
+    for name, flags in [
+        ('release', []),
+        ('debug', ['-D', 'DEBUG']),
+        ('legacy-flag-release', ['-D', 'MURAL_COREAI_TALK']),
     ]:
         binary = Path(directory) / name
         subprocess.run(['xcrun', 'swiftc', *flags, str(path), '-o', str(binary)], check=True, timeout=60)
-        for args, expected in [([], without_flag), (['--coreai-talk-gpu'], with_flag)]:
+        for args in [[], ['--coreai-talk-gpu']]:
             result = subprocess.run([str(binary), *args], check=True, capture_output=True, text=True, timeout=10)
             enabled, description, coreai_available = result.stdout.strip().splitlines()
-            assert enabled == expected, (name, args, result.stdout)
+            assert enabled == 'true', (name, args, result.stdout)
             expected_description = ('Core AI GPU-preferred encoder + Core ML decoder (staged)'
-                                    if expected == 'true' and coreai_available == 'true'
+                                    if coreai_available == 'true'
                                     else 'WhisperKit / Core ML (eager)')
             assert description == expected_description, (name, args, result.stdout)
-print('PASS: six backend gate/diagnostic cases; Release requires build opt-in, not a launch flag')
+print('PASS: six default backend/diagnostic cases; no launch or build opt-in required')

@@ -1,0 +1,32 @@
+import Foundation
+
+/// Offline qualification policy only. Does not load models, retain a decoder,
+/// select a compute unit, change decoding, or clear a memory-warning latch.
+enum DecoderTrialPolicy {
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    static func once(_ arguments: [String]) throws -> Bool {
+        let prefix = "--coreai-w8-v3-prewarm="
+        let flags = arguments.filter { $0.hasPrefix("--coreai-w8-v3-prewarm") }
+        guard flags.count <= 1 else { throw Failure(message: "Duplicate decoder prewarm policy") }
+        guard let flag = flags.first else { return false }
+        guard [prefix + "always", prefix + "once"].contains(flag) else {
+            throw Failure(message: "Decoder prewarm policy must be always or once")
+        }
+        let encoders = arguments.filter { $0.hasPrefix("--coreai-w8-v3-encoder=") }
+        let decoders = arguments.filter { $0.hasPrefix("--coreai-w8-v3-decoder=") }
+        guard encoders == ["--coreai-w8-v3-encoder=fp8"], decoders.count == 1,
+              ["--coreai-w8-v3-decoder=pal8", "--coreai-w8-v3-decoder=pal6"].contains(decoders[0]) else {
+            throw Failure(message: "Prewarm experiment requires the fixed FP8 encoder and explicit PAL8/PAL6 decoder")
+        }
+        let modes = arguments.filter { $0.hasPrefix("--coreai-product-mode=") }
+        let productRequested = arguments.contains { $0.hasPrefix("--coreai-product-") }
+        guard !productRequested || modes == ["--coreai-product-mode=staged-gpu"] else {
+            throw Failure(message: "Prewarm experiment requires sequential staged-gpu corpus mode or live Talk")
+        }
+        return flag == prefix + "once"
+    }
+}

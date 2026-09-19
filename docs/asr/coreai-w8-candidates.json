@@ -1,0 +1,116 @@
+{
+  "status": "blocked-AOT-cache-identity-collision",
+  "compiler": "coreai-build 3600.83.1",
+  "candidates": {
+    "fp8": {
+      "versions": {
+        "coreai-core": "1.0.0b2",
+        "coreai-torch": "0.4.1",
+        "coreai-opt": "0.2.1",
+        "numpy": "2.3.5",
+        "ml-dtypes": "0.6.0",
+        "torch": "2.11.0"
+      },
+      "source_fingerprint": "fd6ea079176fe51b39a81caab1ac0856e59977e2f7e14bad6b81fbd7635c5db6",
+      "merged_weights_sha256": "264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a",
+      "base": "vinai/PhoWhisper-large@b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb",
+      "adapter": "rinhoooo/phowhisper-large-vien-cs-asr@a98f55e0f42b2c4f1e71b3348a2b917fac0a7328",
+      "license": "See source model and adapter licenses",
+      "configuration": {
+        "qscheme": "symmetric",
+        "granularity": "per_channel",
+        "scale_dtype": null,
+        "weight_num_threshold": 1024,
+        "in_place": false,
+        "activation_quantization": false
+      },
+      "eligible": {
+        "tensors": 194,
+        "elements": 634368000,
+        "source_precision_bytes": 1268736000
+      },
+      "ineligible_float_constants": {
+        "tensors": 299,
+        "elements": 2416646,
+        "source_precision_bytes": 4833294
+      },
+      "compressed": {
+        "tensors": 194,
+        "elements": 634368000,
+        "source_precision_bytes": 1268736000
+      },
+      "eligible_remaining_uncompressed": {
+        "tensors": 0,
+        "elements": 0,
+        "source_precision_bytes": 0
+      },
+      "output_fingerprint": "712e032244b9f5d78bf85769055413f13a34fc056f561d71eb5412a73269b2dc",
+      "exported_bytes": 640120936,
+      "exported_compression_ops": 194,
+      "source_main_hash": "b4836dc796f598e1da91d5bd38b4e4ffe16d7bc28355f2f2ed82871ed9c04205",
+      "aot": {
+        "path": ".build/coreai/w8-fp8-pc-v1/aot/phowhisper-cs-fp8-pc-v1.encoder.h18p.aimodelc",
+        "fingerprint": "cf920ab8ee572096f6dbc6adc0480999e1b4d95fdabcc4227845152d259274ef",
+        "bytes": 640470615,
+        "main_hash": "14b1d7cc210fb36aee5c885ff13c8256e0daa8e9c9e66d3e75d4f6fee7de0f8f",
+        "command": "xcrun coreai-build compile .build/coreai/w8-fp8-pc-v1/phowhisper-cs-fp8-pc-v1.encoder.aimodel --platform iOS --min-deployment-version 27.0 --preferred-compute gpu --architecture h18p --output .build/coreai/w8-fp8-pc-v1/aot"
+      },
+      "qualification": "blocked: same AOT main.hash as other candidate; native cache can return wrong weights"
+    },
+    "int8": {
+      "versions": {
+        "coreai-core": "1.0.0b2",
+        "coreai-torch": "0.4.1",
+        "coreai-opt": "0.2.1",
+        "numpy": "2.3.5",
+        "ml-dtypes": "0.6.0",
+        "torch": "2.11.0"
+      },
+      "source_fingerprint": "fd6ea079176fe51b39a81caab1ac0856e59977e2f7e14bad6b81fbd7635c5db6",
+      "merged_weights_sha256": "264f797eebbf19149673112abe6ff00edcdfccb5c357a1108a327d2060d9d82a",
+      "base": "vinai/PhoWhisper-large@b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb",
+      "adapter": "rinhoooo/phowhisper-large-vien-cs-asr@a98f55e0f42b2c4f1e71b3348a2b917fac0a7328",
+      "license": "See source model and adapter licenses",
+      "configuration": {
+        "qscheme": "symmetric",
+        "granularity": "per_channel",
+        "scale_dtype": null,
+        "weight_num_threshold": 1024,
+        "in_place": false,
+        "activation_quantization": false
+      },
+      "eligible": {
+        "tensors": 194,
+        "elements": 634368000,
+        "source_precision_bytes": 1268736000
+      },
+      "ineligible_float_constants": {
+        "tensors": 299,
+        "elements": 2416646,
+        "source_precision_bytes": 4833294
+      },
+      "compressed": {
+        "tensors": 194,
+        "elements": 634368000,
+        "source_precision_bytes": 1268736000
+      },
+      "eligible_remaining_uncompressed": {
+        "tensors": 0,
+        "elements": 0,
+        "source_precision_bytes": 0
+      },
+      "output_fingerprint": "87e587d30c60d9bd403e01e42390030442cf9d389d96d28071952e89152f19c3",
+      "exported_bytes": 640126161,
+      "exported_compression_ops": 194,
+      "source_main_hash": "7a629ccc2ac913f1aecad51e4e2d5349423874b5ce1bbd36c5cedfa001daf216",
+      "aot": {
+        "path": ".build/coreai/w8-int8-pc-v1/aot/phowhisper-cs-int8-pc-v1.encoder.h18p.aimodelc",
+        "fingerprint": "4f14f0195c12bd8fbde152e30170c601bddb726b57a2724ccdc6dfa5e40b6ff6",
+        "bytes": 1273955343,
+        "main_hash": "14b1d7cc210fb36aee5c885ff13c8256e0daa8e9c9e66d3e75d4f6fee7de0f8f",
+        "command": "xcrun coreai-build compile .build/coreai/w8-int8-pc-v1/phowhisper-cs-int8-pc-v1.encoder.aimodel --platform iOS --min-deployment-version 27.0 --preferred-compute gpu --architecture h18p --output .build/coreai/w8-int8-pc-v1/aot"
+      },
+      "qualification": "blocked: same AOT main.hash as other candidate; native cache can return wrong weights"
+    }
+  }
+}

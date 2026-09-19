@@ -28,7 +28,7 @@ def encode(value):
     return json.dumps(str(value), ensure_ascii=False)
 
 sources, refs = [], []
-for file in sorted((root/'App').rglob('*.swift')):
+for file in sorted([*(root/'App').rglob('*.swift'), root/'Tools/CoreAI/W8IdentityVerifier.swift']):
     path = str(file.relative_to(root))
     ref = add(path, 'PBXFileReference', lastKnownFileType='sourcecode.swift', path=path, sourceTree='<group>')
     refs.append(ref); sources.append(add(path+'build','PBXBuildFile',fileRef=ref))

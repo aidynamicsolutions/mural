@@ -1,5 +1,20 @@
 # Core AI PhoWhisper migration tools
 
+## Current W8 trial: blocked on AOT cache identity
+
+See [implementation checkpoint](../../docs/asr/coreai-w8-implementation-checkpoint.md)
+and [candidate manifests](../../docs/asr/coreai-w8-candidates.json). The separate
+`compress_phowhisper_encoder.py` exports audited FP8/INT8 weights from the frozen
+source encoder using `compression-requirements.lock.txt` in an isolated Python
+3.11 environment. The original exporter and environment remain unchanged.
+
+Both candidates AOT-compiled and produced finite encoder-only phone output, but
+their identical compiled `main.hash` caused native cache aliasing. Compressed
+candidate loading is now fail-closed. Do not remove the guard, delete caches,
+or treat a cache hit as weight-identity proof. Decoder/PAL8/live qualification
+remains blocked. The historical sections below are not instructions to repeat
+failed native runs.
+
 This directory contains the staged migration of Mural's accepted
 `phowhisper-cs-fp16-v1` model from WhisperKit/Core ML to Core AI.
 

@@ -1,4 +1,4 @@
-#if DEBUG && canImport(CoreAI)
+#if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
 import CoreAI
 import ArgmaxCore
 #endif
@@ -17,7 +17,7 @@ import WhisperKit
 
     init() {
         let args = ProcessInfo.processInfo.arguments
-        #if DEBUG && canImport(CoreAI)
+        #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
         let coreAIProbeRequested = CoreAIASRProbe.requested
         #else
         let coreAIProbeRequested = false
@@ -41,7 +41,7 @@ import WhisperKit
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG && canImport(CoreAI)
+            #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
             if CoreAIASRProbe.requested {
                 CoreAIASRProbeView().preferredColorScheme(.light)
             } else {
@@ -54,7 +54,7 @@ import WhisperKit
     }
 }
 
-#if DEBUG && canImport(CoreAI)
+#if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
 /// Development-only parity runner. Normal Talk/On-device still uses WhisperKit/Core ML.
 private actor CoreAIPhoWhisper {
     struct AssetTiming: Codable, Sendable {
@@ -190,6 +190,8 @@ private actor CoreAIPhoWhisper {
     private var productModel: AIModel?
     private var productFunction: InferenceFunction?
     private var productInput: NDArrayDescriptor?
+    private var productV3Identity: W8RuntimeIdentitySpec?
+    private var productV3ChallengeInput: NDArrayDescriptor?
     private var productSuppressionTokens: [Int] = []
     private var productCancellationController: ProductCancellationController?
     private var productRunDirectory: URL?
@@ -488,7 +490,7 @@ private actor CoreAIPhoWhisper {
     }
 
     private static func loadAsset(_ url: URL, options: SpecializationOptions = .default,
-                                  requireCached: Bool = false) async throws
+                                  requireCached: Bool = false, functionName: String = "main") async throws
       -> (model: AIModel, function: InferenceFunction, timing: AssetTiming) {
         let logger = Logger(subsystem: "no.william.mural", category: "CoreAIProductGate")
         var stage = "cache-access"
@@ -514,11 +516,11 @@ private actor CoreAIPhoWhisper {
             }
             let start = ProcessInfo.processInfo.systemUptime
             stage = "function-load"
-            logger.notice("coreai_function_load_begin asset=\(url.lastPathComponent, privacy: .public)")
-            guard let function = try model.loadFunction(named: "main") else {
-                throw ProbeError("Missing main function in \(url.lastPathComponent).")
+            logger.notice("coreai_function_load_begin asset=\(url.lastPathComponent, privacy: .public) function=\(functionName, privacy: .public)")
+            guard let function = try model.loadFunction(named: functionName) else {
+                throw ProbeError("Missing \(functionName) function in \(url.lastPathComponent).")
             }
-            logger.notice("coreai_function_load_complete asset=\(url.lastPathComponent, privacy: .public)")
+            logger.notice("coreai_function_load_complete asset=\(url.lastPathComponent, privacy: .public) function=\(functionName, privacy: .public)")
             return (
                 model, function,
                 AssetTiming(
@@ -740,6 +742,14 @@ private actor CoreAIPhoWhisper {
             v.copyElements(fromContentsOf: values)
         default: throw ProbeError("Unsupported Core AI float input \(a.scalarType).")
         }
+    }
+
+    private static func fillFloat16(_ a: inout NDArray, values: [Float16]) throws {
+        guard a.scalarType == .float16, values.count == a.shape.reduce(1, *) else {
+            throw ProbeError("FP16 input size/type mismatch.")
+        }
+        var view = a.mutableView(as: Float16.self)
+        view.copyElements(fromContentsOf: values)
     }
 
     private func event(_ stage: String, fields: [String: Any] = [:]) throws {
@@ -1120,11 +1130,11 @@ private actor CoreAIPhoWhisper {
 
     static var requested: Bool {
         ProcessInfo.processInfo.arguments.contains("--coreai-asr-probe") ||
-            CoreAIPhoWhisper.productGateRequested
+            CoreAIPhoWhisper.productGateRequested || W8TinyProbe.requested
     }
     static var autoRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("--coreai-asr-auto") ||
-            CoreAIPhoWhisper.productGateRequested
+            CoreAIPhoWhisper.productGateRequested || W8TinyProbe.requested
     }
 
     private(set) var running = false
@@ -1161,13 +1171,24 @@ private actor CoreAIPhoWhisper {
     }
 
     func run() async {
-        guard !running else { return }
+        guard !running, memoryWarnings == 0 else { return }
         running = true; defer { running = false }
-        error = nil; results = []; preparation = nil; whisperKitProof = nil; productGate = nil; memoryWarnings = 0; status = "Preparing split Core AI PhoWhisper…"
+        error = nil; results = []; preparation = nil; whisperKitProof = nil; productGate = nil; status = "Preparing split Core AI PhoWhisper…"
         runDirectory = URL.documentsDirectory.appending(path: "CoreAI/PhoWhisper/Runs/\(UUID().uuidString)")
         do {
             guard let runDirectory else { throw CoreAIPhoWhisper.ProbeError("Missing run directory.") }
             try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
+            if W8TinyProbe.requested {
+                status = "Running tiny cache isolation (no speech)"
+                try writeReport(directory: runDirectory, error: nil)
+                try await W8TinyProbe.shared.run(directory: runDirectory,
+                    warningCount: { @MainActor [weak self] in self?.memoryWarnings ?? 1 })
+                status = ProcessInfo.processInfo.arguments.contains("--w8-tiny-source")
+                    ? "Tiny source diagnostic complete (not an AOT isolation pass)"
+                    : "Tiny cache isolation complete"
+                try writeReport(directory: runDirectory, error: nil)
+                return
+            }
             let directory = try Self.fixturesDirectory()
             try writeReport(directory: directory, error: nil)
             if CoreAIPhoWhisper.productGateRequested {
@@ -1241,7 +1262,7 @@ private actor CoreAIPhoWhisper {
         } catch {
             self.error = error.localizedDescription
             status = "Core AI ASR probe failed"
-            if let directory = try? Self.fixturesDirectory() {
+            if let directory = runDirectory {
                 try? writeReport(directory: directory, error: error.localizedDescription)
             }
         }
@@ -1389,6 +1410,8 @@ extension CoreAIPhoWhisper {
         let lifecycle: String
         let sequence: [String]
         let cancelAt: String?
+        let candidate: PhoWhisperStagedEncoder.CompressionCandidate?
+        let selection: PhoWhisperStagedEncoder.Selection
 
         static func resolve() throws -> Self {
             let args = ProcessInfo.processInfo.arguments
@@ -1423,8 +1446,29 @@ extension CoreAIPhoWhisper {
                 return result.first
             }
             let mode = try one("--coreai-product-mode=") ?? "hybrid"
-            guard ["baseline", "hybrid", "encoder-only", "encoder-gpu-only", "decoder-only", "encoder-rebuild-only", "staged", "staged-gpu"].contains(mode) else {
+            guard ["baseline", "hybrid", "encoder-only", "encoder-gpu-only", "decoder-only", "encoder-rebuild-only", "staged", "staged-gpu", "staged-gpu-encode"].contains(mode) else {
                 throw ProbeError("Unknown product-gate mode.")
+            }
+            let selection = try PhoWhisperStagedEncoder.resolveSelection()
+            let compressed = selection.legacy
+            if compressed != nil && !["staged-gpu", "staged-gpu-encode"].contains(mode) {
+                throw ProbeError("Compression candidates require the sequential GPU-preferred owner.")
+            }
+            if let v3 = selection.v3 {
+                if v3.supportIdentity == "phowhisper-cs-pal6-g16-v1" {
+                    guard ["staged-gpu", "staged-gpu-encode"].contains(mode) else {
+                        throw ProbeError("PAL6 decoder trial requires sequential GPU encoding.")
+                    }
+                }
+                guard v3.format != "pal6" || ["staged-gpu", "staged-gpu-encode"].contains(mode) else {
+                    throw ProbeError("PAL6 qualification requires the sequential GPU-preferred owner.")
+                }
+                guard ["hybrid", "staged-gpu", "staged-gpu-encode", "encoder-only", "encoder-gpu-only"].contains(mode) else {
+                    throw ProbeError("The v3 selection requires an encoder-owning product mode.")
+                }
+                guard v3.identity.kind == "encoder", v3.identity.transport == "packed" else {
+                    throw ProbeError("The product gate accepts only the audited packed v3 encoder.")
+                }
             }
             if args.contains("--coreai-product-coexistence"), !mode.hasPrefix("staged") {
                 throw ProbeError("Coexistence qualification requires staged mode.")
@@ -1432,6 +1476,12 @@ extension CoreAIPhoWhisper {
             let corpusCount = args.filter { $0 == "--coreai-product-corpus" }.count
             guard corpusCount <= 1 else { throw ProbeError("Duplicate --coreai-product-corpus.") }
             let corpus = corpusCount == 1
+            if mode == "staged-gpu-encode", corpus {
+                throw ProbeError("Encoder-only qualification uses explicit saved inputs, not the scored corpus.")
+            }
+            if mode == "staged-gpu-encode", args.contains("--coreai-product-coexistence") {
+                throw ProbeError("Encoder-only qualification cannot run a decoder companion.")
+            }
             let rawTurns = try one("--coreai-product-turns=") ?? "1"
             guard let turns = Int(rawTurns), (1...20).contains(turns) else {
                 throw ProbeError("Product-gate turns must be an integer from 1 through 20.")
@@ -1461,8 +1511,13 @@ extension CoreAIPhoWhisper {
                 throw ProbeError("Corpus runs visit all 22 fixtures once; do not combine with a turn count.")
             }
             if mode.hasPrefix("staged") {
-                guard sequence.isEmpty, turns <= 10 else {
-                    throw ProbeError("Staged qualification permits the frozen corpus or up to ten fixture-001 turns.")
+                guard turns <= 10 else {
+                    throw ProbeError("Staged qualification permits up to ten turns.")
+                }
+                if mode != "staged-gpu-encode" {
+                    guard sequence.isEmpty || sequence.allSatisfy({ $0 == "001.wav" }) else {
+                        throw ProbeError("Staged decoder qualification uses the frozen corpus or fixture-001 turns.")
+                    }
                 }
             }
             if mode.hasSuffix("-only") {
@@ -1474,12 +1529,13 @@ extension CoreAIPhoWhisper {
                 throw ProbeError("No bound production encoder fingerprint for architecture \(AIModel.deviceArchitectureName).")
             }
             return Self(mode: mode, corpus: corpus, turns: turns, lifecycle: lifecycle,
-                        sequence: sequence, cancelAt: cancelAt)
+                        sequence: sequence, cancelAt: cancelAt, candidate: compressed, selection: selection)
         }
 
         func withoutCancellation() -> Self {
             Self(mode: mode, corpus: false, turns: 1, lifecycle: "recreate",
-                 sequence: sequence.isEmpty ? ["001.wav"] : [sequence[0]], cancelAt: nil)
+                 sequence: sequence.isEmpty ? ["001.wav"] : [sequence[0]], cancelAt: nil,
+                 candidate: candidate, selection: selection)
         }
     }
 
@@ -1697,13 +1753,14 @@ extension CoreAIPhoWhisper {
         try? productEvent("owned-encoder-output-consumed")
     }
 
-    private func productStageEncoder(_ samples: [Float], support: URL, encoderURL: URL,
+    private func productStageEncoder(_ samples: [Float], support: URL,
+                                     selection: PhoWhisperStagedEncoder.Selection,
                                      gpuPreferred: Bool = false) async throws -> ProductReplayEncoder {
         guard samples.count <= 480_000, !samples.isEmpty, samples.allSatisfy(\.isFinite), productKit == nil else {
             throw ProbeError("Staged encoder requires a short finite fixture with no decoder resident")
         }
         // Cancellation belongs to the outer operation. Always await the underlying scope's return.
-        let worker = Task { try await self.productOwnedEncoderScope(samples, support: support, encoderURL: encoderURL, gpuPreferred: gpuPreferred) }
+        let worker = Task { try await self.productOwnedEncoderScope(samples, support: support, selection: selection, gpuPreferred: gpuPreferred) }
         defer {
             // Also sample the throwing path, after the worker has unwound its local resources.
             try? productEvent("encoder-scope-returned", fields: ["runtimeRetirementVerified": false])
@@ -1717,7 +1774,8 @@ extension CoreAIPhoWhisper {
         return ProductReplayEncoder(hidden: replay.hidden, melHash: replay.melHash, owner: self)
     }
 
-    private func productOwnedEncoderScope(_ samples: [Float], support: URL, encoderURL: URL,
+    private func productOwnedEncoderScope(_ samples: [Float], support: URL,
+                                         selection: PhoWhisperStagedEncoder.Selection,
                                          gpuPreferred: Bool) async throws -> PhoWhisperStagedEncoder.Encoded {
         let mel = FeatureExtractor()
         try await mel.loadModel(at: support.appending(path: "MelSpectrogram.mlmodelc"), computeUnits: .cpuAndGPU)
@@ -1732,23 +1790,83 @@ extension CoreAIPhoWhisper {
             productCompanionStart = nil
             await start()
         }
-        try productEvent("encoder-load-begin", fields: ["gpuPreferred": gpuPreferred])
+        try productEvent("encoder-load-begin", fields: ["gpuPreferred": gpuPreferred,
+            "selection": selection.v3?.format ?? selection.legacy?.rawValue ?? "original"])
         let options: SpecializationOptions = gpuPreferred ? SpecializationOptions(preferredComputeUnitKind: .gpu) : .default
-        let loaded = try await Self.loadAsset(encoderURL, options: options, requireCached: gpuPreferred)
-        try Self.validate(loaded.model, role: "encoder")
-        let descriptor = try Self.inputDescriptor(loaded.model, name: "input_features")
-        guard descriptor.scalarType == .float16, descriptor.shape == [1, 80, 3000] else { throw ProbeError("Staged encoder input contract changed") }
-        try productEvent("encoder-load-complete", fields: ["cacheHit": loaded.timing.cacheHit])
+        // This explicit encoder-only gate may create the new candidate specialization.
+        // It also restores the original GPU specialization after the user's app uninstall.
+        // Talk and decoder/corpus runs still require the existing verified cache entry.
+        let encodeOnly = ProcessInfo.processInfo.arguments.contains("--coreai-product-mode=staged-gpu-encode")
+        let functionName = selection.v3?.identity.entrypoint ?? "main"
+        let loaded = try await Self.loadAsset(selection.encoderURL, options: options,
+            requireCached: gpuPreferred && !encodeOnly, functionName: functionName)
+        let descriptor: NDArrayDescriptor
+        let challengeDescriptor: NDArrayDescriptor?
+        let outputName: String
+        if let v3 = selection.v3 {
+            try v3.identity.requireModel(loaded.model)
+            guard let functionDescriptor = loaded.model.functionDescriptor(for: v3.identity.entrypoint),
+                  case .ndArray(let input) = functionDescriptor.inputDescriptor(of: "input_features"),
+                  case .ndArray(let challenge) = functionDescriptor.inputDescriptor(of: v3.identity.challengeInput),
+                  case .ndArray(let output) = functionDescriptor.outputDescriptor(of: v3.identity.packedOutput),
+                  input.scalarType == .float16, input.shape == v3.identity.inputShape,
+                  challenge.scalarType == .float16, challenge.shape == v3.identity.challengeShape,
+                  output.scalarType == .float16, output.shape == v3.identity.packetShape else {
+                throw ProbeError("Staged v3 encoder ABI changed")
+            }
+            descriptor = input; challengeDescriptor = challenge; outputName = v3.identity.packedOutput
+        } else {
+            try Self.validate(loaded.model, role: "encoder")
+            let input = try Self.inputDescriptor(loaded.model, name: "input_features")
+            guard input.scalarType == .float16, input.shape == [1, 80, 3000] else { throw ProbeError("Staged encoder input contract changed") }
+            descriptor = input; challengeDescriptor = nil; outputName = "encoder_hidden_states"
+        }
+        try productEvent("encoder-load-complete", fields: ["cacheHit": loaded.timing.cacheHit,
+            "cacheLookupSeconds": loaded.timing.cacheLookupSeconds,
+            "specializationSeconds": loaded.timing.specializationSeconds,
+            "functionLoadSeconds": loaded.timing.functionLoadSeconds,
+            "function": functionName])
         try await productRequireNoWarnings()
         var input = NDArray(descriptor: descriptor)
         try Self.fillFloat(&input, values: values)
-        try productEvent("encoder-run-begin")
+        var challenge: [Float16]?
+        var challengeArray: NDArray?
+        if let v3 = selection.v3, let challengeDescriptor {
+            let values = try v3.identity.challenge(seed: productTurnNumber & 31)
+            var array = NDArray(descriptor: challengeDescriptor)
+            try Self.fillFloat16(&array, values: values)
+            challenge = values; challengeArray = array
+        } else {
+            challenge = nil; challengeArray = nil
+        }
+        try productEvent("encoder-run-begin", fields: ["challengeSeed": selection.v3 == nil ? -1 : productTurnNumber & 31])
         await productCancellationController?.reached("encoder")
-        var outputs = try await loaded.function.run(inputs: ["input_features": input])
-        guard let hidden = outputs.remove("encoder_hidden_states")?.ndArray else { throw ProbeError("Staged encoder has no output") }
-        let owned = try Self.copyEncoderOutput(hidden)
+        var inputs: [String: NDArray] = ["input_features": input]
+        if let challengeArray, let v3 = selection.v3 { inputs[v3.identity.challengeInput] = challengeArray }
+        let nativeStarted = ProcessInfo.processInfo.systemUptime
+        var outputs = try await loaded.function.run(inputs: inputs)
+        let nativeSeconds = ProcessInfo.processInfo.systemUptime - nativeStarted
+        let validationStarted = ProcessInfo.processInfo.systemUptime
+        let owned: [Float16]
+        if let v3 = selection.v3 {
+            guard let packet = outputs.remove(outputName)?.ndArray else { throw ProbeError("Staged v3 encoder has no packed output") }
+            let packed = try W8RuntimeIdentitySpec.readFP16(packet, shape: v3.identity.packetShape)
+            owned = try v3.identity.unpack(packed, challenge: challenge ?? [])
+            try productEvent("encoder-response-verified", fields: ["format": v3.format,
+                "challengeSeed": productTurnNumber & 31, "packetElements": packed.count,
+                "nativeSeconds": nativeSeconds,
+                "validationCopySeconds": ProcessInfo.processInfo.systemUptime - validationStarted])
+        } else {
+            guard let hidden = outputs.remove(outputName)?.ndArray else { throw ProbeError("Staged encoder has no output") }
+            owned = try Self.copyEncoderOutput(hidden)
+        }
         productUnderlyingInferenceReturned = true
-        try productEvent("encoder-run-end")
+        if ProcessInfo.processInfo.arguments.contains("--coreai-product-mode=staged-gpu-encode"), let directory = productRunDirectory {
+            let suffix = String(format: "%02d", productTurnNumber)
+            try owned.withUnsafeBytes { try Data($0).write(to: directory.appending(path: "encoder-\(suffix).fp16"), options: .withoutOverwriting) }
+            try values.withUnsafeBytes { try Data($0).write(to: directory.appending(path: "mel-\(suffix).f32"), options: .withoutOverwriting) }
+        }
+        try productEvent("encoder-run-end", fields: ["hiddenElements": owned.count])
         try productEvent("encoder-function-release-begin")
         return PhoWhisperStagedEncoder.Encoded(hidden: owned, melHash: Self.productFloatHash(values))
     }
@@ -1862,20 +1980,25 @@ extension CoreAIPhoWhisper {
         productAfterTranscriptMemory = nil; productEncoderStarted = nil
         productEncoderElapsed = 0; productDecoderElapsed = 0
         productUnderlyingInferenceReturned = false
+        productV3Identity = nil
+        productV3ChallengeInput = nil
         productCancellationController = controller
-        let support = URL.applicationSupportDirectory.appending(
-            path: "PhoWhisperCS/phowhisper-cs-fp16-v1", directoryHint: .isDirectory)
+        let selection = config.selection
+        let compressed = config.candidate
+        let support = selection.supportURL
         let architecture = AIModel.deviceArchitectureName
-        let gpuEncoder = config.mode == "encoder-gpu-only" || config.mode == "staged-gpu"
-        let expectedEncoderHash = gpuEncoder
+        let gpuEncoder = config.mode == "encoder-gpu-only" || config.mode.hasPrefix("staged-gpu") || selection.v3 != nil
+        let expectedEncoderHash = selection.v3?.artifactFingerprint ?? compressed?.fingerprint ?? (gpuEncoder
             ? (architecture == "h18p" ? "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829" : nil)
-            : Self.productEncoderFingerprintByArchitecture[architecture]
+            : Self.productEncoderFingerprintByArchitecture[architecture])
         var report = ProductReport(
             date: Date(), runID: runDirectory.lastPathComponent, mode: config.mode,
             lifecycle: config.lifecycle, requestedTurns: config.turns, corpusRequested: config.corpus,
             expectedCorpusCount: 22, architecture: architecture,
             supportManifestSHA256: "unverified", encoderArtifactSHA256: nil,
-            expectedEncoderArtifactSHA256: expectedEncoderHash, modelPrecision: "FP16",
+            expectedEncoderArtifactSHA256: expectedEncoderHash,
+            modelPrecision: selection.v3.map { "v3 packed \($0.format) encoder, FP16 activations/handoff, decoder=\($0.supportIdentity)" }
+                ?? compressed.map { "\($0.rawValue) weights, FP16 activations/handoff" } ?? "FP16",
             melBoundary: "WhisperKit accepted mel tensor is read without frontend replacement; Core AI boundary is FP16 [1,80,3000]",
             tokenizer: "PhoWhisperTokenizer", decodingOptions: [
                 "task": "transcribe", "detectLanguage": "true", "skipSpecialTokens": "true",
@@ -1886,7 +2009,7 @@ extension CoreAIPhoWhisper {
             preparations: [], turns: [], cancellation: nil, errors: [])
         do {
             let verificationStart = ProcessInfo.processInfo.systemUptime
-            let manifestHash = try productVerifySupport(support)
+            let manifestHash = try productVerifySupport(support, expected: selection.supportManifest)
             var encoderURL: URL?
             var encoderHash: String?
             if config.mode == "hybrid" || config.mode.hasPrefix("staged") || config.mode.hasPrefix("encoder-") {
@@ -1894,7 +2017,7 @@ extension CoreAIPhoWhisper {
                     throw ProbeError("No bound production encoder fingerprint for architecture \(architecture).")
                 }
                 let folder = gpuEncoder ? "PhoWhisperGPU" : "PhoWhisperSplit"
-                let url = URL.applicationSupportDirectory.appending(path:
+                let url = selection.v3?.encoderURL ?? compressed?.url ?? URL.applicationSupportDirectory.appending(path:
                     "CoreAI/\(folder)/phowhisper-cs-fp16-v1.encoder.\(architecture).aimodelc")
                 guard FileManager.default.fileExists(atPath: url.path) else {
                     throw ProbeError("Missing bound Core AI encoder artifact: \(url.path)")
@@ -1935,13 +2058,18 @@ extension CoreAIPhoWhisper {
                 let samples = try await Task.detached {
                     try AudioProcessor.loadAudioAsFloatArray(fromPath: file.path)
                 }.value
+                let stagedASRStarted = ProcessInfo.processInfo.systemUptime
                 let replay: ProductReplayEncoder?
                 if config.mode.hasPrefix("staged") {
-                    guard let encoderURL, try Self.fingerprint(file) == Self.productFrozenAudioSHA256[file.lastPathComponent] else {
+                    guard try Self.fingerprint(file) == Self.productFrozenAudioSHA256[file.lastPathComponent] else {
                         throw ProbeError("Staged qualification requires the frozen fixture and encoder.")
                     }
-                    replay = try await productStageEncoder(samples, support: support, encoderURL: encoderURL, gpuPreferred: gpuEncoder)
+                    replay = try await productStageEncoder(samples, support: support, selection: selection, gpuPreferred: gpuEncoder)
                 } else { replay = nil }
+                if config.mode == "staged-gpu-encode" {
+                    try productEvent("encoder-only-complete", fields: ["candidate": selection.v3?.format ?? compressed?.rawValue ?? "original", "decoderLoaded": false])
+                    continue
+                }
                 let preparation = try await productPrepare(config, support: support,
                     encoderURL: encoderURL, replay: replay, suppression: suppression,
                     assetVerificationSeconds: index == 0 ? assetVerificationSeconds : 0,
@@ -1955,7 +2083,19 @@ extension CoreAIPhoWhisper {
                 let turn = try await productTranscribe(samples, file: file,
                     audioSHA256: audioHash, controller: controller)
                 report.turns.append(turn)
-                if config.mode.hasPrefix("staged"), file.lastPathComponent == "001.wav", !Self.productRecoveryMatches(turn) {
+                if config.mode == "staged-gpu" {
+                    try productEvent("staged-asr-full-complete", fields: [
+                        "file": file.lastPathComponent,
+                        "seconds": ProcessInfo.processInfo.systemUptime - stagedASRStarted,
+                        "scope": "after-audio-read-through-encoder-prepare-decoder-not-UI-send"])
+                }
+                let requireRecovery: Bool
+                if try DecoderTrialPolicy.combined(ProcessInfo.processInfo.arguments) {
+                    requireRecovery = !config.corpus // Joint native 001 gate; corpus differences remain reviewable.
+                } else {
+                    requireRecovery = selection.v3?.format != "pal6" && selection.supportIdentity != "phowhisper-cs-pal6-g16-v1"
+                }
+                if compressed == nil, requireRecovery, config.mode.hasPrefix("staged"), file.lastPathComponent == "001.wav", !Self.productRecoveryMatches(turn) {
                     throw ProbeError("Staged fixture-001 parity failed.")
                 }
                 productWriteReport(report)
@@ -2024,13 +2164,29 @@ extension CoreAIPhoWhisper {
             }
             let options: SpecializationOptions = config.mode == "encoder-gpu-only"
                 ? SpecializationOptions(preferredComputeUnitKind: .gpu) : .default
-            try productEvent("encoder-load-options", fields: ["gpuPreferred": config.mode == "encoder-gpu-only"])
-            let loaded = try await Self.loadAsset(encoderURL, options: options, requireCached: config.mode == "encoder-only")
-            try Self.validate(loaded.model, role: "encoder")
+            let functionName = config.selection.v3?.identity.entrypoint ?? "main"
+            try productEvent("encoder-load-options", fields: ["gpuPreferred": config.mode == "encoder-gpu-only",
+                "function": functionName])
+            let loaded = try await Self.loadAsset(encoderURL, options: options,
+                requireCached: config.mode == "encoder-only", functionName: functionName)
+            if let v3 = config.selection.v3 {
+                try v3.identity.requireModel(loaded.model)
+                guard let descriptor = loaded.model.functionDescriptor(for: v3.identity.entrypoint),
+                      case .ndArray(let input) = descriptor.inputDescriptor(of: "input_features"),
+                      case .ndArray(let challenge) = descriptor.inputDescriptor(of: v3.identity.challengeInput),
+                      case .ndArray(let output) = descriptor.outputDescriptor(of: v3.identity.packedOutput),
+                      input.shape == v3.identity.inputShape, challenge.shape == v3.identity.challengeShape,
+                      output.shape == v3.identity.packetShape else {
+                    throw ProbeError("v3 encoder-only ABI changed")
+                }
+                productV3Identity = v3.identity; productV3ChallengeInput = challenge
+            } else {
+                try Self.validate(loaded.model, role: "encoder")
+            }
             productModel = loaded.model
             productFunction = loaded.function
             try productEvent("encoder-load-complete", fields: ["cacheHit": loaded.timing.cacheHit,
-                "functionLoadSeconds": loaded.timing.functionLoadSeconds])
+                "functionLoadSeconds": loaded.timing.functionLoadSeconds, "function": functionName])
         } else {
             _ = try await productPrepare(config, support: support, encoderURL: nil,
                 suppression: suppression, assetVerificationSeconds: 0, controller: nil, index: 1)
@@ -2055,24 +2211,46 @@ extension CoreAIPhoWhisper {
         var assetTiming: AssetTiming?
         if config.mode == "hybrid" || config.mode.hasPrefix("encoder-") {
             guard let encoderURL else { throw ProbeError("Missing product encoder URL.") }
-            try? productEvent("encoder-load-begin", fields: ["path": encoderURL.path])
-            let loaded = try await Self.loadAsset(encoderURL)
-            try Self.validate(loaded.model, role: "encoder")
-            let input = try Self.inputDescriptor(loaded.model, name: "input_features")
-            guard input.scalarType == .float16, input.shape == [1, 80, 3000] else {
-                throw ProbeError("Product encoder input must remain FP16 [1,80,3000].")
-            }
-            guard let descriptor = loaded.model.functionDescriptor(for: "main"),
-                  case .ndArray(let output) = descriptor.outputDescriptor(of: "encoder_hidden_states"),
-                  output.scalarType == .float16, output.shape == [1, 1500, 1280] else {
-                throw ProbeError("Product encoder output must remain FP16 [1,1500,1280].")
+            try? productEvent("encoder-load-begin", fields: ["path": encoderURL.path,
+                "selection": config.selection.v3?.format ?? config.selection.legacy?.rawValue ?? "original"])
+            let functionName = config.selection.v3?.identity.entrypoint ?? "main"
+            let loaded = try await Self.loadAsset(encoderURL, functionName: functionName)
+            let input: NDArrayDescriptor
+            if let v3 = config.selection.v3 {
+                try v3.identity.requireModel(loaded.model)
+                guard let descriptor = loaded.model.functionDescriptor(for: v3.identity.entrypoint),
+                      case .ndArray(let inputDescriptor) = descriptor.inputDescriptor(of: "input_features"),
+                      case .ndArray(let challenge) = descriptor.inputDescriptor(of: v3.identity.challengeInput),
+                      case .ndArray(let output) = descriptor.outputDescriptor(of: v3.identity.packedOutput),
+                      inputDescriptor.scalarType == .float16, inputDescriptor.shape == v3.identity.inputShape,
+                      challenge.scalarType == .float16, challenge.shape == v3.identity.challengeShape,
+                      output.scalarType == .float16, output.shape == v3.identity.packetShape else {
+                    throw ProbeError("Product v3 encoder ABI changed; no packed output was accepted.")
+                }
+                input = inputDescriptor
+                productV3Identity = v3.identity
+                productV3ChallengeInput = challenge
+            } else {
+                try Self.validate(loaded.model, role: "encoder")
+                let legacyInput = try Self.inputDescriptor(loaded.model, name: "input_features")
+                guard legacyInput.scalarType == .float16, legacyInput.shape == [1, 80, 3000] else {
+                    throw ProbeError("Product encoder input must remain FP16 [1,80,3000].")
+                }
+                guard let descriptor = loaded.model.functionDescriptor(for: "main"),
+                      case .ndArray(let output) = descriptor.outputDescriptor(of: "encoder_hidden_states"),
+                      output.scalarType == .float16, output.shape == [1, 1500, 1280] else {
+                    throw ProbeError("Product encoder output must remain FP16 [1,1500,1280].")
+                }
+                input = legacyInput
+                productV3Identity = nil
+                productV3ChallengeInput = nil
             }
             productModel = loaded.model; productFunction = loaded.function; productInput = input
             assetTiming = loaded.timing
             try? productEvent("encoder-load-complete", fields: [
                 "cacheHit": loaded.timing.cacheHit, "cacheLookupSeconds": loaded.timing.cacheLookupSeconds,
                 "specializationSeconds": loaded.timing.specializationSeconds,
-                "functionLoadSeconds": loaded.timing.functionLoadSeconds])
+                "functionLoadSeconds": loaded.timing.functionLoadSeconds, "function": functionName])
         }
         let activeEncoder: any AudioEncoding
         if let replay { activeEncoder = replay }
@@ -2095,8 +2273,13 @@ extension CoreAIPhoWhisper {
         try Task.checkCancellation()
         try? productEvent("decoder-load/prewarm-begin")
         let prewarmStart = ProcessInfo.processInfo.systemUptime
-        let prewarmTask = Task { try await kit.prewarmModels() }
-        try await prewarmTask.value
+        let reusePrewarm = try DecoderTrialPolicy.once(ProcessInfo.processInfo.arguments) && index > 1
+        if !reusePrewarm {
+            let prewarmTask = Task { try await kit.prewarmModels() }
+            try await prewarmTask.value
+        }
+        try productEvent("decoder-prewarm-policy", fields: ["reused": reusePrewarm,
+            "scope": "same-support-prior-successful-turn-real-load-still-required"])
         let prewarmSeconds = ProcessInfo.processInfo.systemUptime - prewarmStart
         try? productEvent("whisperkit-prewarm-complete", fields: ["seconds": prewarmSeconds,
             "decoderSpecializationSeconds": kit.currentTimings.decoderSpecializationTime,
@@ -2206,7 +2389,20 @@ extension CoreAIPhoWhisper {
             var array = NDArray(descriptor: input)
             try Self.fillFloat(&array, values: values)
             let hidden: [Float16]
-            do {
+            if let identity = productV3Identity, let challengeDescriptor = productV3ChallengeInput {
+                let challenge = try identity.challenge(seed: productTurnNumber & 31)
+                var challengeArray = NDArray(descriptor: challengeDescriptor)
+                try Self.fillFloat16(&challengeArray, values: challenge)
+                var outputs = try await function.run(inputs: ["input_features": array,
+                                                                identity.challengeInput: challengeArray])
+                guard let packet = outputs.remove(identity.packedOutput)?.ndArray else {
+                    throw ProbeError("Missing packed v3 encoder output.")
+                }
+                let packed = try W8RuntimeIdentitySpec.readFP16(packet, shape: identity.packetShape)
+                hidden = try identity.unpack(packed, challenge: challenge)
+                try productEvent("encoder-response-verified", fields: ["format": identity.format,
+                    "challengeSeed": productTurnNumber & 31, "packetElements": packed.count])
+            } else {
                 var outputs = try await function.run(inputs: ["input_features": array])
                 guard let output = outputs.remove("encoder_hidden_states")?.ndArray else {
                     throw ProbeError("Missing Core AI encoder output.")
@@ -2290,6 +2486,8 @@ extension CoreAIPhoWhisper {
         productFunction = nil
         productModel = nil
         productInput = nil
+        productV3Identity = nil
+        productV3ChallengeInput = nil
         productEncoderBusy = false
         try? productEvent("references-released", fields: ["runtimeRetirementVerified": false])
         productState = next
@@ -2320,11 +2518,11 @@ extension CoreAIPhoWhisper {
         try handle.seekToEnd(); try handle.write(contentsOf: data); try handle.synchronize()
     }
 
-    private func productVerifySupport(_ support: URL) throws -> String {
+    private func productVerifySupport(_ support: URL, expected: String = CoreAIPhoWhisper.productSupportManifestSHA256) throws -> String {
         let manifestURL = support.appending(path: "manifest.json")
         let manifest = try Data(contentsOf: manifestURL)
         let hash = Self.sha256(manifest)
-        guard hash == Self.productSupportManifestSHA256 else { throw ProbeError("Accepted support manifest changed.") }
+        guard hash == expected else { throw ProbeError("Accepted support manifest changed.") }
         struct Manifest: Decodable {
             struct File: Decodable { let bytes: Int; let sha256: String }
             let files: [String: File]

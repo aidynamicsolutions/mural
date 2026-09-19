@@ -1,0 +1,16 @@
+{
+  "source_commit": "REPLACE_WITH_ACTUAL_40_HEX_COMMIT_AND_RECORD_ANY_DIFF_SEPARATELY",
+  "app_executable_sha256": "REPLACE_WITH_ACTUAL_64_HEX_EXECUTABLE_DIGEST",
+  "device_model": "REPLACE_WITH_DISCOVERED_MODEL",
+  "os_build": "REPLACE_WITH_ACTUAL_OS_AND_BUILD",
+  "cache_condition": "retained-cache-new-process",
+  "measurement_protocol": "decoder-first-matched-v1",
+  "prewarm_policy": "always",
+  "process_session_id": "REPLACE_WITH_OBSERVED_PID_AND_PROCESS_START_NOT_A_REUSED_LABEL",
+  "launch_arguments": [
+    "--coreai-product-mode=staged-gpu",
+    "--coreai-product-corpus",
+    "--coreai-w8-v3-encoder=fp8",
+    "--coreai-w8-v3-decoder=pal8"
+  ]
+}

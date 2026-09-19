@@ -1,5 +1,17 @@
 # Mural local conversation MVP: implementation plan
 
+## ASR optimization status - 2026-09-19
+
+The selected optimized configuration is **packed-v3 FP8 Core AI encoder + PAL8
+Core ML decoder**, with `prewarm=always`. See the [current ASR index](docs/asr/README.md)
+for exact selection, identity, results and the one final iPhone validation.
+This is now the normal/default On-device Talk path. No build-condition or launch
+argument opt-in is required. The h18p device and pinned asset/ABI checks remain
+safety gates, and incompatible assets fail closed. Earlier ASR experiment
+instructions below are historical, not current work orders.
+Do not restart PAL4/PAL6, conversion, model research or silence/VAD from this plan.
+Unrelated product checkpoints and all historical measured results remain unchanged.
+
 ## Phase 5 follow-up: duplicate Words fix, PENDING HUMAN
 
 - September 15 feedback: breakfast appeared twice after multiple breakfast conversations. Reproduced through the shared archive/projection path: AI definition wording was part of word identity. Identity now uses language + normalized lemma, consolidating existing and future observations without deleting history. Progress is word-level; latest definition/example is shown. Legacy hidden IDs remain honored.

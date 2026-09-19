@@ -114,6 +114,7 @@ enum LocalSpeechVoice {
     private var audioEngine: AVAudioEngine?
     private var capture: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>.Continuation?
     private var generation = UUID()
+    private var trialFirstAudioGeneration: UUID?
     private var submittedAt: Double?
     var lastSubmissionTime: Double? { submittedAt }
     private(set) var sendToPlaybackSeconds: Double?
@@ -227,6 +228,10 @@ enum LocalSpeechVoice {
             self.sendToPlaybackSeconds = self.submittedAt.map { time - $0 }
             if let gap = self.sendToPlaybackSeconds {
                 self.logger.notice("local_audio_started send_to_audio_seconds=\(gap, privacy: .public)")
+                if self.trialFirstAudioGeneration != self.generation {
+                    self.trialFirstAudioGeneration = self.generation
+                    self.logger.notice("asr_trial_audio id=\(self.generation.uuidString, privacy: .public) uptime=\(time, privacy: .public) send_to_audio_seconds=\(gap, privacy: .public)")
+                }
             }
             self.logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public) uptime=\(time, privacy: .public)")
         }
@@ -347,9 +352,9 @@ enum LocalSpeechVoice {
                 let directory: URL
                 switch selected {
                 case .phoWhisper:
-                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-begin", model: "phowhisper-cs-fp16-v1")
+                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-begin", model: "phowhisper-support-pending-verification")
                     directory = try await WhisperRecognizer.localPhoWhisperDirectory()
-                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-end", model: "phowhisper-cs-fp16-v1")
+                    VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-end", model: directory.lastPathComponent)
                 case .parakeet:
                     directory = try await VietnameseEnglishRecognizer.download(repair: repairDownload)
                 case .whisper:
@@ -385,7 +390,7 @@ enum LocalSpeechVoice {
                     self.whisper = recognizer
                     #if canImport(CoreAI)
                     if selected == .phoWhisper, PhoWhisperStagedEncoder.enabled {
-                        self.preparationDetail += " · Experimental Core AI GPU: models load after Send, release after each turn."
+                        self.preparationDetail += " · Experimental Core AI GPU: encoder after Send, decoder prewarm with greeting, release after each turn."
                     } else {
                         self.preparationDetail += String(format: " · Prewarm: %.2f s · Load/tokenizer: %.2f s", timing.prewarm, timing.load)
                     }
@@ -462,6 +467,7 @@ enum LocalSpeechVoice {
                 self.inputDescription = "\(Int(format.sampleRate)) Hz · \(format.channelCount) channel(s) → 16000 Hz mono"
                 self.asrState = .recording
                 self.logger.notice("capture_started model=\(model, privacy: .public) input_hz=\(format.sampleRate, privacy: .public)")
+                self.logger.notice("asr_trial_capture id=\(token.uuidString, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
                 self.limitTask = Task { [weak self] in
                     do { try await Task.sleep(for: .seconds(limit)) } catch { return }
                     guard let self, self.generation == token, self.asrState == .recording else { return }
@@ -483,6 +489,7 @@ enum LocalSpeechVoice {
                 self.asrText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.capturedSeconds = result.seconds
                 self.finalizeSeconds = self.submittedAt.map { ProcessInfo.processInfo.systemUptime - $0 } ?? result.finalizeSeconds
+                self.logger.notice("asr_trial_final id=\(token.uuidString, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) send_to_final_seconds=\(self.finalizeSeconds!, privacy: .public) captured_seconds=\(self.capturedSeconds, privacy: .public)")
                 if self.asrText.isEmpty { self.asrNotice = "No speech recognized. Try another recording." }
                 self.asrState = .ready
                 self.logger.notice("asr_final model=\(model, privacy: .public) captured_seconds=\(result.seconds, privacy: .public) finish_seconds=\(result.finalizeSeconds, privacy: .public) send_to_final_seconds=\(self.finalizeSeconds!, privacy: .public) characters=\(self.asrText.count, privacy: .public)")
@@ -493,6 +500,7 @@ enum LocalSpeechVoice {
                 guard self.generation == token, !Task.isCancelled else { return }
                 self.asrError = error.localizedDescription; self.asrState = .failed
                 self.logger.error("asr_turn_failed")
+                self.logger.error("asr_trial_failure id=\(token.uuidString, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
             }
         }
     }
@@ -504,6 +512,7 @@ enum LocalSpeechVoice {
         stopCapture()
         capture?.finish() // Drain every accepted packet before finish/reset.
         logger.notice("asr_send")
+        logger.notice("asr_trial_send id=\(self.generation.uuidString, privacy: .public) uptime=\(self.submittedAt!, privacy: .public)")
     }
 
     private func stopCapture() {
@@ -614,8 +623,9 @@ enum LocalSpeechVoice {
         private var inferenceCount = 0
         #if canImport(CoreAI)
         private var stagedDirectory: URL?
-        private var stagedEncoderURL: URL?
+        private var stagedSelection: PhoWhisperStagedEncoder.Selection?
         private var stagedTokenizer: (any WhisperTokenizer)?
+        private var stagedDecoderPrewarmedAt: URL? // Only successful prewarm, not a retained model.
         private var usesStagedEncoder: Bool { phoWhisper && PhoWhisperStagedEncoder.enabled }
         #endif
 
@@ -627,10 +637,18 @@ enum LocalSpeechVoice {
         }
 
         @concurrent static func localPhoWhisperDirectory() async throws -> URL {
-            var folder = URL.applicationSupportDirectory.appending(path: "PhoWhisperCS/phowhisper-cs-fp16-v1", directoryHint: .isDirectory)
+            var identity = "phowhisper-cs-fp16-v1"
+            var manifestHash = "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
+            #if canImport(CoreAI)
+            if PhoWhisperStagedEncoder.enabled {
+                let selection = try PhoWhisperStagedEncoder.resolveSelection()
+                identity = selection.supportIdentity
+                manifestHash = selection.supportManifest
+            }
+            #endif
+            var folder = URL.applicationSupportDirectory.appending(path: "PhoWhisperCS/\(identity)", directoryHint: .isDirectory)
             let manifest = try Data(contentsOf: folder.appending(path: "manifest.json"))
-            guard SHA256.hash(data: manifest).map({ String(format: "%02x", $0) }).joined() ==
-                "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52" else { throw CocoaError(.fileReadCorruptFile) }
+            guard SHA256.hash(data: manifest).map({ String(format: "%02x", $0) }).joined() == manifestHash else { throw CocoaError(.fileReadCorruptFile) }
             let files = try JSONDecoder().decode(LocalManifest.self, from: manifest).files
             // Verify the fixed local transfer before loading, off the audio/main threads.
             for (path, expected) in files {
@@ -676,16 +694,17 @@ enum LocalSpeechVoice {
             #if canImport(CoreAI)
             if usesStagedEncoder {
                 let started = ProcessInfo.processInfo.systemUptime
-                let encoderURL = try await PhoWhisperStagedEncoder.verifiedURL()
+                let selection = try await PhoWhisperStagedEncoder.verifiedSelection()
                 struct Generation: Decodable { let suppress_tokens: [Int] }
                 suppressedTokens = try JSONDecoder().decode(Generation.self,
                     from: Data(contentsOf: directory.appending(path: "generation_config.json"))).suppress_tokens
                 let tokenizer = try await PhoWhisperTokenizer.load(from: directory)
                 try Task.checkCancellation()
-                stagedDirectory = directory; stagedEncoderURL = encoderURL; stagedTokenizer = tokenizer
+                stagedDirectory = directory; stagedSelection = selection; stagedTokenizer = tokenizer
+                stagedDecoderPrewarmedAt = nil
                 inferenceCount = 0
                 Logger(subsystem: "no.william.mural", category: "LocalAudio")
-                    .notice("asr_staged_prepared backend=coreai-gpu models_deferred_until_send=true")
+                    .notice("asr_staged_prepared backend=coreai-gpu encoder_deferred_until_send=true decoder_prewarm=with-greeting encoder=\(selection.encoderURL.lastPathComponent, privacy: .public) selection=\(selection.v3?.format ?? selection.legacy?.rawValue ?? "original", privacy: .public) decoder_support=\(selection.supportIdentity, privacy: .public)")
                 return (0, ProcessInfo.processInfo.systemUptime - started)
             }
             #endif
@@ -741,7 +760,7 @@ enum LocalSpeechVoice {
             guard usesStagedEncoder, let directory = stagedDirectory else { return }
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             let started = ProcessInfo.processInfo.systemUptime
-            logger.notice("asr_staged_decoder_speculative_begin uptime=\(started, privacy: .public)")
+            logger.notice("asr_staged_decoder_speculative_begin uptime=\(started, privacy: .public) decoder_support=\(directory.lastPathComponent, privacy: .public)")
             let decoder = TextDecoder()
             defer { decoder.unloadModel() }
             do {
@@ -749,6 +768,7 @@ enum LocalSpeechVoice {
                 try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"),
                                             computeUnits: .cpuAndNeuralEngine, prewarmMode: true)
                 try Task.checkCancellation()
+                stagedDecoderPrewarmedAt = directory
                 logger.notice("asr_staged_decoder_speculative_complete seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
             } catch is CancellationError {
                 logger.notice("asr_staged_decoder_speculative_cancelled")
@@ -760,19 +780,21 @@ enum LocalSpeechVoice {
         }
 
         private func transcribeStaged(_ samples: [Float]) async throws -> String {
-            guard let directory = stagedDirectory, let encoderURL = stagedEncoderURL,
+            guard let directory = stagedDirectory, let selection = stagedSelection,
                   let tokenizer = stagedTokenizer else { throw SpeechError.busy }
             guard samples.count <= 480_000, samples.allSatisfy(\.isFinite) else { throw CaptureError.tooLong }
             guard !samples.isEmpty else { return "" }
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             inferenceCount += 1
             let turn = inferenceCount, started = ProcessInfo.processInfo.systemUptime
-            logger.notice("asr_staged_turn_begin turn=\(turn, privacy: .public)")
+            logger.notice("asr_staged_turn_begin turn=\(turn, privacy: .public) encoder=\(selection.encoderURL.lastPathComponent, privacy: .public) selection=\(selection.v3?.format ?? selection.legacy?.rawValue ?? "original", privacy: .public) decoder_support=\(selection.supportIdentity, privacy: .public)")
             // Always await the scope, even when Stop cancels its outer owner.
-            let encoderTask = Task { try await PhoWhisperStagedEncoder.encode(samples, support: directory, encoderURL: encoderURL) }
+            _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-before-encoder", model: selection.supportIdentity)
+            let encoderTask = Task { try await PhoWhisperStagedEncoder.encode(samples, support: directory, selection: selection, challengeSeed: turn & 31) }
             let encoded = try await encoderTask.value
             try Task.checkCancellation()
             logger.notice("asr_staged_encoder_released turn=\(turn, privacy: .public)")
+            _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-after-encoder-scope", model: selection.supportIdentity)
             let loaded = try await WhisperKit(WhisperKitConfig(modelFolder: directory.path,
                 tokenizerFolder: directory,
                 computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
@@ -784,23 +806,34 @@ enum LocalSpeechVoice {
             do {
                 try Task.checkCancellation()
                 let prewarmStarted = ProcessInfo.processInfo.systemUptime
-                try await loaded.prewarmModels()
+                let reusePrewarm = try DecoderTrialPolicy.once(ProcessInfo.processInfo.arguments)
+                    && stagedDecoderPrewarmedAt == directory
+                if !reusePrewarm {
+                    try await loaded.prewarmModels()
+                    try Task.checkCancellation()
+                    stagedDecoderPrewarmedAt = directory
+                }
                 try Task.checkCancellation()
+                logger.notice("asr_trial_prewarm turn=\(turn, privacy: .public) reused=\(reusePrewarm, privacy: .public)")
                 logger.notice("asr_staged_decoder_send_prewarm_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - prewarmStarted, privacy: .public)")
                 let loadStarted = ProcessInfo.processInfo.systemUptime
                 try await loaded.loadModels()
                 try Task.checkCancellation()
                 logger.notice("asr_staged_decoder_send_load_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - loadStarted, privacy: .public)")
                 guard loaded.textDecoder.logitsSize == 51865 else { throw CocoaError(.fileReadCorruptFile) }
+                _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-decoder-loaded", model: selection.supportIdentity)
                 let decodeStarted = ProcessInfo.processInfo.systemUptime
                 let results = try await loaded.transcribe(audioArray: samples, decodeOptions: decodingOptions())
                 try Task.checkCancellation()
-                logger.notice("asr_staged_decoder_decode_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - decodeStarted, privacy: .public)")
+                logger.notice("asr_staged_decoder_decode_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - decodeStarted, privacy: .public) tokens=\(results.flatMap { $0.segments.flatMap(\.tokens) }.count, privacy: .public) loop_seconds=\(results.reduce(0) { $0 + $1.timings.decodingLoop }, privacy: .public) prediction_seconds=\(results.reduce(0) { $0 + $1.timings.decodingPredictions }, privacy: .public) scope=replay-transcription-not-native-decoder")
+                _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-decoder-finished", model: selection.supportIdentity)
                 let unloadStarted = ProcessInfo.processInfo.systemUptime
                 await loaded.unloadModels()
                 loaded.tokenizer = nil
+                _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-decoder-unloaded", model: selection.supportIdentity)
                 logger.notice("asr_staged_decoder_unload_complete turn=\(turn, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - unloadStarted, privacy: .public)")
-                logger.notice("asr_staged_turn_complete turn=\(turn, privacy: .public) end_to_end_seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+                // Legacy timer key retained for log readers; this excludes the UI Send boundary.
+                logger.notice("asr_staged_turn_complete turn=\(turn, privacy: .public) end_to_end_seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) scope=staged-transcribe-through-unload-not-ui-send")
                 return results.map(\.text).joined(separator: " ")
             } catch {
                 // No fallback or new turn can start until this task and its locals return.
@@ -895,26 +928,225 @@ enum LocalSpeechVoice {
 #if canImport(CoreAI)
 /// Shared frozen tensor/asset contracts; no decoder or provider ownership.
 enum PhoWhisperStagedEncoder {
-    static var enabled: Bool {
-        #if MURAL_COREAI_TALK
-        true
-        #elseif DEBUG
-        ProcessInfo.processInfo.arguments.contains("--coreai-talk-gpu")
-        #else
-        false
-        #endif
+    // Default packed-v3 FP8/PAL8 Talk path. Legacy candidates and diagnostic trials remain explicit.
+    enum CompressionCandidate: String, Sendable {
+        case fp8, int8
+        case originalPAL8 = "original-pal8", fp8PAL8 = "fp8-pal8", int8PAL8 = "int8-pal8"
+        var encoder: String {
+            switch self {
+            case .fp8, .fp8PAL8: "fp8"
+            case .int8, .int8PAL8: "int8"
+            case .originalPAL8: "original"
+            }
+        }
+        var supportIdentity: String {
+            switch self {
+            case .fp8, .int8: "phowhisper-cs-fp16-v1"
+            default: "phowhisper-cs-pal8-g16-v1"
+            }
+        }
+        var supportManifest: String {
+            switch self {
+            case .fp8, .int8: "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
+            default: "430c6b5454ac44e35e69f007683477b2064cf4f92af1011d65485017c0607336"
+            }
+        }
+        var fingerprint: String {
+            switch self {
+            case .fp8, .fp8PAL8: "cf920ab8ee572096f6dbc6adc0480999e1b4d95fdabcc4227845152d259274ef"
+            case .int8, .int8PAL8: "4f14f0195c12bd8fbde152e30170c601bddb726b57a2724ccdc6dfa5e40b6ff6"
+            case .originalPAL8: "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829"
+            }
+        }
+        var url: URL {
+            if self == .originalPAL8 {
+                return URL.applicationSupportDirectory.appending(path:
+                    "CoreAI/PhoWhisperGPU/phowhisper-cs-fp16-v1.encoder.h18p.aimodelc")
+            }
+            return URL.applicationSupportDirectory.appending(path:
+                "CoreAI/PhoWhisperW8/\(encoder)-pc-v1/phowhisper-cs-\(encoder)-pc-v1.encoder.h18p.aimodelc")
+        }
+        static func resolve() throws -> Self? {
+            let flags = ProcessInfo.processInfo.arguments.filter { $0.hasPrefix("--coreai-compressed-encoder=") }
+            guard !flags.isEmpty else { return nil }
+            guard flags.count == 1, let candidate = Self(rawValue: String(flags[0].dropFirst("--coreai-compressed-encoder=".count))),
+                  AIModel.deviceArchitectureName == "h18p" else {
+                throw Failure("Compression trial requires one pinned candidate on an h18p device.")
+            }
+            // coreai-build 3600.83.1 emitted the same AOT main.hash for FP8 and INT8.
+            // AIModelCache then returned INT8 for the FP8 asset. Do not load either
+            // candidate until independently keyed artifacts are qualified. No cache deletion.
+            guard candidate == .originalPAL8 else {
+                throw Failure("Compressed encoder trial blocked: FP8 and INT8 alias the same native cache identity. No model was loaded.")
+            }
+            return candidate
+        }
     }
 
-    @concurrent static func verifiedURL() async throws -> URL {
-        guard AIModel.deviceArchitectureName == "h18p" else {
-            throw Failure("The experimental speech encoder is not qualified for this device. Use the default build.")
+    struct V3Selection: Sendable {
+        let format: String
+        let encoderURL: URL
+        let manifestURL: URL
+        let manifestSHA256: String
+        let artifactFingerprint: String
+        let artifactBytes: Int
+        let identity: W8RuntimeIdentitySpec
+        let supportIdentity: String
+        let supportManifest: String
+        let supportURL: URL
+    }
+
+    struct Selection: Sendable {
+        let encoderURL: URL
+        let encoderFingerprint: String
+        let supportIdentity: String
+        let supportManifest: String
+        let supportURL: URL
+        let legacy: CompressionCandidate?
+        let v3: V3Selection?
+    }
+
+    private struct V3Manifest: Decodable {
+        struct Artifact: Decodable {
+            let path: String
+            let fingerprint: String
+            let bytes: Int
         }
-        let url = URL.applicationSupportDirectory.appending(path:
+        let schema: String
+        let status: String
+        let identity: W8RuntimeIdentitySpec
+        let source: Artifact
+        let aot: Artifact
+    }
+
+    private static let fullManifestPins: [String: String] = [
+        "packed:fp16": "3c87a4cc096d842c2ddb530d23ec2c808c034da5839f1589dde26a13582d9b14",
+        "packed:fp8": "73b160308d7a0d591ce7645eb19c6710f3a9dd301548d0cbb13129c3ab929e13",
+        "packed:int8": "93b4706943dcc5612d67c73d7f6a6ab11acb48fe1d588d7e3510a4133f081acc",
+        "packed:pal6": "b3437340b110c14349cd3f12ae0955adb8254fdc277e263907eaa3d96e651966",
+        "packed:pal4": "96c7c788ec49b76aa8a4d52ac961a1f93869676d05fcb5109eeb8be581bf765f"
+    ]
+
+    static func resolveSelection() throws -> Selection {
+        let arguments = ProcessInfo.processInfo.arguments
+        _ = try DecoderTrialPolicy.once(arguments) // Reject unsupported/ambiguous policy before loading.
+        let encoderFlags = arguments.filter { $0.hasPrefix("--coreai-w8-v3-encoder=") }
+        let decoderFlags = arguments.filter { $0.hasPrefix("--coreai-w8-v3-decoder=") }
+        guard encoderFlags.count <= 1, decoderFlags.count <= 1 else {
+            throw Failure("The v3 encoder and decoder selections must each be specified once.")
+        }
+        if let encoderFlag = encoderFlags.first {
+            guard AIModel.deviceArchitectureName == "h18p" else {
+                throw Failure("The v3 encoder requires an h18p device.")
+            }
+            guard !arguments.contains(where: { $0.hasPrefix("--coreai-compressed-encoder=") }) else {
+                throw Failure("The v3 selection cannot be combined with the old compressed-encoder guard.")
+            }
+            let format = String(encoderFlag.dropFirst("--coreai-w8-v3-encoder=".count))
+            guard ["fp16", "fp8", "int8", "pal6", "pal4"].contains(format) else {
+                throw Failure("The v3 encoder must be fp16, fp8, int8, pal6, or pal4.")
+            }
+            let decoder: String
+            if let decoderFlag = decoderFlags.first {
+                decoder = String(decoderFlag.dropFirst("--coreai-w8-v3-decoder=".count))
+            } else {
+                decoder = "fp16"
+            }
+            guard ["fp16", "pal8", "pal6", "pal4"].contains(decoder) else {
+                throw Failure("The v3 decoder must be fp16, pal8, pal6, or pal4.")
+            }
+            try DecoderTrialPolicy.validatePair(encoder: format, decoder: decoder, arguments: arguments)
+            return try makeV3Selection(format: format, decoder: decoder)
+        }
+        guard decoderFlags.isEmpty else {
+            throw Failure("The v3 decoder selection requires a v3 encoder selection.")
+        }
+        let candidate = try CompressionCandidate.resolve()
+        if candidate == nil && !arguments.contains(where: { $0.hasPrefix("--coreai-product-") }) {
+            return try makeV3Selection(format: "fp8", decoder: "pal8")
+        }
+        let supportIdentity = candidate?.supportIdentity ?? "phowhisper-cs-fp16-v1"
+        let supportManifest = candidate?.supportManifest ?? "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
+        let supportURL = URL.applicationSupportDirectory.appending(path:
+            "PhoWhisperCS/\(supportIdentity)", directoryHint: .isDirectory)
+        let encoderURL = candidate?.url ?? URL.applicationSupportDirectory.appending(path:
             "CoreAI/PhoWhisperGPU/phowhisper-cs-fp16-v1.encoder.h18p.aimodelc")
-        guard try fingerprint(url) == "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829" else {
-            throw Failure("The experimental speech encoder is missing or changed. Use the default build; no automatic repair was attempted.")
+        return Selection(encoderURL: encoderURL,
+                         encoderFingerprint: candidate?.fingerprint ?? "f783c9b539d90a589e1449e514599e240ce6036b3bab6c298858e49bba112829",
+                         supportIdentity: supportIdentity, supportManifest: supportManifest,
+                         supportURL: supportURL, legacy: candidate, v3: nil)
+    }
+
+    private static func makeV3Selection(format: String, decoder: String) throws -> Selection {
+        let supportIdentity: String
+        let supportManifest: String
+        switch decoder {
+        case "pal6": supportIdentity = "phowhisper-cs-pal6-g16-v1"
+            supportManifest = "13f9bbd0d08bf0b6a111f8415ddffad158f8d1fb4e4014c17585066e37fd23bb"
+        case "pal4": supportIdentity = "phowhisper-cs-pal4-g16-v1"
+            supportManifest = "bbdee2a57bbb29e538389364969e75f731dd4f0baf2dd977830f966857095702"
+        case "pal8": supportIdentity = "phowhisper-cs-pal8-g16-v1"
+            supportManifest = "430c6b5454ac44e35e69f007683477b2064cf4f92af1011d65485017c0607336"
+        default: supportIdentity = "phowhisper-cs-fp16-v1"
+            supportManifest = "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
         }
-        return url
+        guard AIModel.deviceArchitectureName == "h18p" else {
+            throw Failure("The v3 encoder requires an h18p device.")
+        }
+        let supportURL = URL.applicationSupportDirectory.appending(path:
+            "PhoWhisperCS/\(supportIdentity)", directoryHint: .isDirectory)
+        let folder = URL.documentsDirectory.appending(path:
+            "CoreAI/W8FullV3/packed/encoder-\(format)", directoryHint: .isDirectory)
+        let manifestURL = folder.appending(path: "manifest.json")
+        let manifestData = try Data(contentsOf: manifestURL)
+        let manifestHash = sha256(manifestData)
+        guard manifestHash == fullManifestPins["packed:\(format)"] else {
+            throw Failure("The v3 \(format) manifest is not the audited pinned manifest.")
+        }
+        let manifest = try JSONDecoder().decode(V3Manifest.self, from: manifestData)
+        guard manifest.schema == "mural-w8-runtime-identity-v3", manifest.status == "aot-static-only",
+              manifest.identity.kind == "encoder", manifest.identity.format == format,
+              manifest.identity.transport == "packed", manifest.source.bytes > 0,
+              manifest.aot.bytes > 0 else {
+            throw Failure("The v3 \(format) manifest is not a packed full encoder artifact.")
+        }
+        try manifest.identity.validate()
+        let sourceURL = folder.appending(path: URL(fileURLWithPath: manifest.source.path).lastPathComponent)
+        let artifactURL = folder.appending(path: "aot/\(URL(fileURLWithPath: manifest.aot.path).lastPathComponent)")
+        guard FileManager.default.fileExists(atPath: sourceURL.path),
+              FileManager.default.fileExists(atPath: artifactURL.path),
+              try bundleBytes(sourceURL) == manifest.source.bytes,
+              try bundleBytes(artifactURL) == manifest.aot.bytes else {
+            throw Failure("The v3 \(format) source or AOT artifact is missing or truncated.")
+        }
+        guard try fingerprint(artifactURL, includeHiddenFiles: true) == manifest.aot.fingerprint else {
+            throw Failure("The v3 \(format) AOT artifact failed its manifest fingerprint.")
+        }
+        let v3 = V3Selection(format: format, encoderURL: artifactURL, manifestURL: manifestURL,
+                             manifestSHA256: manifestHash, artifactFingerprint: manifest.aot.fingerprint,
+                             artifactBytes: manifest.aot.bytes, identity: manifest.identity,
+                             supportIdentity: supportIdentity, supportManifest: supportManifest,
+                             supportURL: supportURL)
+        return Selection(encoderURL: artifactURL, encoderFingerprint: manifest.aot.fingerprint,
+                         supportIdentity: supportIdentity, supportManifest: supportManifest,
+                         supportURL: supportURL, legacy: nil, v3: v3)
+    }
+
+    @concurrent static func verifiedSelection() async throws -> Selection {
+        let selection = try resolveSelection()
+        if selection.v3 == nil {
+            guard AIModel.deviceArchitectureName == "h18p",
+                  try fingerprint(selection.encoderURL) == selection.encoderFingerprint else {
+                throw Failure("The legacy staged encoder is missing, changed, or unqualified for this device. No fallback was attempted.")
+            }
+        }
+        return selection
+    }
+
+    static var enabled: Bool { true }
+
+    @concurrent static func verifiedURL() async throws -> URL {
+        try await verifiedSelection().encoderURL
     }
 
     struct Encoded: Sendable {
@@ -923,6 +1155,15 @@ enum PhoWhisperStagedEncoder {
     }
 
     @concurrent static func encode(_ samples: [Float], support: URL, encoderURL: URL) async throws -> Encoded {
+        let selection = try resolveSelection()
+        guard selection.v3 == nil, selection.encoderURL == encoderURL else {
+            throw Failure("The legacy encoder entry point cannot consume a v3 selection.")
+        }
+        return try await encode(samples, support: support, selection: selection, challengeSeed: 0)
+    }
+
+    @concurrent static func encode(_ samples: [Float], support: URL, selection: Selection,
+                                   challengeSeed: Int) async throws -> Encoded {
         guard !samples.isEmpty, samples.count <= 480_000, samples.allSatisfy(\.isFinite) else {
             throw Failure("Expected finite 16 kHz audio of at most 30 seconds.")
         }
@@ -935,25 +1176,60 @@ enum PhoWhisperStagedEncoder {
         }
         let values = try readAcceptedMel(features)
         let options = SpecializationOptions(preferredComputeUnitKind: .gpu)
-        guard let model = try AIModelCache.default.model(for: encoderURL, options: options) else {
+        guard let model = try AIModelCache.default.model(for: selection.encoderURL, options: options) else {
             throw Failure("The experimental speech encoder cache is unavailable. Use the default build; no automatic specialization or fallback was attempted.")
         }
-        guard let descriptor = model.functionDescriptor(for: "main"),
-              case .ndArray(let inputDescriptor) = descriptor.inputDescriptor(of: "input_features"),
-              inputDescriptor.scalarType == .float16, inputDescriptor.shape == [1, 80, 3000],
-              let function = try model.loadFunction(named: "main") else {
-            throw Failure("The experimental speech encoder could not load its frozen FP16 function.")
-        }
-        var input = NDArray(descriptor: inputDescriptor)
-        do {
+        let hidden: [Float16]
+        if let v3 = selection.v3 {
+            try v3.identity.requireModel(model)
+            guard let descriptor = model.functionDescriptor(for: v3.identity.entrypoint),
+                  case .ndArray(let inputDescriptor) = descriptor.inputDescriptor(of: "input_features"),
+                  case .ndArray(let challengeDescriptor) = descriptor.inputDescriptor(of: v3.identity.challengeInput),
+                  case .ndArray(let outputDescriptor) = descriptor.outputDescriptor(of: v3.identity.packedOutput),
+                  inputDescriptor.scalarType == .float16, inputDescriptor.shape == v3.identity.inputShape,
+                  challengeDescriptor.scalarType == .float16, challengeDescriptor.shape == v3.identity.challengeShape,
+                  outputDescriptor.scalarType == .float16, outputDescriptor.shape == v3.identity.packetShape,
+                  let function = try model.loadFunction(named: v3.identity.entrypoint) else {
+                throw Failure("The v3 speech encoder ABI changed; no hidden output was accepted.")
+            }
+            let challenge = try v3.identity.challenge(seed: challengeSeed & 31)
+            var input = NDArray(descriptor: inputDescriptor)
+            var inputView = input.mutableView(as: Float16.self)
+            inputView.copyElements(fromContentsOf: values.map(Float16.init))
+            var challengeArray = NDArray(descriptor: challengeDescriptor)
+            var challengeView = challengeArray.mutableView(as: Float16.self)
+            challengeView.copyElements(fromContentsOf: challenge)
+            let nativeStart = ProcessInfo.processInfo.systemUptime
+            var outputs = try await function.run(inputs: ["input_features": input,
+                                                            v3.identity.challengeInput: challengeArray])
+            let nativeSeconds = ProcessInfo.processInfo.systemUptime - nativeStart
+            guard let packet = outputs.remove(v3.identity.packedOutput)?.ndArray else {
+                throw Failure("The v3 speech encoder produced no packed output.")
+            }
+            let packed = try W8RuntimeIdentitySpec.readFP16(packet, shape: v3.identity.packetShape)
+            hidden = try v3.identity.unpack(packed, challenge: challenge)
+            guard hidden.count == v3.identity.hiddenCount else {
+                throw Failure("The v3 speech encoder returned the wrong hidden count.")
+            }
+            Logger(subsystem: "no.william.mural", category: "LocalAudio").notice(
+                "asr_staged_v3_encoder_native_complete format=\(v3.format, privacy: .public) seed=\(challengeSeed & 31, privacy: .public) native_seconds=\(nativeSeconds, privacy: .public) validation_copy_seconds=\(ProcessInfo.processInfo.systemUptime - nativeStart - nativeSeconds, privacy: .public)")
+        } else {
+            guard let descriptor = model.functionDescriptor(for: "main"),
+                  case .ndArray(let inputDescriptor) = descriptor.inputDescriptor(of: "input_features"),
+                  inputDescriptor.scalarType == .float16, inputDescriptor.shape == [1, 80, 3000],
+                  let function = try model.loadFunction(named: "main") else {
+                throw Failure("The experimental speech encoder could not load its frozen FP16 function.")
+            }
+            var input = NDArray(descriptor: inputDescriptor)
             var view = input.mutableView(as: Float16.self)
             view.copyElements(fromContentsOf: values.map(Float16.init))
+            var outputs = try await function.run(inputs: ["input_features": input])
+            guard let output = outputs.remove("encoder_hidden_states")?.ndArray else {
+                throw Failure("The speech encoder produced no embeddings.")
+            }
+            hidden = try copyEncoderOutput(output)
         }
-        var outputs = try await function.run(inputs: ["input_features": input])
-        guard let hidden = outputs.remove("encoder_hidden_states")?.ndArray else {
-            throw Failure("The speech encoder produced no embeddings.")
-        }
-        return Encoded(hidden: try copyEncoderOutput(hidden),
+        return Encoded(hidden: hidden,
                        melHash: values.withUnsafeBufferPointer { sha256(Data(buffer: $0)) })
     }
 
@@ -1042,14 +1318,29 @@ enum PhoWhisperStagedEncoder {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    static func fingerprint(_ url: URL) throws -> String {
+    static func bundleBytes(_ url: URL) throws -> Int {
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isSymbolicLink != true else { throw Failure("Symlinks are not diagnostic assets.") }
+        if values.isDirectory == true {
+            return try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil,
+                                                                options: []).reduce(0) { total, child in
+                total + (try bundleBytes(child))
+            }
+        }
+        guard let size = values.fileSize else { throw Failure("Missing artifact file size.") }
+        return size
+    }
+
+    // V3 uses the exporter's complete bundle inventory. Preserve the historical
+    // visible-file-only hash contract for legacy assets; never rewrite their pins.
+    static func fingerprint(_ url: URL, includeHiddenFiles: Bool = false) throws -> String {
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         guard values.isSymbolicLink != true else { throw Failure("Symlinks are not diagnostic assets.") }
         if values.isDirectory == true {
             var children: [String: String] = [:]
             for child in try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil,
-                                                                     options: [.skipsHiddenFiles]) {
-                children[child.lastPathComponent] = try fingerprint(child)
+                                                                     options: includeHiddenFiles ? [] : [.skipsHiddenFiles]) {
+                children[child.lastPathComponent] = try fingerprint(child, includeHiddenFiles: includeHiddenFiles)
             }
             return sha256(try JSONSerialization.data(withJSONObject: children, options: [.sortedKeys, .withoutEscapingSlashes]))
         }
@@ -1067,3 +1358,96 @@ enum PhoWhisperStagedEncoder {
     }
 }
 #endif
+
+/// Explicit offline trials only. No model ownership, cache mutation or default switch.
+enum DecoderTrialPolicy {
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    static let combinedFlag = "--coreai-w8-v3-combined=pal6-pal6"
+    static let combined4Flag = "--coreai-w8-v3-combined=pal4-pal4"
+
+    /// The extra flag is required ONLY for the previously unqualified joint pair.
+    /// The runtime still checks the h18p build, pinned manifests, ABI and response.
+    static func combined(_ arguments: [String]) throws -> Bool {
+        let flags = arguments.filter { $0.hasPrefix("--coreai-w8-v3-combined") }
+        guard flags.count <= 1 else { throw Failure(message: "Duplicate combined precision trial flag") }
+        guard let flag = flags.first else { return false }
+        let pair: (String, String)
+        switch flag {
+        case combinedFlag: pair = ("pal6", "pal6")
+        case combined4Flag: pair = ("pal4", "pal4")
+        default: throw Failure(message: "Unknown combined precision trial")
+        }
+        guard arguments.filter({ $0.hasPrefix("--coreai-w8-v3-encoder=") }) == ["--coreai-w8-v3-encoder=\(pair.0)"],
+              arguments.filter({ $0.hasPrefix("--coreai-w8-v3-decoder=") }) == ["--coreai-w8-v3-decoder=\(pair.1)"],
+              !arguments.contains(where: { $0.hasPrefix("--coreai-compressed-encoder=") }) else {
+            throw Failure(message: "Combined trial requires matching explicit PAL4 or PAL6 encoder and decoder")
+        }
+        let product = arguments.contains { $0.hasPrefix("--coreai-product-") }
+        let modes = arguments.filter { $0.hasPrefix("--coreai-product-mode=") }
+        guard !product || modes == ["--coreai-product-mode=staged-gpu"] ||
+                modes == ["--coreai-product-mode=staged-gpu-encode"] else {
+            throw Failure(message: "Combined trial requires the sequential GPU owner or explicit live Talk")
+        }
+        guard !arguments.contains("--coreai-product-coexistence") else {
+            throw Failure(message: "Combined precision qualification does not authorize concurrent probe companions")
+        }
+        return true
+    }
+
+    static func validatePair(encoder: String, decoder: String, arguments: [String]) throws {
+        let joint = try combined(arguments)
+        guard ["fp16", "fp8", "int8", "pal6", "pal4"].contains(encoder),
+              ["fp16", "pal8", "pal6", "pal4"].contains(decoder) else {
+            throw Failure(message: "Unknown encoder/decoder precision")
+        }
+        guard !joint || (encoder == "pal6" && decoder == "pal6") ||
+                (encoder == "pal4" && decoder == "pal4") else {
+            throw Failure(message: "Combined flag does not match the resolved pair")
+        }
+        guard decoder != "pal6" || encoder == "fp8" || (joint && encoder == "pal6") else {
+            throw Failure(message: "PAL6 decoder requires fixed FP8 or the explicit combined PAL6 trial")
+        }
+        guard decoder != "pal4" || encoder == "fp8" || (joint && encoder == "pal4") else {
+            throw Failure(message: "PAL4 decoder requires fixed FP8 or the explicit combined PAL4 trial")
+        }
+        guard encoder != "pal6" || decoder == "pal8" || (joint && decoder == "pal6") else {
+            throw Failure(message: "PAL6 encoder requires PAL8 or the explicit combined PAL6 trial")
+        }
+        guard encoder != "pal4" || decoder == "pal8" || (joint && decoder == "pal4") else {
+            throw Failure(message: "PAL4 encoder requires PAL8 or the explicit combined PAL4 trial")
+        }
+    }
+
+    static func once(_ arguments: [String]) throws -> Bool {
+        let joint = try combined(arguments) // Reject stray flags even with the default policy.
+        let prefix = "--coreai-w8-v3-prewarm="
+        let flags = arguments.filter { $0.hasPrefix("--coreai-w8-v3-prewarm") }
+        guard flags.count <= 1 else { throw Failure(message: "Duplicate decoder prewarm policy") }
+        guard let flag = flags.first else { return false } // Default is unchanged: always.
+        guard [prefix + "always", prefix + "once"].contains(flag) else {
+            throw Failure(message: "Decoder prewarm policy must be always or once")
+        }
+        let encoders = arguments.filter { $0.hasPrefix("--coreai-w8-v3-encoder=") }
+        let decoders = arguments.filter { $0.hasPrefix("--coreai-w8-v3-decoder=") }
+        let fixedFP8 = encoders == ["--coreai-w8-v3-encoder=fp8"] && decoders.count == 1 &&
+            ["--coreai-w8-v3-decoder=pal8", "--coreai-w8-v3-decoder=pal6", "--coreai-w8-v3-decoder=pal4"].contains(decoders[0])
+        // Explicit always also supports the historical encoder-only controls.
+        let encoderControl = (encoders == ["--coreai-w8-v3-encoder=pal6"] ||
+            encoders == ["--coreai-w8-v3-encoder=pal4"]) &&
+            decoders == ["--coreai-w8-v3-decoder=pal8"] && flag == prefix + "always"
+        guard fixedFP8 || joint || encoderControl else {
+            throw Failure(message: "Prewarm policy requires an explicit qualified precision trial")
+        }
+        let modes = arguments.filter { $0.hasPrefix("--coreai-product-mode=") }
+        let product = arguments.contains { $0.hasPrefix("--coreai-product-") }
+        let encodeOnly = joint && flag == prefix + "always" && modes == ["--coreai-product-mode=staged-gpu-encode"]
+        guard !product || modes == ["--coreai-product-mode=staged-gpu"] || encodeOnly else {
+            throw Failure(message: "Prewarm experiment requires sequential staged-gpu mode or live Talk")
+        }
+        return flag == prefix + "once" // Joint once is a LATER, separately reviewed policy experiment.
+    }
+}
