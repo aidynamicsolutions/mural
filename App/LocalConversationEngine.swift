@@ -584,21 +584,24 @@ enum LocalSpeechVoice {
         } else if let whisper {
             turnSamples.append(contentsOf: tail)
             let hasSpeech = try await whisper.shouldTranscribe(turnSamples, turnID: turnID)
-            // Even a rejected turn must drain the already-started greeting prewarm.
-            if let decoderWarmup {
-                let waitStarted = ProcessInfo.processInfo.systemUptime
-                logger.notice("asr_staged_decoder_wait_begin")
-                do {
-                    try await decoderWarmup.value
-                } catch {
-                    logger.error("asr_staged_decoder_wait_failed")
-                    throw error
+            if hasSpeech {
+                if let decoderWarmup {
+                    let waitStarted = ProcessInfo.processInfo.systemUptime
+                    logger.notice("asr_staged_decoder_wait_begin")
+                    do {
+                        try await decoderWarmup.value
+                    } catch {
+                        logger.error("asr_staged_decoder_wait_failed")
+                        throw error
+                    }
+                    try Task.checkCancellation()
+                    logger.notice("asr_staged_decoder_wait_complete wait_seconds=\(ProcessInfo.processInfo.systemUptime - waitStarted, privacy: .public)")
                 }
-                try Task.checkCancellation()
-                logger.notice("asr_staged_decoder_wait_complete wait_seconds=\(ProcessInfo.processInfo.systemUptime - waitStarted, privacy: .public)")
+                text = try await whisper.transcribe(turnSamples)
+            } else {
+                // The owned greeting prewarm may continue; later speech awaits it and Stop cancels it.
+                text = ""
             }
-            if hasSpeech { text = try await whisper.transcribe(turnSamples) }
-            else { text = "" }
         } else { throw SpeechError.busy }
         let finalizeSeconds = ProcessInfo.processInfo.systemUptime - started
         try Task.checkCancellation()
