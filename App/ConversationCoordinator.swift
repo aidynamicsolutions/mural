@@ -297,12 +297,19 @@ import MuralCore
         localReplySeconds = nil; localModelSeconds = nil; lastActivity = .now
         localTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.localTask = nil; self.scheduleTranslation() }
+            defer {
+                self.localTask = nil
+                if !self.localAudio.lastRecordingHadNoSpeech { self.scheduleTranslation() }
+            }
             do {
                 let text = try await self.localAudio.recordConversationTurn()
                 try self.checkLocal(id)
                 self.notice = self.localAudio.asrNotice
-                guard !text.isEmpty else { self.localPhase = .ready; return }
+                guard !text.isEmpty else {
+                    self.localAudio.clearSubmissionTiming()
+                    self.localPhase = .ready
+                    return
+                }
                 try self.appendLocal(text, speaker: .user, sessionID: id)
                 await self.replyLocal(sessionID: id)
             } catch {
@@ -704,7 +711,7 @@ import MuralCore
         notice = nil; error = nil; working = false; isMuted = false
         inputLevel = 0; outputLevel = 0; state = .idle
     }
-    func refreshLocalMeaning() { if isLocal { scheduleTranslation() } }
+    func refreshLocalMeaning() { if isLocal, !localAudio.lastRecordingHadNoSpeech { scheduleTranslation() } }
     private func resumeLocal() {
         guard isLocal, state == .active, localPhase == .paused, localResumeTask == nil,
               let id = session?.id else { return }
