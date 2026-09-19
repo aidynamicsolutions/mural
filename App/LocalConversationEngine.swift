@@ -592,8 +592,15 @@ enum LocalSpeechVoice {
             text = try await parakeet.transcribe(turnSamples)
         } else if let whisper {
             turnSamples.append(contentsOf: tail)
-            let hasSpeech = try await whisper.shouldTranscribe(turnSamples, turnID: turnID)
-            if hasSpeech {
+            let analysis = try await whisper.analyzeSpeech(turnSamples, turnID: turnID)
+            try Task.checkCancellation()
+            let removed = turnSamples.count - analysis.samples.count
+            let trimmed = !analysis.rejected && removed > 0
+            logger.notice("asr_vad_audio id=\(turnID.uuidString, privacy: .public) original_samples=\(turnSamples.count, privacy: .public) original_seconds=\(Double(turnSamples.count) / 16000, privacy: .public) retained_samples=\(analysis.samples.count, privacy: .public) retained_seconds=\(Double(analysis.samples.count) / 16000, privacy: .public) removed_samples=\(removed, privacy: .public) removed_seconds=\(Double(removed) / 16000, privacy: .public) regions=\(analysis.regions.count, privacy: .public) pre_roll_samples=\(SpeechPresencePolicy.preRollSamples, privacy: .public) hangover_samples=\(SpeechPresencePolicy.hangoverSamples, privacy: .public) minimum_removed_samples=\(SpeechPresencePolicy.minimumRemovedSamples, privacy: .public) trimming_applied=\(trimmed, privacy: .public) failed_open=\(analysis.failedOpen, privacy: .public) rejected=\(analysis.rejected, privacy: .public)")
+            for (index, region) in analysis.regions.enumerated() {
+                logger.notice("asr_vad_region id=\(turnID.uuidString, privacy: .public) index=\(index, privacy: .public) start_sample=\(region.lowerBound, privacy: .public) end_sample_exclusive=\(region.upperBound, privacy: .public) start_seconds=\(Double(region.lowerBound) / 16000, privacy: .public) end_seconds_exclusive=\(Double(region.upperBound) / 16000, privacy: .public)")
+            }
+            if !analysis.rejected {
                 if let decoderWarmup {
                     let waitStarted = ProcessInfo.processInfo.systemUptime
                     logger.notice("asr_staged_decoder_wait_begin")
@@ -606,7 +613,7 @@ enum LocalSpeechVoice {
                     try Task.checkCancellation()
                     logger.notice("asr_staged_decoder_wait_complete wait_seconds=\(ProcessInfo.processInfo.systemUptime - waitStarted, privacy: .public)")
                 }
-                text = try await whisper.transcribe(turnSamples)
+                text = try await whisper.transcribe(analysis.samples)
             } else {
                 // The owned greeting prewarm may continue; later speech awaits it and Stop cancels it.
                 text = ""
@@ -631,6 +638,60 @@ enum LocalSpeechVoice {
         guard status != .error, let data = output.floatChannelData else { throw CaptureError.format }
         return Array(UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
     }
+
+    #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
+    /// Private, bounded phone qualification through the actual Talk recognizer.
+    /// Called only by the existing in-memory probe; never captures or edits recordings.
+    @concurrent static func replayVADRecordings(directory: URL, reportURL: URL) async throws {
+        struct Row: Codable {
+            let file: String
+            let turnID: UUID
+            let pcmSHA256: String
+            let originalSamples: Int
+            let retainedSamples: Int
+            let regions: [[Int]]
+            let rejected: Bool
+            let originalText: String
+            let retainedText: String
+        }
+        let selection = try PhoWhisperStagedEncoder.resolveSelection()
+        guard selection.v3?.format == "fp8", selection.supportIdentity == "phowhisper-cs-pal8-g16-v1",
+              try !DecoderTrialPolicy.once(ProcessInfo.processInfo.arguments),
+              try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments) == .gate else {
+            throw CaptureError.operation("VAD replay requires retained FP8/PAL8, prewarm always and VAD gate.")
+        }
+        let recognizer = WhisperRecognizer(phoWhisper: true)
+        _ = try await recognizer.prepare(directory: WhisperRecognizer.localPhoWhisperDirectory())
+        var rows: [Row] = []
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        for index in 1...22 {
+            try Task.checkCancellation()
+            let file = directory.appending(path: String(format: "%03d.wav", index))
+            let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: file.path)
+            let turnID = UUID()
+            let analysis = try await recognizer.analyzeSpeech(samples, turnID: turnID)
+            guard !analysis.failedOpen else { throw CaptureError.operation("VAD replay has no complete evidence.") }
+            let originalText = try await recognizer.transcribe(samples)
+            try Task.checkCancellation()
+            // Byte-identical inputs need no duplicate inference. Changed inputs use the same decoder.
+            let retainedText: String
+            if analysis.rejected { retainedText = "" }
+            else if analysis.samples == samples { retainedText = originalText }
+            else { retainedText = try await recognizer.transcribe(analysis.samples) }
+            try Task.checkCancellation()
+            rows.append(Row(file: file.lastPathComponent, turnID: turnID,
+                pcmSHA256: samples.withUnsafeBufferPointer { PhoWhisperStagedEncoder.sha256(Data(buffer: $0)) },
+                originalSamples: samples.count, retainedSamples: analysis.samples.count,
+                regions: analysis.regions.map { [$0.lowerBound, $0.upperBound] }, rejected: analysis.rejected,
+                originalText: originalText, retainedText: retainedText))
+            // Private transcripts stay in this unique development run, never in unified logs or the store.
+            try encoder.encode(rows).write(to: reportURL, options: .atomic)
+            Logger(subsystem: "no.william.mural", category: "LocalAudio")
+                .notice("asr_vad_replay completed=\(index, privacy: .public) original_samples=\(samples.count, privacy: .public) retained_samples=\(analysis.samples.count, privacy: .public) rejected=\(analysis.rejected, privacy: .public)")
+        }
+    }
+    #endif
 
     /// One ordered task owns this actor. Stop drops ownership but never unloads a
     /// decoder during inference; the task retains it until cancellation completes.
@@ -801,20 +862,22 @@ enum LocalSpeechVoice {
             }
         }
 
-        func shouldTranscribe(_ samples: [Float], turnID: UUID) async throws -> Bool {
+        func analyzeSpeech(_ samples: [Float], turnID: UUID) async throws -> SpeechPresencePolicy.Analysis {
             try Task.checkCancellation()
-            guard phoWhisper, vadMode != .off else { return true }
+            // Both recurrent state and segmentation evidence are owned by this call only.
+            var evidence = SpeechPresencePolicy.Evidence(sampleCount: samples.count)
+            let original = evidence.analyze(samples, mode: phoWhisper ? vadMode : .off)
+            guard phoWhisper, vadMode != .off else { return original }
             guard samples.count <= 480_000, samples.allSatisfy(\.isFinite) else { throw CaptureError.tooLong }
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             guard let vad else {
                 logger.warning("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) evidence=unavailable rejected=false")
-                return true
+                return original
             }
             let started = ProcessInfo.processInfo.systemUptime
             VietnameseEnglishRecognizer.logMemory(stage: "vad-begin", model: ModelNames.VAD.sileroVadFile)
             // These values belong to this turn, never to the reusable manager or next recording.
             var state = VadStreamState.initial()
-            var evidence = SpeechPresencePolicy.Evidence(sampleCount: samples.count)
             do {
                 for offset in stride(from: 0, to: samples.count, by: SpeechPresencePolicy.chunkSize) {
                     try Task.checkCancellation()
@@ -829,16 +892,17 @@ enum LocalSpeechVoice {
                 try Task.checkCancellation()
                 VietnameseEnglishRecognizer.logMemory(stage: "vad-end", model: ModelNames.VAD.sileroVadFile)
                 let elapsed = ProcessInfo.processInfo.systemUptime - started
-                let rejected = evidence.rejects(in: vadMode)
+                let analysis = evidence.analyze(samples, mode: vadMode)
+                let rejected = analysis.rejected
                 logger.notice("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) duration_seconds=\(Double(samples.count) / 16000, privacy: .public) windows=\(evidence.windowCount, privacy: .public) max_probability=\(evidence.maxProbability, privacy: .public) mean_probability=\(evidence.meanProbability, privacy: .public) speech_score=\(evidence.speechScore, privacy: .public) active_windows=\(evidence.activeWindows, privacy: .public) active_window_seconds=\(Double(evidence.activeWindowSamples) / 16000, privacy: .public) first_active_sample=\(evidence.firstActiveSample ?? -1, privacy: .public) last_active_sample_exclusive=\(evidence.lastActiveSampleExclusive ?? -1, privacy: .public) complete=\(evidence.complete, privacy: .public) would_reject=\(evidence.wouldReject, privacy: .public) rejected=\(rejected, privacy: .public) analysis_seconds=\(elapsed, privacy: .public)")
-                return !rejected
+                return analysis
             } catch is CancellationError {
                 logger.notice("asr_vad_cancelled id=\(turnID.uuidString, privacy: .public)")
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation()
                 logger.warning("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) evidence=error rejected=false analysis_seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
-                return true
+                return original
             }
         }
 

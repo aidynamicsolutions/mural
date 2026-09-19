@@ -1152,6 +1152,7 @@ private actor CoreAIPhoWhisper {
             .map { String($0.dropFirst("--coreai-whisperkit=".count)) }
     }
     @ObservationIgnored private var runDirectory: URL?
+    @ObservationIgnored private var vadReplayTask: Task<Void, Error>?
     @ObservationIgnored private let recognizer = CoreAIPhoWhisper()
 
     init() {
@@ -1160,6 +1161,7 @@ private actor CoreAIPhoWhisper {
             object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.memoryWarnings += 1
+                    self?.vadReplayTask?.cancel()
                     Logger(subsystem: "no.william.mural", category: "CoreAIProductGate")
                         .fault("ios_memory_warning count=\(self?.memoryWarnings ?? 0, privacy: .public)")
                 }
@@ -1191,6 +1193,25 @@ private actor CoreAIPhoWhisper {
             }
             let directory = try Self.fixturesDirectory()
             try writeReport(directory: directory, error: nil)
+            if ProcessInfo.processInfo.arguments.contains("--asr-vad-replay") {
+                status = "Comparing saved recordings with VAD trimming"
+                let task = Task {
+                    try await LocalConversationEngine.replayVADRecordings(directory: directory,
+                        reportURL: runDirectory.appending(path: "vad-replay.json"))
+                }
+                vadReplayTask = task
+                let observer = NotificationCenter.default.addObserver(
+                    forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in task.cancel() }
+                defer {
+                    NotificationCenter.default.removeObserver(observer)
+                    vadReplayTask = nil
+                }
+                try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                guard memoryWarnings == 0 else { throw CoreAIPhoWhisper.ProbeError("VAD replay stopped after a memory warning.") }
+                status = "VAD replay complete: 22 saved recordings"
+                try writeReport(directory: directory, error: nil)
+                return
+            }
             if CoreAIPhoWhisper.productGateRequested {
                 let config = try CoreAIPhoWhisper.ProductConfig.resolve()
                 status = "Running Core AI hybrid product gate: \(config.mode)"

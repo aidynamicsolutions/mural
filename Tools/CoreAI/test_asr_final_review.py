@@ -254,6 +254,26 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('case .float16: copy(Float16.self)', source)
         self.assertIn('let result = try MLMultiArray(shape: [1, 1280, 1, 1500], dataType: .float16)', source)
 
+    def test_vad_uses_one_turn_local_pass_and_only_selected_pcm_reaches_asr(self):
+        source = SOURCE.read_text()
+        capture = source.split('    @concurrent private static func transcribe(', 1)[1].split('    private nonisolated static func convert', 1)[0]
+        self.assertEqual(capture.count('whisper.analyzeSpeech('), 1)
+        self.assertIn('try await whisper.transcribe(analysis.samples)', capture)
+        self.assertLess(capture.index('if !analysis.rejected'), capture.index('try await decoderWarmup.value'))
+        self.assertIn('seconds: Double(frames) / sampleRate', capture)
+        analysis = source.split('        func analyzeSpeech(', 1)[1].split('        #if canImport(CoreAI)', 1)[0]
+        self.assertEqual(source.count('vad.processStreamingChunk('), 1)
+        self.assertIn('var evidence = SpeechPresencePolicy.Evidence(sampleCount: samples.count)', analysis)
+        self.assertIn('var state = VadStreamState.initial()', analysis)
+        prediction = analysis.index('try await vad.processStreamingChunk(')
+        self.assertLess(analysis.index('try Task.checkCancellation()', prediction), analysis.index('evidence.append('))
+        self.assertIn('catch is CancellationError', analysis)
+        self.assertIn('throw CancellationError()', analysis)
+        self.assertIn('return original', analysis.split('evidence=error', 1)[1])
+        stop = source.split('    func stop() {', 1)[1].split('    nonisolated func speechSynthesizer', 1)[0]
+        self.assertIn('asrTask?.cancel()', stop)
+        self.assertIn('generation = UUID()', stop)
+
     def test_policy_mirror_matches_runtime(self):
         source = SOURCE.read_text()
         runtime = "enum DecoderTrialPolicy {" + source.split("enum DecoderTrialPolicy {", 1)[1]
