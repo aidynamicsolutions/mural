@@ -214,6 +214,25 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('asr_trial_final id=', source)
         self.assertIn('asr_trial_audio id=', source)
 
+    def test_memory_warning_preserves_stop_and_reports_relaunch_instead_of_a_build_switch(self):
+        source = SOURCE.read_text()
+        warning = source.split('let previousState = self.asrState.rawValue', 1)[1].split('\n                    }', 1)[0]
+        self.assertLess(warning.index('self.stagedMemoryWarning = true'), warning.index('self.stop()'))
+        self.assertIn('self.asrError = Self.memoryWarningMessage', warning)
+        self.assertIn('stage: "staged-memory-warning"', warning)
+        self.assertIn('decoder_prewarm_active=', warning)
+        message = source.split('private static let memoryWarningMessage = "', 1)[1].split('"', 1)[0]
+        self.assertIn('close Mural from the app switcher, then reopen it.', message)
+        self.assertNotIn('use the default build', message.lower())
+        self.assertIn('guard !stagedMemoryWarning else {', source)
+        self.assertIn('asrError ?? Self.memoryWarningMessage', source)
+        self.assertEqual(source.count('stagedMemoryWarning = false'), 1)  # Initialization only.
+        schedule = source.split('private func startStagedDecoderPrewarmIfNeeded()', 1)[1].split('\n    #endif', 1)[0]
+        self.assertIn('stagedDecoderWarmup == nil', schedule)
+        self.assertIn('stagedDecoderWarmupActive = true', schedule)
+        self.assertIn('defer { self?.stagedDecoderWarmupActive = false }', schedule)
+        self.assertIn('try await whisper.prewarmStagedDecoder()', schedule)
+
     def test_v3_fingerprint_covers_hidden_entries_without_changing_legacy_hashes(self):
         source = SOURCE.read_text()
         v3 = source.split("    private static func makeV3Selection", 1)[1].split("    @concurrent static func verifiedSelection", 1)[0]

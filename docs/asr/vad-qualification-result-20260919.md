@@ -2,7 +2,7 @@
 
 ## Disposition
 
-**INCOMPLETE. KEEP DEFAULT OFF.**
+**INCOMPLETE. VAD DEFAULT REMAINS OFF.** The user accepted the targeted fast silence UX and asked to retain it despite the recorded memory warnings. This is not a memory-safety pass. See the follow-up below; the original matrix results retain their original source/build identity.
 
 The opt-in Silero gate prevented the known hallucinated silence turn in the bounded gate check and preserved one quiet short answer. It did not satisfy the complete qualification: observation classified the prescribed fan-noise and breathing/movement cases as speech, the second quiet short answer was not run, and lifecycle/offline coverage was stopped at the user's request. No threshold, Whisper heuristic, ASR precision, decoder policy, model, package, or default-mode change was made.
 
@@ -73,10 +73,37 @@ These are unmatched microphone turns, not same-byte benchmarks. No p95, energy, 
 - Gate rejected Send-to-final: `0.028152-0.042449 s`; accepted quiet Yes: `2.876909 s`.
 - Initial online observe Prepare: `9.836934 s`, including separate VAD availability. Later cached observe/gate Prepare samples were `2.050041-2.167505 s`; the off Prepare sample was `1.990285 s`.
 
-No memory-warning or native-abort event appeared in the scoped Mural captures. This does not substitute for the unrun lifecycle/soak tests.
+No memory-warning or native-abort event appeared in the original `e545ee6` matrix captures. The later fast-rejection capture did record memory warnings, as detailed below. Neither observation substitutes for the unrun lifecycle/soak tests.
 
 ## Missing evidence and decision
 
 Not run or incomplete: quiet No in gate, full gate matrix, boundary speech, End/background cancellation, fresh cached offline launch/Prepare, deterministic same-byte FP8/PAL8 replay, and promoted-default replay. Radios were not deliberately disabled for a recorded offline arm. The existing local facility was not shown to provide the required same-byte retained-pipeline replay, so deterministic replay is not claimed.
 
 The initial threshold cannot reject the prescribed fan and breathing/movement cases. Raising it was not attempted because no complete corrected-threshold matrix was authorized or run. Default remains off. The gate is useful as an explicit experiment for ordinary silence, but this result is not approval for ordinary-use promotion.
+
+## Follow-up: fast notice and memory-warning investigation
+
+The visible-notice change (`8ee3b00`) and immediate rejected-turn return (`d14c3d6d9cb2fc373d09dd06197857b7fc745a94`) were subsequently installed and human-accepted. The fast-return executable was `6a3c0ee4aaa3caacaa849e23881af8eb1a2907d1d6038ee3c05f92d40455685d`. Its gate rejected 1.5 seconds of silence in **0.017243 s Send-to-final**, with a visible notice and no staged ASR turn. The owned greeting decoder prewarm continued separately. The user explicitly chose to retain this behavior and document the memory risk rather than revert it.
+
+### What the warning establishes
+
+- At 17:00:48, Core ML/Espresso logged an E5RT exception with its explanation redacted. This preceded Send and the fast-return branch at 17:00:49.
+- UIKit delivered real memory warnings at 17:00:58 and 17:01:10. The speculative decoder prewarm had started, but no completion was recorded before that capture stopped. No staged encoder or turn decoder ran for the rejected recording.
+- The screenshot supplied at 17:13 shows the application's sticky memory-warning error. At 17:16, the same original app process was still alive. The error can be surfaced later by foreground resume; the screenshot alone does not date a new warning. The intervening period was not captured, so additional warnings cannot be ruled out.
+- The native loading error and subsequent pressure are correlated, not a proven causal chain. System memory pressure does not establish which allocation or process caused it. The captured events do not prove that fast return caused the failure.
+
+### Bounded replays and corrective scope
+
+Two replays on the unchanged executable did not reproduce a warning. Idle decoder prewarm completed in 15.857731 s; subsequent silence took 0.057130 s and quiet Yes took 2.462814 s. On the second fresh launch, prewarm completed in 1.449364 s, before recording, and silence took 0.033314 s. That second replay did not recreate active-prewarm overlap.
+
+A narrow follow-up on `d14c3d6` corrects the obsolete instruction to switch builds: after a memory warning, End, close Mural from the app switcher, then reopen it. It also logs process memory at speculative-prewarm boundaries and at warnings, whether prewarm is still active, and the domain/code of a surfaced prewarm error. This is a recovery-message and diagnostic change, **not a fix for the unproven native memory-pressure cause**. The sticky safety latch, native draining, selected ASR, prewarm policy, VAD threshold/default, and fast silence return are unchanged.
+
+Tested follow-up executable: `fa9fbc8f2da3e8c9525c186d5df63769978032c4cc848de340c2854b95d20e16`, built from `d14c3d6` plus the recovery/diagnostic diff. Installed in place on the same iPhone 17/iOS 27.2 with retained FP8/PAL8, `prewarm=always`, and `--asr-vad=gate`.
+
+- Silence returned in **0.018849 s**, while speculative prewarm was genuinely still active. Prewarm subsequently completed in 16.333826 s.
+- Quiet No was human-confirmed recognized; Send-to-final was **2.411913 s**.
+- Brief background/foreground preparation and End completed. The user reported no warning, and none appeared in this scoped capture. No E5RT exception was recorded in the replay captures.
+- `swift test`: **77 passed**. Focused ASR source-contract checks: **6 passed**, including the unchanged warning stop/latch and corrected recovery text. These source checks do not simulate actual memory pressure. Retained Release build passed.
+- The new warning message itself was not displayed on the phone because no warning recurred. No warning was injected into the personal device, and no safety check was bypassed.
+
+Evidence remains local under `.build/verification/memory-warning-20260919-171606/` and the original `vad-20260919-162329-530/fast-reject/`. Owned log captures were stopped. Memory-pressure root cause remains open; no cache/data reset, model/package change, default promotion, or claim of a warning-free soak was made. The original missing full-matrix and offline evidence is not filled by these brief replays.

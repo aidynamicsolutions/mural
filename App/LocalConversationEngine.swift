@@ -111,6 +111,7 @@ enum LocalSpeechVoice {
     private var asr: StreamingNemotronMultilingualAsrManager?
     private var asrTask: Task<Void, Never>?
     private var stagedDecoderWarmup: Task<Void, Error>?
+    private var stagedDecoderWarmupActive = false
     private var limitTask: Task<Void, Never>?
     private var tapInstalled = false
     private var audioEngine: AVAudioEngine?
@@ -127,6 +128,7 @@ enum LocalSpeechVoice {
     var canRecord: Bool { (asr != nil || whisper != nil || parakeet != nil) && asrTask == nil && completion == nil }
     var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil }
     private var stagedMemoryWarning = false
+    private static let memoryWarningMessage = "Speech stopped after a memory warning. End this session, close Mural from the app switcher, then reopen it."
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
     private let synthesizer = AVSpeechSynthesizer()
     private var utterance: AVSpeechUtterance?
@@ -154,11 +156,13 @@ enum LocalSpeechVoice {
                 object: nil, queue: .main) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
+                        let previousState = self.asrState.rawValue
+                        VietnameseEnglishRecognizer.logMemory(stage: "staged-memory-warning", model: self.asrModel.rawValue)
                         self.stagedMemoryWarning = true
                         self.stop()
                         self.asrState = .failed
-                        self.asrError = "Speech stopped after a memory warning. End this session and use the default build; no automatic fallback was attempted."
-                        self.logger.fault("asr_staged_memory_warning stopped=true")
+                        self.asrError = Self.memoryWarningMessage
+                        self.logger.fault("asr_staged_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
                     }
                 }
         }
@@ -264,7 +268,12 @@ enum LocalSpeechVoice {
     private func startStagedDecoderPrewarmIfNeeded() {
         guard PhoWhisperStagedEncoder.enabled, stagedDecoderWarmup == nil, let whisper else { return }
         logger.notice("asr_staged_decoder_schedule schedule=with-greeting")
-        stagedDecoderWarmup = Task { try await whisper.prewarmStagedDecoder() }
+        stagedDecoderWarmupActive = true
+        stagedDecoderWarmup = Task { [weak self] in
+            // Remain active until native loading returns, even after Stop requests cancellation.
+            defer { self?.stagedDecoderWarmupActive = false }
+            try await whisper.prewarmStagedDecoder()
+        }
     }
     #endif
 
@@ -294,7 +303,7 @@ enum LocalSpeechVoice {
             try Task.checkCancellation()
         }
         guard !stagedMemoryWarning else {
-            throw CaptureError.operation(asrError ?? "Speech is disabled after a memory warning. Use the default build.")
+            throw CaptureError.operation(asrError ?? Self.memoryWarningMessage)
         }
         guard canPrepare else { throw SpeechError.busy }
         selectASR(.phoWhisper)
@@ -839,8 +848,12 @@ enum LocalSpeechVoice {
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             let started = ProcessInfo.processInfo.systemUptime
             logger.notice("asr_staged_decoder_speculative_begin uptime=\(started, privacy: .public) decoder_support=\(directory.lastPathComponent, privacy: .public)")
+            VietnameseEnglishRecognizer.logMemory(stage: "speculative-decoder-begin", model: directory.lastPathComponent)
             let decoder = TextDecoder()
-            defer { decoder.unloadModel() }
+            defer {
+                decoder.unloadModel()
+                VietnameseEnglishRecognizer.logMemory(stage: "speculative-decoder-end", model: directory.lastPathComponent)
+            }
             do {
                 try Task.checkCancellation()
                 try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"),
@@ -852,7 +865,8 @@ enum LocalSpeechVoice {
                 logger.notice("asr_staged_decoder_speculative_cancelled")
                 throw CancellationError()
             } catch {
-                logger.error("asr_staged_decoder_speculative_failed")
+                let failure = error as NSError
+                logger.error("asr_staged_decoder_speculative_failed domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                 throw error
             }
         }
