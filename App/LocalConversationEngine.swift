@@ -778,7 +778,7 @@ enum LocalSpeechVoice {
             return (prewarm, loadSeconds + localTokenizerSeconds)
         }
 
-        // VAD qualification only. Keep the model under the existing ASR owner.
+        // Keep VAD under the existing ASR owner; explicit off/observe modes remain available.
         private func prepareVAD() async throws {
             guard phoWhisper else { return }
             vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)

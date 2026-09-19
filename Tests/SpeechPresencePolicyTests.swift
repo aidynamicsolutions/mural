@@ -10,8 +10,8 @@ final class SpeechPresencePolicyTests: XCTestCase {
         return result
     }
 
-    func testControlIsDefaultAndExplicitModesAreStrict() throws {
-        XCTAssertEqual(try SpeechPresencePolicy.Mode(arguments: []), .off)
+    func testGateIsDefaultAndExplicitModesAreStrict() throws {
+        XCTAssertEqual(try SpeechPresencePolicy.Mode(arguments: []), .gate)
         for mode in ["off", "observe", "gate"] {
             XCTAssertEqual(try SpeechPresencePolicy.Mode(arguments: ["Mural", "--asr-vad=\(mode)"]).rawValue, mode)
         }
@@ -20,7 +20,7 @@ final class SpeechPresencePolicyTests: XCTestCase {
         }
     }
 
-    func testAllLowWindowsRejectOnlyInExperimentalGate() {
+    func testAllLowWindowsRejectOnlyInGateMode() {
         let result = evidence([0.01, 0.02, 0.03, 0.01], tail: 3712) // 1 s at 16 kHz.
         XCTAssertTrue(result.complete)
         XCTAssertTrue(result.wouldReject)

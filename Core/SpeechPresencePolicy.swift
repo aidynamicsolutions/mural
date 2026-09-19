@@ -12,7 +12,7 @@ public enum SpeechPresencePolicy {
         public init(arguments: [String]) throws {
             let prefix = "--asr-vad="
             let flags = arguments.filter { $0 == "--asr-vad" || $0.hasPrefix(prefix) }
-            guard !flags.isEmpty else { self = .off; return }
+            guard !flags.isEmpty else { self = .gate; return }
             guard flags.count == 1, flags[0].hasPrefix(prefix),
                   let mode = Self(rawValue: String(flags[0].dropFirst(prefix.count))) else {
                 throw ConfigurationError()
