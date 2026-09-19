@@ -5,6 +5,7 @@ import Observation
 import OSLog
 import FluidAudio
 import WhisperKit
+import MuralCore
 #if canImport(CoreAI)
 import CoreAI
 import CoreML
@@ -475,7 +476,7 @@ enum LocalSpeechVoice {
                     self.finishRecording()
                 }
                 let result = try await Self.transcribe(stream, manager: manager, whisper: whisper,
-                    decoderWarmup: decoderWarmup, parakeet: parakeet, limitSeconds: limit,
+                    decoderWarmup: decoderWarmup, parakeet: parakeet, limitSeconds: limit, turnID: token,
                     sampleRate: format.sampleRate, channelCount: format.channelCount) { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.asrNotice = "\(limit)-second limit reached. Your turn was sent automatically."
@@ -528,7 +529,7 @@ enum LocalSpeechVoice {
 
     @concurrent private static func transcribe(_ stream: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>,
         manager: StreamingNemotronMultilingualAsrManager?, whisper: WhisperRecognizer?,
-        decoderWarmup: Task<Void, Error>?, parakeet: VietnameseEnglishRecognizer?, limitSeconds: Int,
+        decoderWarmup: Task<Void, Error>?, parakeet: VietnameseEnglishRecognizer?, limitSeconds: Int, turnID: UUID,
         sampleRate: Double, channelCount: AVAudioChannelCount,
         onLimit: @MainActor @Sendable () -> Void) async throws -> Recognition {
         guard let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channelCount, interleaved: false),
@@ -590,7 +591,7 @@ enum LocalSpeechVoice {
                 try Task.checkCancellation()
                 logger.notice("asr_staged_decoder_wait_complete wait_seconds=\(ProcessInfo.processInfo.systemUptime - waitStarted, privacy: .public)")
             }
-            text = try await whisper.transcribe(turnSamples)
+            text = try await whisper.transcribe(turnSamples, turnID: turnID)
         } else { throw SpeechError.busy }
         let finalizeSeconds = ProcessInfo.processInfo.systemUptime - started
         try Task.checkCancellation()
@@ -619,6 +620,8 @@ enum LocalSpeechVoice {
         private static let revision = "0f63a7800b00dd0226abd051b906c246e1907482"
         private var kit: WhisperKit?
         private let phoWhisper: Bool
+        private var speechVAD: VadManager?
+        private var vadMode: SpeechActivityPolicy.Mode = .off
         private var suppressedTokens: [Int] = []
         private var inferenceCount = 0
         #if canImport(CoreAI)
@@ -690,7 +693,75 @@ enum LocalSpeechVoice {
             return folder
         }
 
+        /// Prepare only: never download or replace an ASR model while handling Send.
+        private func prepareSpeechActivity() async throws {
+            vadMode = try SpeechActivityPolicy.Mode.resolve(ProcessInfo.processInfo.arguments)
+            guard vadMode != .off else { return }
+            let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+            let started = ProcessInfo.processInfo.systemUptime
+            VietnameseEnglishRecognizer.logMemory(stage: "vad-prepare-before", model: FluidAudio.ModelNames.VAD.sileroVad)
+            do {
+                let loaded = try await VadManager(config: VadConfig(
+                    defaultThreshold: SpeechActivityPolicy.threshold, computeUnits: .cpuAndNeuralEngine))
+                try Task.checkCancellation()
+                speechVAD = loaded
+                logger.notice("asr_vad_prepared mode=\(self.vadMode.rawValue, privacy: .public) model=\(FluidAudio.ModelNames.VAD.sileroVadFile, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
+                // Missing/corrupt/offline VAD is unknown, not proof that a quiet user was silent.
+                speechVAD = nil
+                logger.warning("asr_vad_prepare_unavailable fail_open=true")
+            }
+            VietnameseEnglishRecognizer.logMemory(stage: "vad-prepare-after", model: FluidAudio.ModelNames.VAD.sileroVad)
+        }
+
+        private func rejectsNoSpeech(_ samples: [Float], turnID: UUID) async throws -> Bool {
+            guard vadMode != .off else { return false }
+            try Task.checkCancellation()
+            let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+            guard let speechVAD else {
+                logger.warning("asr_vad_unavailable id=\(turnID.uuidString, privacy: .public) fail_open=true")
+                return false
+            }
+            // Leave invalid input to the existing ASR validation, never label it silence.
+            guard samples.count <= SpeechActivityPolicy.maximumSamples,
+                  samples.allSatisfy(\.isFinite) else { return false }
+            let before = VietnameseEnglishRecognizer.logMemory(stage: "vad-before", model: FluidAudio.ModelNames.VAD.sileroVad)
+            let started = ProcessInfo.processInfo.systemUptime
+            var probabilities: [Float] = []
+            // Reuse weights, never recurrent state. The existing asrTask owns this entire loop.
+            var state = VadStreamState.initial()
+            do {
+                for offset in stride(from: 0, to: samples.count, by: VadManager.chunkSize) {
+                    try Task.checkCancellation()
+                    let end = min(offset + VadManager.chunkSize, samples.count)
+                    let result = try await speechVAD.processStreamingChunk(Array(samples[offset..<end]), state: state)
+                    try Task.checkCancellation() // A native prediction must finish before its owner drains.
+                    state = result.state
+                    probabilities.append(result.probability)
+                    logger.notice("asr_vad_window id=\(turnID.uuidString, privacy: .public) index=\(probabilities.count - 1, privacy: .public) samples=\(end - offset, privacy: .public) probability=\(result.probability, privacy: .public)")
+                }
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
+                logger.warning("asr_vad_failed id=\(turnID.uuidString, privacy: .public) fail_open=true seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+                return false
+            }
+            let evidence = SpeechActivityPolicy.assess(sampleCount: samples.count, probabilities: probabilities)
+            let rejected = SpeechActivityPolicy.shouldReject(evidence.decision, mode: vadMode)
+            let seconds = ProcessInfo.processInfo.systemUptime - started
+            let after = VietnameseEnglishRecognizer.logMemory(stage: "vad-after", model: FluidAudio.ModelNames.VAD.sileroVad)
+            let first = evidence.firstActiveSample.map { Double($0) / 16_000 } ?? -1
+            let last = evidence.lastActiveSample.map { Double($0) / 16_000 } ?? -1
+            logger.notice("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) proposal=\(evidence.decision.rawValue, privacy: .public) rejected=\(rejected, privacy: .public) sample_count=\(samples.count, privacy: .public) windows=\(probabilities.count, privacy: .public) active_windows=\(evidence.activeWindowCount, privacy: .public) active_seconds_estimate=\(Double(evidence.activeSampleCount) / 16_000, privacy: .public) first_seconds=\(first, privacy: .public) last_seconds=\(last, privacy: .public) vad_seconds=\(seconds, privacy: .public)")
+            logger.notice("asr_vad_footprint id=\(turnID.uuidString, privacy: .public) before_bytes=\(before["footprintBytes"] ?? 0, privacy: .public) after_bytes=\(after["footprintBytes"] ?? 0, privacy: .public)")
+            try Task.checkCancellation()
+            return rejected
+        }
+
         func prepare(directory: URL) async throws -> (prewarm: Double, load: Double) {
+            if phoWhisper { try await prepareSpeechActivity() }
             #if canImport(CoreAI)
             if usesStagedEncoder {
                 let started = ProcessInfo.processInfo.systemUptime
@@ -865,8 +936,9 @@ enum LocalSpeechVoice {
             return options
         }
 
-        func transcribe(_ samples: [Float]) async throws -> String {
+        func transcribe(_ samples: [Float], turnID: UUID) async throws -> String {
             try Task.checkCancellation()
+            if phoWhisper, try await rejectsNoSpeech(samples, turnID: turnID) { return "" }
             #if canImport(CoreAI)
             if usesStagedEncoder {
                 return try await transcribeStaged(samples)
