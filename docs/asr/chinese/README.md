@@ -10,6 +10,14 @@ See [native qualification result](breeze-native-result-20260920.md) for actual
 source/model identities, conversion/build evidence and unrun device/accuracy gates.
 The preparation inventory below records the original handoff, not current status.
 
+FireRedASR2-AED is now implemented as a compile-time opt-in probe, **not qualified**.
+Its exact-v2 native file gate passed on iPhone 17, then live testing stopped on an
+iOS memory warning while loaded/idle. Two short Yes attempts were also rejected
+by the unchanged VAD gate. The ordinary Mural build was restored; no ASR default
+or script/case normalization changed. See [FireRed qualification result](firered-aed-qualification.md)
+for exact identities, measured timings/memory, human observations and unrun gates.
+Do not retry that resource configuration merely to finish the test matrix.
+
 Initial architecture review: `mvp` at `6867ff912c7eb940ec444ae836adafaa46d3d7cd`.
 The branch advanced to `cfa0999a0738c7a28cc5879b041c1f0e12a0218f` during preparation.
 Its engine diff and new speech policy were reviewed; the patch pin now targets that

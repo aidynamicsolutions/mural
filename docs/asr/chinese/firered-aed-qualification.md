@@ -1,5 +1,158 @@
 # FireRedASR2-AED qualification
 
+## Current result: implemented, stopped on live memory warning
+
+2026-09-20. **Not qualified for production or further blind retries.** The exact
+v2 AED file probe passed first; only then was the opt-in recognizer actor added
+through the existing audio owner. Live testing completed seven submissions, then
+iOS delivered a memory warning while the recognizer was loaded but idle. The
+warning latch stopped/released it and prevented preparation in that process.
+Testing stopped as required. The ordinary Mural build was restored in place;
+Breeze, PhoWhisper, asset caches, learning data and defaults were preserved.
+
+### Tested implementation and identities
+
+- Source: `737a29e7a3b3f9f2ff67033573c05d3afb1b832c`, on `mvp` after the preserved
+  Breeze checkpoint `1b12b77`. The tested app was built from these exact source
+  bytes before committing; later changes to this result are documentation only.
+- Explicit variant: `python3 scripts/generate_project.py --firered-file-probe`,
+  Release, followed by ordinary project regeneration. Same iPhone 17 / iPhone18,3,
+  **iOS 27.2 (24B5084k)** and Xcode 27.0 / SDK 27.0 as the initial file gate.
+- Live executable SHA-256:
+  `22d2ce6772afec3234cda635102f3b5896f15e6571cafc58673c28398a43d89c`.
+- Actor SHA-256:
+  `094200743c36c88f7c03f739f5397db5a2a8f12a4baf5c495836b640a75df438`.
+- Exact checkpoint/export/runtime pins remain those recorded below and in
+  `Tools/ChineseASR/FireRedProbe/pin.json`. They were checked again before live
+  preparation. No v1, CTC, LLM or full-system substitution.
+- `FireRedEnglishRecognizer`: one actor-held C recognizer; synchronous AED work
+  on its executor, CPU/one thread/greedy/batch one. Config C strings live through
+  construction. Streams/results use deterministic deferred cleanup; cancellation
+  checks after native return cannot free handles during inference. The existing
+  audio task retains the actor through cancellation, serializes preparation and
+  capture, and rejects stale generations. No additional worker/service/decoder.
+- Existing microphone, 48 kHz-to-16 kHz resampler and tail drain, 30-second bound,
+  and whole-turn VAD gate reused. FireRed does not trim accepted audio. VAD failure
+  remains fail-open, as in the existing probe policy. No recorded audio is retained.
+- The selector is compile-time opt-in only. Ordinary builds omit the native
+  sources, bridging header, library links and selector. `prepareConversation()`
+  still explicitly selects PhoWhisper. Breeze actor, shared VAD thresholds,
+  signing files and resolved package pins were unchanged.
+
+### Human observations and accuracy limits
+
+- **Long English replies:** user reports accurate words, including the requested
+  name/number phrase, but all-uppercase output. Uppercase English was also
+  observed in the maintained sherpa host replay. No case repair or punctuation
+  postprocessing was applied. User explicitly deferred a possible separate
+  display-only sentence-casing policy; preserve raw output and proper names.
+- **Short Yes: failed 2 of 3 attempts, human-reported.** Logs show three blank
+  submissions rejected by `firered_vad mode=gate complete=true`, with **no AED
+  decoder call** for those turns. One spoken Yes passed. The remaining rejection
+  is consistent with the requested silence check, but the user's response did
+  not independently map each blank to its exact intent/time. Silence is not a
+  fully confirmed acceptance, and rejected speech must not count as fast success.
+- **One Mandarin control:** a native Traditional-Chinese user judged the lexical
+  content correct except for a Simplified/Traditional distinction: output
+  **后 (U+540E)** versus expected **後 (U+5F8C)**. This is a real raw script mismatch,
+  consistent with this Mainland-oriented candidate, not a silently normalized
+  match. Full utterance and human feedback stay private.
+- The shared VAD gate averages the three strongest 4,096-sample windows and
+  requires a score of 0.85. That policy can reject brief replies even when the
+  recording includes seconds of surrounding quiet. Logs establish where these
+  turns were rejected, not their exact probability traces or acoustic cause.
+  No waveform was saved for matched replay; no threshold/default change made.
+- **No human-reference MER/CER/WER.** No frozen, independently checked matched
+  recordings or representative Mainland code-switch corpus exists here. Do not
+  score prompt text against unsaved live speech. One Chinese turn and English
+  observations do not establish switch-direction, dialect or unseen-speaker
+  coverage. Host `evaluate.py` agreement below remains model-to-model only.
+
+### Physical latency and memory
+
+Live preparation: **2.717 s total**, including **0.726 s** asset verification and
+**1.990 s** preparation/loading (VAD plus **1.700 s** native constructor).
+All following durations are seconds; Send-to-final uses correlated owner turn IDs.
+Native decode spans stream creation, waveform frontend, decoder and result copy,
+not VAD or UI overhead.
+
+| Submission | Captured audio | VAD outcome | Send-to-final | Native decode |
+|---|---:|---|---:|---:|
+| First English phrase | 4.4 | Accepted | 1.146 | 1.078 |
+| Blank 1 | 2.3 | Rejected | 0.032 | Not called |
+| Successful Yes | 2.3 | Accepted | 0.519 | 0.496 |
+| English name/number phrase | 5.9 | Accepted | 1.493 | 1.457 |
+| Blank 2 | 2.8 | Rejected | 0.030 | Not called |
+| Blank 3 | 3.4 | Rejected | 0.035 | Not called |
+| Mandarin control | 7.7 | Accepted | 2.056 | 1.937 |
+
+For the **three nonempty post-first turns only**, Send-to-final p50 **1.493 s**,
+p90 **1.944 s**, linear interpolation at `(n-1)*p`. Very small mixed-duration
+sample, excluding rejected turns; **not** a 20-turn or steady-state distribution.
+Preparation and first-turn values each have one live observation, not percentiles.
+
+- Kernel process-lifetime peak footprint: **1,507,396,936 B**.
+- Process-lifetime RSS peak: **1,563,279,360 B**.
+- At the warning: approximately **1,492,454,728 B** current footprint.
+- Immediately after native recognizer destruction: **391,711,688 B**. This sample
+  precedes automatic release of the actor's remaining Swift properties; it is not
+  a final whole-app baseline or proof of leak freedom.
+- Logged thermal states were **nominal**, including at the warning. No crash or
+  termination occurred during the observed batch. No sustained/battery test.
+
+### Hard stop and lifecycle result
+
+At **10:43:05 local device-log time**, UIKit logged **one memory-warning event**,
+about 338 seconds after native preparation and 137 seconds after the last decode.
+Both existing audio-owner instances observed the same process notification: the
+idle main Talk owner (selected PhoWhisper but unprepared) and the FireRed probe
+owner. Their two handler logs are **not two independent iOS warnings**, and the
+main owner's selected-model label is not evidence of loaded PhoWhisper weights.
+Only FireRed preparation/inference occurred in this live process.
+
+The FireRed owner was Ready, with no native operation in flight. It stopped,
+released the recognizer and entered Speech unavailable; the screenshot confirms
+the visible memory-warning error. There was no automatic retry or fallback.
+This is **observed idle memory-warning cleanup**, not a passed in-flight
+cancellation/interruption test. Root cause of the system pressure is unknown;
+process footprint alone does not establish an isolated FireRed allocation limit.
+The generic stop notice still mentions preparing again, but the warning latch
+prevents it; do not follow restart wording to retry this qualification failure.
+
+| Remaining requested check | Result |
+|---|---|
+| At least 20 warm turns | **Not run: resource stop after seven submissions** |
+| Near-30-second continuous speech | Not run |
+| Offline restart/reload | Not run |
+| End/Stop during native preparation or decode, immediate restart while draining | Not run |
+| Background/foreground and external interruptions | Not qualified |
+| Matched mixed Mandarin/English, both directions, monolingual controls, noise | Incomplete; corpus and device gates remain |
+| English preservation over a representative corpus / script-error rate | Unqualified |
+| Other physical devices or OS releases | Not tested |
+
+### Validation and cleanup
+
+- Both opted-in and ordinary Release builds passed, with no new source warning.
+  Existing interruption deprecation, async-alternative and AppIntents warnings remain.
+- ChineseASR **47 tests passed**; Swift core **86 passed**. Two old source-string
+  assertions were updated for the added owner argument and equivalent repair
+  policy switch; two additional AED ownership/source contracts passed.
+- Existing CoreAI discovery: **129 unittest cases passed** plus executable
+  contracts; one compression import failed because the split-export environment
+  lacks `coreai_opt`. The same retained compression test then **passed separately**
+  in the dedicated installed compression-capable environment. No package install
+  or production compression change. Failed run retained, not relabeled a full pass.
+- Ordinary signed app restored in place, SHA-256
+  `d28e55d04bfae778e0c674fbc00124882ba08a2285cbb8868d403618cbb53584`.
+  Fresh normal launch and screenshot confirmed the idle Talk UI and unchanged
+  default backend log. No FireRed or baseline-ASR inference was retried afterward.
+- No app uninstall, model/cache/store deletion, signing change, push or upload.
+  The isolated FireRed staged files remain on the phone; normal Mural ignores them.
+  All owned captures stopped; Device Hub closed before microphone testing.
+- Reviewed source and this sanitized result are committed. Private logs, raw
+  feedback/transcripts, screenshots, source/build hashes and reports remain under
+  `.build/verification/firered-device-20260920/`. Microphone WAVs were not retained.
+
 ## Physical file gate passed, 2026-09-20
 
 Merged the FireRed work fast-forward onto completed Breeze checkpoint `1b12b77`
@@ -11,7 +164,7 @@ Normal project generation omits all FireRed native sources, bridge and runtime
 links. The special launch bypasses LearningStore and normal audio/model startup.
 
 - Device: physical **iPhone 17 / iPhone18,3, iOS 27.2 (24B5084k)**.
-- Release built from `e6beb35` plus the reviewed embedded-probe change;
+- Release source snapshot: `d6c0287` (built from `e6beb35` plus that reviewed change);
   `Probe.mm` SHA-256 `41bb4f53e05c3cc07cd8ee20dc07a2da0acf55127d816b8d0616c3857905b7a2`.
 - Tested signed executable SHA-256:
   `8664ecc159a1e2db134b940d67cf711034fea058711d0758f88b5a3a6dde6239`.
@@ -37,11 +190,9 @@ links. The special launch bypasses LearningStore and normal audio/model startup.
   retained under `.build/verification/firered-device-20260920/`. Owned capture
   stopped. No device-wide archive or recording/transcript publication.
 
-This passes only the initial resource gate. Human accuracy, 20 warm live turns,
-near-30-second speech, silence/noise, offline restart and cancellation/interruption
-remain unqualified. Next is the small recognizer actor through the existing audio
-owner, without changing Talk defaults. The historical Mac preparation below is
-retained as evidence, not current physical status.
+This passed only the initial resource gate. It permitted the actor implementation
+and live trial above; that later trial hit the memory-warning stop. The historical
+Mac preparation below is retained as evidence, not current physical status.
 
 ## Historical Mac preparation, before phone handoff
 
