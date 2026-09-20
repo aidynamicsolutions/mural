@@ -6,7 +6,7 @@ import MuralCore
 import OSLog
 import WhisperKit
 
-/// Development-only candidate. Installed by install_breeze_probe.py, not enabled in Talk.
+/// Development-only probe, not enabled in Talk.
 /// The existing audio owner serializes calls and retains this actor through cancellation.
 actor BreezeEnglishRecognizer {
     static let identity = "breeze-asr25-pal8-v1"
@@ -28,7 +28,7 @@ actor BreezeEnglishRecognizer {
 
     /// The expected digest comes from the local export, not from the same downloaded bundle.
     /// A release must replace this diagnostic launch argument with a reviewed build-time pin.
-    static func localDirectory() async throws -> URL {
+    @concurrent static func localDirectory() async throws -> URL {
         let prefix = "--breeze-manifest-sha256="
         let flags = ProcessInfo.processInfo.arguments.filter { $0.hasPrefix(prefix) }
         guard flags.count == 1 else { throw Failure("Supply exactly one Breeze manifest SHA-256 launch argument from the local export.") }
@@ -168,7 +168,9 @@ actor BreezeEnglishRecognizer {
                     state = result.state
                     evidence.append(probability: result.probability, sampleCount: chunk.count)
                 }
-                if evidence.rejects(in: vadMode) { return "" }
+                let rejected = evidence.rejects(in: vadMode)
+                logger.notice("breeze_vad mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) complete=\(evidence.complete, privacy: .public) score=\(evidence.speechScore, privacy: .public) rejected=\(rejected, privacy: .public) trimming=false")
+                if rejected { return "" }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -177,7 +179,7 @@ actor BreezeEnglishRecognizer {
                 logger.warning("breeze_vad_unavailable phase=turn action=allow_asr")
             }
         }
-        var options = DecodingOptions(task: .transcribe, detectLanguage: true,
+        var options = DecodingOptions(task: .transcribe, sampleLength: 220, detectLanguage: true,
             skipSpecialTokens: true, windowClipTime: 0, concurrentWorkerCount: 1)
         options.temperatureFallbackCount = 0
         options.withoutTimestamps = true
@@ -188,7 +190,7 @@ actor BreezeEnglishRecognizer {
         let started = ProcessInfo.processInfo.systemUptime
         let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
         try Task.checkCancellation()
-        logger.notice("breeze_decode seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) windows=\(results.count, privacy: .public)")
+        logger.notice("breeze_decode scope=whisperkit-transcribe-not-ui-send seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) windows=\(results.count, privacy: .public)")
         VietnameseEnglishRecognizer.logMemory(stage: "finalized", model: Self.identity)
         return results.map(\.text).joined(separator: " ")
     }

@@ -426,10 +426,13 @@ private struct LocalTutorProbeView: View {
                     Text(model.rawValue).tag(model)
                 }
             }.disabled(audio.asrBusy).accessibilityIdentifier("local-asr-model")
-            Text("Record English, Vietnamese, or both. Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
-            if audio.asrModel == .phoWhisper {
-                Text("PhoWhisper large-v2 + VI/EN code-switch LoRA · FP16 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
-                Text("Development-only local installation: 3.10 GB plus Core ML caches. Prepare verifies the installation, then warms the models. Keep the app open. Recognition is accepted for MVP with a known silence hallucination; silence can still produce invented text.").font(.footnote)
+            Text("Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
+            if audio.asrModel == .breeze {
+                Text("Breeze ASR 25 · Taiwan Mandarin and English · PAL8 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
+                Text("Development-only probe. Requires verified local assets and a manifest launch pin; no download or cloud fallback. Stop and report any memory warning, error, or unexpected result.").font(.footnote)
+            } else if audio.asrModel == .phoWhisper {
+                Text("PhoWhisper large-v2 + VI/EN code-switch LoRA · normal Talk backend · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
+                Text("Uses the existing verified local Talk assets and speech-presence policy. No download or cloud fallback. Recognition can still lose words or invent text.").font(.footnote)
             } else if audio.asrModel == .parakeet {
                 Text("Parakeet CTC 0.6B · Vietnamese–English · community Core ML conversion · 16 kHz mono. This test is limited to 15 seconds per turn; recognition starts after Send.").font(.footnote)
                 Text("Prepare on Wi-Fi: about 1.19 GB plus Core ML caches. Keep the app open during first preparation. Whisper and Nemotron's cached files are kept.").font(.footnote)
@@ -442,7 +445,7 @@ private struct LocalTutorProbeView: View {
             }
             Text("Only one speech model is loaded at a time.").font(.footnote)
             Button("Prepare speech models") { audio.prepareASR() }.disabled(!audio.canPrepare)
-            if audio.asrError != nil, audio.canPrepare, audio.asrModel != .phoWhisper {
+            if audio.asrError != nil, audio.canPrepare, audio.asrModel != .phoWhisper, audio.asrModel != .breeze {
                 Button("Repair download") { audio.prepareASR(repairDownload: true) }
             }
             Text(audio.asrState.rawValue).accessibilityIdentifier("local-asr-status")

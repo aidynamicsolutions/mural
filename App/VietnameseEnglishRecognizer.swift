@@ -108,9 +108,10 @@ actor VietnameseEnglishRecognizer {
             }
         }
         guard result == KERN_SUCCESS else { return [:] }
-        // Process lifetime RSS peak, not this model's isolated peak or system-model memory.
-        Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("asr_memory model=\(model, privacy: .public) stage=\(stage, privacy: .public) footprint_bytes=\(info.phys_footprint, privacy: .public) process_rss_peak_bytes=\(info.resident_size_peak, privacy: .public) thermal_state=\(ProcessInfo.processInfo.thermalState.rawValue, privacy: .public)")
-        return ["footprintBytes": info.phys_footprint, "processRSSPeakBytes": info.resident_size_peak]
+        // Kernel process-lifetime peaks, distinct from this phase sample and model-only memory.
+        let footprintPeak = UInt64(max(0, info.ledger_phys_footprint_peak))
+        Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("asr_memory model=\(model, privacy: .public) stage=\(stage, privacy: .public) footprint_bytes=\(info.phys_footprint, privacy: .public) process_footprint_peak_bytes=\(footprintPeak, privacy: .public) process_rss_peak_bytes=\(info.resident_size_peak, privacy: .public) thermal_state=\(ProcessInfo.processInfo.thermalState.rawValue, privacy: .public)")
+        return ["footprintBytes": info.phys_footprint, "processFootprintPeakBytes": footprintPeak, "processRSSPeakBytes": info.resident_size_peak]
     }
 
     private enum RecognitionError: LocalizedError {

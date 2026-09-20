@@ -93,10 +93,12 @@ enum LocalSpeechVoice {
     }
     enum ASRModel: String, CaseIterable {
         case phoWhisper = "PhoWhisper CS", parakeet = "Parakeet VI–EN", whisper = "Whisper", nemotron = "Nemotron"
+        case breeze = "Breeze TW–EN (probe)"
     }
     private(set) var asrModel: ASRModel = .phoWhisper
     private var whisper: WhisperRecognizer?
     private var parakeet: VietnameseEnglishRecognizer?
+    private var breeze: BreezeEnglishRecognizer?
     var recordingLimitSeconds: Int { asrModel == .parakeet ? VietnameseEnglishRecognizer.maxSeconds : 30 }
     private(set) var preparationDetail = ""
     private(set) var asrState: ASRState = .idle
@@ -125,8 +127,8 @@ enum LocalSpeechVoice {
     private var ownsAudio = false
     private var audioRelease: Task<Void, Never>?
     var asrBusy: Bool { asrTask != nil }
-    var canRecord: Bool { (asr != nil || whisper != nil || parakeet != nil) && asrTask == nil && completion == nil }
-    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil }
+    var canRecord: Bool { (asr != nil || whisper != nil || parakeet != nil || breeze != nil) && asrTask == nil && completion == nil }
+    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil && breeze == nil }
     private var stagedMemoryWarning = false
     private static let memoryWarningMessage = "Speech stopped after a memory warning. End this session, close Mural from the app switcher, then reopen it."
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
@@ -209,7 +211,7 @@ enum LocalSpeechVoice {
         capture?.finish(throwing: CancellationError()); capture = nil
         asrTask?.cancel()
         stagedDecoderWarmup?.cancel()
-        asr = nil; whisper = nil; parakeet = nil
+        asr = nil; whisper = nil; parakeet = nil; breeze = nil
         asrState = .ended
         asrNotice = "Stopped. Prepare speech models again to restart."
         if utterance != nil, let start = playbackStartedAt {
@@ -363,6 +365,8 @@ enum LocalSpeechVoice {
                 let started = ProcessInfo.processInfo.systemUptime
                 let directory: URL
                 switch selected {
+                case .breeze:
+                    directory = try await BreezeEnglishRecognizer.localDirectory()
                 case .phoWhisper:
                     VietnameseEnglishRecognizer.logMemory(stage: "asset-verification-begin", model: "phowhisper-support-pending-verification")
                     directory = try await WhisperRecognizer.localPhoWhisperDirectory()
@@ -388,6 +392,13 @@ enum LocalSpeechVoice {
                 self.asrState = .warming
                 let loadingStarted = ProcessInfo.processInfo.systemUptime
                 switch selected {
+                case .breeze:
+                    let recognizer = BreezeEnglishRecognizer()
+                    try await recognizer.prepare(directory: directory)
+                    try Task.checkCancellation()
+                    guard self.generation == token else { return }
+                    self.breeze = recognizer
+                    self.preparationDetail += " · Local PAL8 Breeze probe; no hosted fallback."
                 case .parakeet:
                     let recognizer = VietnameseEnglishRecognizer()
                     try await recognizer.prepare(directory: directory)
@@ -432,6 +443,7 @@ enum LocalSpeechVoice {
                 self.asrError = selected == .phoWhisper
                     ? "PhoWhisper CS could not be prepared. Report this error rather than retrying repeatedly. Its development-only assets must be installed from this Mac; there is no download source. (\(error.localizedDescription))"
                     : "Speech models could not be prepared. Connect to Wi-Fi and try Prepare again. If cached assets are incomplete, use Repair download. (\(error.localizedDescription))"
+                if selected == .breeze { self.asrError = "Breeze probe preparation failed. Stage its verified local assets and manifest pin; Repair download does not apply. (\(error.localizedDescription))" }
                 self.asrState = .failed
                 self.logger.error("asr_preparation_failed model=\(selected.rawValue, privacy: .public)")
             }
@@ -440,7 +452,7 @@ enum LocalSpeechVoice {
 
     func record() {
         guard canRecord else { return }
-        let manager = asr, whisper = whisper, parakeet = parakeet
+        let manager = asr, whisper = whisper, parakeet = parakeet, breeze = breeze
         let decoderWarmup = stagedDecoderWarmup
         let limit = recordingLimitSeconds
         let model = asrModel.rawValue
@@ -488,7 +500,7 @@ enum LocalSpeechVoice {
                     self.finishRecording()
                 }
                 let result = try await Self.transcribe(stream, manager: manager, whisper: whisper,
-                    decoderWarmup: decoderWarmup, parakeet: parakeet, limitSeconds: limit, turnID: token,
+                    decoderWarmup: decoderWarmup, parakeet: parakeet, breeze: breeze, limitSeconds: limit, turnID: token,
                     sampleRate: format.sampleRate, channelCount: format.channelCount) { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.asrNotice = "\(limit)-second limit reached. Your turn was sent automatically."
@@ -542,7 +554,7 @@ enum LocalSpeechVoice {
 
     @concurrent private static func transcribe(_ stream: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>,
         manager: StreamingNemotronMultilingualAsrManager?, whisper: WhisperRecognizer?,
-        decoderWarmup: Task<Void, Error>?, parakeet: VietnameseEnglishRecognizer?, limitSeconds: Int, turnID: UUID,
+        decoderWarmup: Task<Void, Error>?, parakeet: VietnameseEnglishRecognizer?, breeze: BreezeEnglishRecognizer?, limitSeconds: Int, turnID: UUID,
         sampleRate: Double, channelCount: AVAudioChannelCount,
         onLimit: @MainActor @Sendable () -> Void) async throws -> Recognition {
         guard let source = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: channelCount, interleaved: false),
@@ -587,6 +599,9 @@ enum LocalSpeechVoice {
             let blankSpans = await manager.detectedBlankSpanCount
             let rescues = await manager.blankRescueCount
             logger.notice("asr_decode model=nemotron chunks=\(stats.processedChunks, privacy: .public) tokens=\(stats.tokenCount, privacy: .public) first_language=\(stats.detectedLanguage ?? "none", privacy: .public) blank_spans=\(blankSpans, privacy: .public) rescued_spans=\(rescues, privacy: .public)")
+        } else if let breeze {
+            turnSamples.append(contentsOf: tail)
+            text = try await breeze.transcribe(turnSamples)
         } else if let parakeet {
             turnSamples.append(contentsOf: tail)
             text = try await parakeet.transcribe(turnSamples)

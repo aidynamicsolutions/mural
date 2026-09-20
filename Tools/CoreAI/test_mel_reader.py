@@ -4,10 +4,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-source = (Path(__file__).resolve().parents[2] / "App/MuralApp.swift").read_text()
-reader = source.split("    private static func readAcceptedMel", 1)[1].split(
-    "    private static func fillFloat", 1
-)[0]
+source = (Path(__file__).resolve().parents[2] / "App/LocalConversationEngine.swift").read_text()
+reader = source.split("    static func readAcceptedMel", 1)[1].split(
+    "    static func decoderEmbeddings", 1
+)[0].replace("Failure(", "ProbeError(")
 swift = '''import CoreML
 import Foundation
 struct ProbeError: Error { init(_ message: String) {} }

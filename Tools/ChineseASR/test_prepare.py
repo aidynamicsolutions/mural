@@ -6,7 +6,6 @@ import unittest
 
 from evaluate import read_json
 from prepare_breeze import BUNDLES, BUNDLE_FILES, REQUIRED_CONFIG, SUPPORT, package
-from install_breeze_probe import CHANGES, git_blob, transform
 from run_reference import generation_options
 
 
@@ -81,32 +80,49 @@ class PackagingTests(unittest.TestCase):
             self.run_package()
 
 
-class IntegrationPreparationTests(unittest.TestCase):
-    # These verify transformations on the retrieved anchors, NOT the complete
-    # 91 KB app, SDK type-checking, model correctness, or physical-phone behavior.
+class IntegrationTests(unittest.TestCase):
+    # Actual source contracts, not native scheduling or speech-quality evidence.
     def setUp(self):
-        self.anchors = "\n// boundary\n".join(before for before, _ in CHANGES)
+        root = Path(__file__).resolve().parents[2]
+        self.engine = (root / "App/LocalConversationEngine.swift").read_text()
+        self.actor = (root / "App/BreezeEnglishRecognizer.swift").read_text()
+        self.view = (root / "App/RootView.swift").read_text()
 
-    def test_all_anchor_replacements(self):
-        result = transform(self.anchors)
-        self.assertIn("breeze: breeze, limitSeconds", result)
-        self.assertIn("text = try await breeze.transcribe(turnSamples)", result)
-        self.assertIn("self.breeze = recognizer", result)
+    def test_talk_keeps_phowhisper_and_trimming(self):
+        prepare = self.engine.split("func prepareConversation()", 1)[1].split("func recordConversationTurn", 1)[0]
+        self.assertIn("selectASR(.phoWhisper)", prepare)
+        self.assertIn("text = try await whisper.transcribe(analysis.samples)", self.engine)
+        self.assertIn("text = try await breeze.transcribe(turnSamples)", self.engine)
+        self.assertNotIn(".analyze(samples", self.actor)
 
-    def test_missing_anchor_fails(self):
-        with self.assertRaises(ValueError):
-            transform("unrelated source")
+    def test_breeze_uses_existing_owner_and_cancellation(self):
+        self.assertIn("parakeet == nil && breeze == nil", self.engine)
+        self.assertIn("parakeet != nil || breeze != nil", self.engine)
+        self.assertIn("parakeet = nil; breeze = nil", self.engine)
+        self.assertIn("parakeet = parakeet, breeze = breeze", self.engine)
+        self.assertIn("breeze: breeze, limitSeconds", self.engine)
+        self.assertIn("defer { self.asrTask = nil }", self.engine)
+        self.assertIn("guard self.generation == token, !Task.isCancelled", self.engine)
+        self.assertIn("guard !busy, let kit", self.actor)
 
-    def test_duplicated_anchor_fails(self):
-        with self.assertRaises(ValueError):
-            transform(self.anchors + CHANGES[0][0])
+    def test_memory_warning_remains_latched(self):
+        self.assertIn("static var enabled: Bool { true }", self.engine)
+        self.assertIn("self.stagedMemoryWarning = true\n                        self.stop()", self.engine)
+        self.assertEqual(self.engine.count("stagedMemoryWarning = false"), 1)
+        self.assertIn("!stagedMemoryWarning && asrTask == nil", self.engine)
 
-    def test_second_application_fails(self):
-        with self.assertRaises(ValueError):
-            transform(transform(self.anchors))
+    def test_assets_fail_closed_and_use_breeze_tokenizer(self):
+        self.assertIn("guard flags.count == 1", self.actor)
+        self.assertIn("guard digest(data) == expected", self.actor)
+        self.assertIn("AutoTokenizerWrapper.from(modelFolder: directory)", self.actor)
+        self.assertIn("load: false, download: false", self.actor)
+        self.assertIn("task: .transcribe, sampleLength: 220, detectLanguage: true", self.actor)
+        self.assertIn("breeze_vad mode=", self.actor)
 
-    def test_git_blob_digest(self):
-        self.assertEqual(git_blob(b""), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+    def test_probe_does_not_offer_download_repair(self):
+        self.assertIn("audio.asrModel != .phoWhisper, audio.asrModel != .breeze", self.view)
+        self.assertIn("Taiwan Mandarin and English", self.view)
+        self.assertIn("ASRModel.allCases", self.view)
 
     def test_reference_is_transcribe_auto(self):
         options = generation_options()
