@@ -1,5 +1,10 @@
 # Local-agent prompt — Breeze only
 
+Native execution has begun: see [the result](breeze-native-result-20260920.md).
+The integration below was applied with its blob guard intact. The App actor is now
+the single source; the Tools candidate/installer were removed after native build.
+Do not rerun the historical installer step against an already integrated checkout.
+
 Copy the text below to the AI agent on the development Mac. The user will operate
 and review speech on the physical iPhone 17 devices. This is an execution prompt,
 not a request to write another plan.

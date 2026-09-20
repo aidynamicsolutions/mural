@@ -51,6 +51,11 @@ Do not overwrite that directory with changed weights during a qualification run.
 
 ## A2. Apply the prepared probe integration
 
+Execution update: this guarded integration is now applied and native-built. The
+App actor is the single maintained source; the duplicate Tools candidate and
+installer are removed. See [the result](breeze-native-result-20260920.md). The
+commands and blob pin below preserve the original preparation procedure.
+
 Run `install_breeze_probe.py` without `--apply`, inspect the diff, then apply it.
 It requires engine blob `2162ca8d88a5dda8a51487ddd585e4129a6474b3`; an updated engine
 requires a narrow manual rebase, not resetting user work or disabling the guard.

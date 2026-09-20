@@ -1,5 +1,15 @@
 # Chinese-English ASR: two separate work items
 
+## Native execution update
+
+Breeze is integrated in `App/BreezeEnglishRecognizer.swift` and registered in the
+Xcode project. The guarded installer was reviewed and applied on its exact pinned
+engine; its duplicate Tools candidate and installer were then removed. Use the
+existing Speech recognition probe, not the historical installer command below.
+See [native qualification result](breeze-native-result-20260920.md) for actual
+source/model identities, conversion/build evidence and unrun device/accuracy gates.
+The preparation inventory below records the original handoff, not current status.
+
 Initial architecture review: `mvp` at `6867ff912c7eb940ec444ae836adafaa46d3d7cd`.
 The branch advanced to `cfa0999a0738c7a28cc5879b041c1f0e12a0218f` during preparation.
 Its engine diff and new speech policy were reviewed; the patch pin now targets that
