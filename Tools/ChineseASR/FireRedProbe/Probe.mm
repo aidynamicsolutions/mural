@@ -285,6 +285,9 @@ static NSDictionary *Memory(void) {
 UIViewController *MuralFireRedProbeViewController(void) {
     return [[UINavigationController alloc] initWithRootViewController:[ProbeController new]];
 }
+NSString *MuralFireRedORTVersion(void) {
+    return @(OrtGetApiBase()->GetVersionString());
+}
 #else
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic) UIWindow *window;

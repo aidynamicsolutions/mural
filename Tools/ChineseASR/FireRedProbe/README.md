@@ -1,5 +1,10 @@
 # FireRedASR2-AED native file probe
 
+**Current qualification: STOP.** The initial physical file gate passed, then the
+opt-in live actor received an iOS memory warning while loaded and idle. The normal
+Mural build was restored. These commands are retained for reproducibility, not
+permission to retry the failed resource configuration. See the result below.
+
 Development-only native iPhone file replay, either standalone or hosted by an
 explicit Mural build variant. No capture, tutor, network client, ASR-default
 change, or custom decoder. **Do not add live capture
@@ -133,6 +138,30 @@ commands below. `--run-firered` routes directly to the same file-probe controlle
 argument means normal Mural. Files live only in `Documents/FireRedProbe`; backup
 exclusion applies only to that directory, not Mural's Documents or learning data.
 The initial six-replay gate passed in this mode; see the qualification result.
+
+After that gate passed, `App/FireRedEnglishRecognizer.swift` was added to the
+existing audio-owner path. The same explicit build variant exposes **flask >
+Speech recognition > FireRed v2 CN-EN (probe)**. Launch normally for that selector,
+not with `--run-firered`. The actor uses pinned files in the same directory,
+sherpa's waveform frontend and AED C API, CPU/one thread/greedy/batch one. It
+reuses the existing VAD whole-turn gate without trimming, capture/resampler tail,
+30-second bound, cancellation ownership and generation checks. Stop retains
+in-flight native work until return; only then may stream/result/recognizer handles
+be freed. No default selector change, transcript normalization, cloud fallback or
+production audio retention. Ordinary builds do not expose this selector or link
+the native runtime. Live qualification stopped at the memory-warning gate.
+
+To check the ordinary generated project after restoring it:
+
+```sh
+python3 scripts/generate_project.py
+python3 - <<'PY'
+from pathlib import Path
+p = Path('Mural.xcodeproj/project.pbxproj').read_text()
+assert all(x not in p for x in ('sherpa', 'onnxruntime', 'MURAL_FIRERED_FILE_PROBE',
+                               'Probe.mm', 'SWIFT_OBJC_BRIDGING_HEADER'))
+PY
+```
 
 ## Physical gate: exclusive phone handoff
 

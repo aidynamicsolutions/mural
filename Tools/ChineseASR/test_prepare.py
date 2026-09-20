@@ -86,6 +86,7 @@ class IntegrationTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         self.engine = (root / "App/LocalConversationEngine.swift").read_text()
         self.actor = (root / "App/BreezeEnglishRecognizer.swift").read_text()
+        self.firered = (root / "App/FireRedEnglishRecognizer.swift").read_text()
         self.view = (root / "App/RootView.swift").read_text()
 
     def test_talk_keeps_phowhisper_and_trimming(self):
@@ -100,7 +101,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("parakeet != nil || breeze != nil", self.engine)
         self.assertIn("parakeet = nil; breeze = nil", self.engine)
         self.assertIn("parakeet = parakeet, breeze = breeze", self.engine)
-        self.assertIn("breeze: breeze, limitSeconds", self.engine)
+        self.assertIn("breeze: breeze, fireRed: fireRed, limitSeconds", self.engine)
         self.assertIn("defer { self.asrTask = nil }", self.engine)
         self.assertIn("guard self.generation == token, !Task.isCancelled", self.engine)
         self.assertIn("guard !busy, let kit", self.actor)
@@ -120,9 +121,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("breeze_vad mode=", self.actor)
 
     def test_probe_does_not_offer_download_repair(self):
-        self.assertIn("audio.asrModel != .phoWhisper, audio.asrModel != .breeze", self.view)
+        self.assertIn("audio.asrModel.supportsRepairDownload", self.view)
+        policy = self.engine.split("var supportsRepairDownload", 1)[1].split("private(set)", 1)[0]
+        self.assertIn("case .phoWhisper, .breeze: false", policy)
+        self.assertIn("case .fireRed: false", policy)
         self.assertIn("Taiwan Mandarin and English", self.view)
         self.assertIn("ASRModel.allCases", self.view)
+
+    def test_firered_uses_aed_and_existing_owner(self):
+        self.assertIn("#if MURAL_FIRERED_FILE_PROBE\n        case fireRed", self.engine)
+        self.assertIn("breeze = breeze, fireRed = fireRed", self.engine)
+        self.assertIn("text = try await fireRed.transcribe(turnSamples)", self.engine)
+        self.assertIn("config.model_config.fire_red_asr.encoder = encoder", self.firered)
+        self.assertIn("config.model_config.fire_red_asr.decoder = decoder", self.firered)
+        self.assertNotIn("fire_red_asr_ctc", self.firered)
+        self.assertIn("samples.count <= 480_000", self.firered)
+        self.assertIn("evidence.rejects(in: vadMode)", self.firered)
+        self.assertIn("artifact.sha256", self.firered)
+
+    def test_firered_cancellation_drains_native_work(self):
+        decode = self.firered.split("let text = try samples.withUnsafeBufferPointer", 1)[1]
+        self.assertLess(decode.index("SherpaOnnxDecodeOfflineStream"), decode.index("try checkReadyForWork()"))
+        self.assertIn("defer { SherpaOnnxDestroyOfflineStream(stream) }", decode)
+        self.assertIn("defer { SherpaOnnxDestroyOfflineRecognizerResult(result) }", decode)
+        self.assertNotIn("await", decode)
+        self.assertNotIn("withTaskCancellationHandler", self.firered)
+        self.assertIn("deinit {\n        if let recognizer { SherpaOnnxDestroyOfflineRecognizer(recognizer) }", self.firered)
 
     def test_reference_is_transcribe_auto(self):
         options = generation_options()
