@@ -337,7 +337,24 @@ struct TypedReplyView: View {
 }
 
 /// Visible feasibility entry, including optimized device builds. Not a saved conversation.
-private struct LocalTutorProbeView: View {
+struct LocalTutorProbeView: View {
+    static var vadOnlyRequested: Bool {
+        #if MURAL_VAD_PROBE
+        ProcessInfo.processInfo.arguments.contains("--asr-vad-only")
+        #else
+        false
+        #endif
+    }
+
+    private var retainingVADFixtures: Bool { Self.vadOnlyRequested && LocalConversationEngine.retainsVADFixtures }
+
+    private var speechModels: [LocalConversationEngine.ASRModel] {
+        #if MURAL_VAD_PROBE
+        if Self.vadOnlyRequested { return [.vadOnly] }
+        #endif
+        return LocalConversationEngine.ASRModel.allCases
+    }
+
     @State private var audio = LocalConversationEngine()
     @State private var speechProbe = true
     @State private var text = ""
@@ -358,9 +375,9 @@ private struct LocalTutorProbeView: View {
         NavigationStack {
             Form {
                 Picker("Probe", selection: $speechProbe) {
-                    Text("Speech recognition").tag(true)
+                    Text(Self.vadOnlyRequested ? "Speech gate only (no ASR)" : "Speech recognition").tag(true)
                     Text("Apple tutor").tag(false)
-                }.disabled(worker != nil || audio.asrBusy)
+                }.disabled(worker != nil || audio.asrBusy || Self.vadOnlyRequested)
                 if speechProbe {
                     speechSections
                 } else {
@@ -393,7 +410,8 @@ private struct LocalTutorProbeView: View {
                 }
                 }
             }
-            .navigationTitle("Local conversation probe").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(Self.vadOnlyRequested ? "Speech gate test" : "Local conversation probe")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { stop(); dismiss() }
@@ -403,6 +421,11 @@ private struct LocalTutorProbeView: View {
                 }
             }
         }
+        #if MURAL_VAD_PROBE
+        .onAppear {
+            if Self.vadOnlyRequested { audio.selectASR(.vadOnly) }
+        }
+        #endif
         .onDisappear { stop() }
         .onChange(of: speechProbe) { stop() }
         .onChange(of: scenePhase) { _, phase in
@@ -422,12 +445,23 @@ private struct LocalTutorProbeView: View {
     @ViewBuilder private var speechSections: some View {
         Section("Phase 2 · Microphone only") {
             Picker("Speech model", selection: Binding(get: { audio.asrModel }, set: { audio.selectASR($0) })) {
-                ForEach(LocalConversationEngine.ASRModel.allCases, id: \.self) { model in
+                ForEach(speechModels, id: \.self) { model in
                     Text(model.rawValue).tag(model)
                 }
             }.disabled(audio.asrBusy).accessibilityIdentifier("local-asr-model")
-            Text("Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
+            if Self.vadOnlyRequested {
+                Text("This checks only whether the current VAD gate accepts your recording. No words are recognized.")
+                Text(retainingVADFixtures
+                     ? "Private fixture retention is ON: up to 8 submitted recordings are saved locally for the approved test."
+                     : "No audio is saved.")
+            } else {
+                Text("Send shows the selected model's uncorrected transcript. No tutor, TTS, saved conversation, or cloud inference is used.")
+            }
             switch audio.asrModel {
+            #if MURAL_VAD_PROBE
+            case .vadOnly:
+                Text("VAD-only diagnosis uses the normal microphone and converter, but loads only Silero. Send reports the current gate decision, not a transcript.").font(.footnote)
+            #endif
             #if MURAL_FIRERED_FILE_PROBE
             case .fireRed:
                 Text("FireRedASR2-AED · Mainland Mandarin and English · INT8 · CPU · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
@@ -449,8 +483,8 @@ private struct LocalTutorProbeView: View {
                 Text("Nemotron · full multilingual vocabulary · auto · 1120 ms · 16 kHz mono. Mixed-language recognition failed earlier tests.").font(.footnote)
                 Text("Prepare on Wi-Fi first: about 664 MB plus preparation space, or reuse cached files. Whisper's cached files are kept.").font(.footnote)
             }
-            Text("Only one speech model is loaded at a time.").font(.footnote)
-            Button("Prepare speech models") { audio.prepareASR() }.disabled(!audio.canPrepare)
+            Text(Self.vadOnlyRequested ? "Only the small Silero detector is loaded. ASR, tutor and TTS are off." : "Only one speech model is loaded at a time.").font(.footnote)
+            Button(Self.vadOnlyRequested ? "Prepare speech gate" : "Prepare speech models") { audio.prepareASR() }.disabled(!audio.canPrepare)
             if audio.asrError != nil, audio.canPrepare, audio.asrModel.supportsRepairDownload {
                 Button("Repair download") { audio.prepareASR(repairDownload: true) }
             }
@@ -469,10 +503,15 @@ private struct LocalTutorProbeView: View {
                 .disabled(audio.asrState != .recording).accessibilityIdentifier("local-asr-send")
             Text("Speak for up to \(audio.recordingLimitSeconds) seconds, then tap Send recording. Stop discards an unfinished recording and unloads the models.").font(.footnote)
         }
-        Section("Finalized recognition · \(audio.asrModel.rawValue)") {
-            Text(audio.asrText.isEmpty ? "No finalized text" : audio.asrText)
-                .textSelection(.enabled).accessibilityIdentifier("local-asr-text")
-            if let notice = audio.asrNotice { Text(notice).font(.footnote) }
+        Section(Self.vadOnlyRequested ? "Current gate result (no ASR)" : "Finalized recognition · \(audio.asrModel.rawValue)") {
+            if Self.vadOnlyRequested {
+                Text(audio.asrNotice ?? "Record once, then tap Send recording to see Accept or Reject.")
+                    .textSelection(.enabled).accessibilityIdentifier("local-asr-notice")
+            } else {
+                Text(audio.asrText.isEmpty ? "No finalized text" : audio.asrText)
+                    .textSelection(.enabled).accessibilityIdentifier("local-asr-text")
+                if let notice = audio.asrNotice { Text(notice).font(.footnote) }
+            }
             if let error = audio.asrError { Text(error).foregroundStyle(.red) }
             if let seconds = audio.finalizeSeconds {
                 Text("Captured audio: \(audio.capturedSeconds, specifier: "%.2f") s · Send to final: \(seconds, specifier: "%.2f") s").font(.footnote)

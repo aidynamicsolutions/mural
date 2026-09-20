@@ -1,5 +1,6 @@
 import AVFoundation
 import CryptoKit
+import CoreML
 import Foundation
 import MuralCore
 import Observation
@@ -8,7 +9,6 @@ import FluidAudio
 import WhisperKit
 #if canImport(CoreAI)
 import CoreAI
-import CoreML
 import ArgmaxCore
 #endif
 
@@ -94,6 +94,9 @@ enum LocalSpeechVoice {
     enum ASRModel: String, CaseIterable {
         case phoWhisper = "PhoWhisper CS", parakeet = "Parakeet VI–EN", whisper = "Whisper", nemotron = "Nemotron"
         case breeze = "Breeze TW–EN (probe)"
+        #if MURAL_VAD_PROBE
+        case vadOnly = "Silero VAD only (no ASR)"
+        #endif
         #if MURAL_FIRERED_FILE_PROBE
         case fireRed = "FireRed v2 CN-EN (probe)"
         #endif
@@ -101,6 +104,9 @@ enum LocalSpeechVoice {
         var supportsRepairDownload: Bool {
             switch self {
             case .phoWhisper, .breeze: false
+            #if MURAL_VAD_PROBE
+            case .vadOnly: false
+            #endif
             #if MURAL_FIRERED_FILE_PROBE
             case .fireRed: false
             #endif
@@ -152,6 +158,14 @@ enum LocalSpeechVoice {
     private var requestedAt = 0.0
     private var playbackStartedAt: Double?
     private let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+
+    nonisolated static var retainsVADFixtures: Bool {
+        #if MURAL_VAD_PROBE
+        ProcessInfo.processInfo.arguments.contains { $0 == "--asr-vad-fixtures" || $0.hasPrefix("--asr-vad-fixtures=") }
+        #else
+        false
+        #endif
+    }
 
     nonisolated static var conversationASRBackend: String {
         #if canImport(CoreAI)
@@ -382,8 +396,28 @@ enum LocalSpeechVoice {
                 }
                 try Task.checkCancellation()
                 let started = ProcessInfo.processInfo.systemUptime
+                #if MURAL_VAD_PROBE
+                if selected == .vadOnly {
+                    let fixtureDirectory = try Self.vadFixtureDirectory()
+                    self.asrState = .warming
+                    let recognizer = WhisperRecognizer(phoWhisper: true)
+                    try await recognizer.prepareVADOnly()
+                    try Task.checkCancellation()
+                    guard self.generation == token else { return }
+                    self.whisper = recognizer
+                    self.preparationSeconds = ProcessInfo.processInfo.systemUptime - started
+                    self.preparationDetail = fixtureDirectory == nil
+                        ? "Silero only. No ASR weights, tutor, TTS or audio retention."
+                        : "Silero only. ASR, tutor and TTS off. Explicit private fixture retention: up to 8 submitted recordings."
+                    self.asrState = .ready
+                    return
+                }
+                #endif
                 let directory: URL
                 switch selected {
+                #if MURAL_VAD_PROBE
+                case .vadOnly: throw SpeechError.busy // Handled above; never resolve ASR assets.
+                #endif
                 #if MURAL_FIRERED_FILE_PROBE
                 case .fireRed:
                     directory = try await FireRedEnglishRecognizer.localDirectory()
@@ -415,6 +449,9 @@ enum LocalSpeechVoice {
                 self.asrState = .warming
                 let loadingStarted = ProcessInfo.processInfo.systemUptime
                 switch selected {
+                #if MURAL_VAD_PROBE
+                case .vadOnly: throw SpeechError.busy
+                #endif
                 #if MURAL_FIRERED_FILE_PROBE
                 case .fireRed:
                     let recognizer = FireRedEnglishRecognizer()
@@ -551,7 +588,8 @@ enum LocalSpeechVoice {
                 self.capturedSeconds = result.seconds
                 self.finalizeSeconds = self.submittedAt.map { ProcessInfo.processInfo.systemUptime - $0 } ?? result.finalizeSeconds
                 self.logger.notice("asr_trial_final id=\(token.uuidString, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) send_to_final_seconds=\(self.finalizeSeconds!, privacy: .public) captured_seconds=\(self.capturedSeconds, privacy: .public)")
-                if self.asrText.isEmpty { self.asrNotice = "No speech recognized. Try another recording." }
+                if let notice = result.notice { self.asrNotice = notice }
+                else if self.asrText.isEmpty { self.asrNotice = "No speech recognized. Try another recording." }
                 self.asrState = .ready
                 self.logger.notice("asr_final model=\(model, privacy: .public) captured_seconds=\(result.seconds, privacy: .public) finish_seconds=\(result.finalizeSeconds, privacy: .public) send_to_final_seconds=\(self.finalizeSeconds!, privacy: .public) characters=\(self.asrText.count, privacy: .public)")
             } catch {
@@ -585,7 +623,12 @@ enum LocalSpeechVoice {
         }
     }
 
-    private struct Recognition: Sendable { let text: String; let seconds: Double; let finalizeSeconds: Double }
+    private struct Recognition: Sendable {
+        let text: String
+        let seconds: Double
+        let finalizeSeconds: Double
+        var notice: String? = nil
+    }
 
     @concurrent private static func transcribe(_ stream: AsyncThrowingStream<AVReadOnlyAudioPCMBuffer, Error>,
         manager: StreamingNemotronMultilingualAsrManager?, whisper: WhisperRecognizer?,
@@ -624,6 +667,9 @@ enum LocalSpeechVoice {
         let tail = try convert(converter, input: nil, target: target, capacity: 4096)
         let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
         logger.notice("asr_input source_frames=\(frames, privacy: .public) source_hz=\(sampleRate, privacy: .public) converted_frames=\(convertedFrames + tail.count, privacy: .public)")
+        #if MURAL_VAD_PROBE
+        logger.notice("asr_vad_capture id=\(turnID.uuidString, privacy: .public) source_frames=\(frames, privacy: .public) source_hz=\(sampleRate, privacy: .public) channels=\(channelCount, privacy: .public) converted_body_samples=\(convertedFrames, privacy: .public) converter_tail_samples=\(tail.count, privacy: .public) converted_samples=\(convertedFrames + tail.count, privacy: .public)")
+        #endif
         let started = ProcessInfo.processInfo.systemUptime
         let text: String
         if let manager {
@@ -653,6 +699,24 @@ enum LocalSpeechVoice {
             for (index, region) in analysis.regions.enumerated() {
                 logger.notice("asr_vad_region id=\(turnID.uuidString, privacy: .public) index=\(index, privacy: .public) start_sample=\(region.lowerBound, privacy: .public) end_sample_exclusive=\(region.upperBound, privacy: .public) start_seconds=\(Double(region.lowerBound) / 16000, privacy: .public) end_seconds_exclusive=\(Double(region.upperBound) / 16000, privacy: .public)")
             }
+            #if MURAL_VAD_PROBE
+            if await whisper.vadOnly {
+                try Task.checkCancellation()
+                guard !analysis.failedOpen else {
+                    throw CaptureError.operation("VAD evidence unavailable. No gate decision or ASR result.")
+                }
+                var retained = ""
+                if let directory = try vadFixtureDirectory() {
+                    let digest = try writeVADFixture(turnSamples, turnID: turnID, directory: directory)
+                    logger.notice("asr_vad_fixture id=\(turnID.uuidString, privacy: .public) session=\(directory.lastPathComponent, privacy: .public) samples=\(turnSamples.count, privacy: .public) pcm_sha256=\(digest, privacy: .public)")
+                    retained = " Private audio fixture saved."
+                }
+                try Task.checkCancellation()
+                return Recognition(text: "", seconds: Double(frames) / sampleRate,
+                    finalizeSeconds: ProcessInfo.processInfo.systemUptime - started,
+                    notice: (analysis.rejected ? "Gate would reject. No ASR ran." : "Gate would accept. No ASR ran.") + retained)
+            }
+            #endif
             if !analysis.rejected {
                 if let decoderWarmup {
                     let waitStarted = ProcessInfo.processInfo.systemUptime
@@ -677,19 +741,76 @@ enum LocalSpeechVoice {
         return Recognition(text: text, seconds: Double(frames) / sampleRate, finalizeSeconds: finalizeSeconds)
     }
 
+    #if MURAL_VAD_PROBE
+    private nonisolated static func vadFixtureDirectory() throws -> URL? {
+        let arguments = ProcessInfo.processInfo.arguments
+        let prefix = "--asr-vad-fixtures="
+        let flags = arguments.filter { $0 == "--asr-vad-fixtures" || $0.hasPrefix(prefix) }
+        guard !flags.isEmpty else { return nil }
+        guard arguments.contains("--asr-vad-only"), flags.count == 1, flags[0].hasPrefix(prefix),
+              let session = UUID(uuidString: String(flags[0].dropFirst(prefix.count))) else {
+            throw CaptureError.operation("Private fixtures require VAD-only and exactly one --asr-vad-fixtures=<UUID> argument.")
+        }
+        return URL.documentsDirectory.appending(path: "VADQualification/\(session.uuidString)")
+    }
+
+    private nonisolated static func writeVADFixture(_ samples: [Float], turnID: UUID, directory: URL) throws -> String {
+        try Task.checkCancellation()
+        guard (1...480_000).contains(samples.count), samples.allSatisfy(\.isFinite),
+              let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+              let output = buffer.floatChannelData?[0] else { throw CaptureError.format }
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let files = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        guard files.filter({ $0.pathExtension == "wav" }).count < 8 else {
+            throw CaptureError.operation("This private fixture session is limited to 8 submitted recordings.")
+        }
+        let file = directory.appending(path: "\(turnID.uuidString).wav")
+        let temporary = directory.appending(path: "\(turnID.uuidString).partial.wav")
+        guard !manager.fileExists(atPath: file.path), !manager.fileExists(atPath: temporary.path) else {
+            throw CaptureError.operation("The private fixture already exists; it will not be overwritten.")
+        }
+        defer { try? manager.removeItem(at: temporary) } // Only this call's new, incomplete file.
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { output.update(from: $0.baseAddress!, count: samples.count) }
+        try Task.checkCancellation()
+        do {
+            let audio = try AVAudioFile(forWriting: temporary, settings: format.settings,
+                                       commonFormat: .pcmFormatFloat32, interleaved: false)
+            try audio.write(from: buffer)
+        }
+        try Task.checkCancellation()
+        try manager.moveItem(at: temporary, to: file)
+        let pcm = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+        return SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined()
+    }
+    #endif
+
     private nonisolated static func convert(_ converter: AVAudioConverter, input: AVAudioPCMBuffer?,
         target: AVAudioFormat, capacity: AVAudioFrameCount) throws -> [Float] {
         guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { throw CaptureError.format }
         var supplied = false
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, state in
-            if let input, !supplied { supplied = true; state.pointee = .haveData; return input }
-            state.pointee = input == nil ? .endOfStream : .noDataNow
-            return nil
+        var samples: [Float] = []
+        while true {
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, state in
+                if let input, !supplied { supplied = true; state.pointee = .haveData; return input }
+                state.pointee = input == nil ? .endOfStream : .noDataNow
+                return nil
+            }
+            if let error { throw error }
+            guard status != .error, let data = output.floatChannelData else { throw CaptureError.format }
+            samples.append(contentsOf: UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
+            switch status {
+            case .inputRanDry, .endOfStream: return samples
+            case .haveData:
+                // Buffered output can fill capacity BEFORE this packet is requested.
+                // Keep the input alive and drain until it is consumed, including at Send.
+                guard output.frameLength > 0 else { throw CaptureError.format }
+            default: throw CaptureError.format
+            }
         }
-        if let error { throw error }
-        guard status != .error, let data = output.floatChannelData else { throw CaptureError.format }
-        return Array(UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
     }
 
     #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
@@ -766,6 +887,30 @@ enum LocalSpeechVoice {
         #endif
 
         init(phoWhisper: Bool = false) { self.phoWhisper = phoWhisper }
+
+        #if MURAL_VAD_PROBE
+        private(set) var vadOnly = false
+
+        func prepareVADOnly() async throws {
+            vadOnly = true
+            try Task.checkCancellation()
+            vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)
+            guard vadMode == .gate else {
+                throw CaptureError.operation("VAD-only qualification requires the unchanged gate mode.")
+            }
+            // Load the existing cache directly: no recovery deletion or repair download.
+            let url = URL.applicationSupportDirectory.appending(path:
+                "FluidAudio/Models/\(Repo.vad.folderName)/\(ModelNames.VAD.sileroVadFile)")
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .cpuAndNeuralEngine
+            VietnameseEnglishRecognizer.logMemory(stage: "vad-only-load-begin", model: ModelNames.VAD.sileroVadFile)
+            let model = try MLModel(contentsOf: url, configuration: configuration)
+            try Task.checkCancellation()
+            vad = VadManager(config: VadConfig(defaultThreshold: SpeechPresencePolicy.threshold,
+                computeUnits: .cpuAndNeuralEngine), vadModel: model)
+            VietnameseEnglishRecognizer.logMemory(stage: "vad-only-loaded", model: ModelNames.VAD.sileroVadFile)
+        }
+        #endif
 
         private struct LocalManifest: Decodable {
             struct File: Decodable { let bytes: Int; let sha256: String }
@@ -947,6 +1092,11 @@ enum LocalSpeechVoice {
                 let elapsed = ProcessInfo.processInfo.systemUptime - started
                 let analysis = evidence.analyze(samples, mode: vadMode)
                 let rejected = analysis.rejected
+                #if MURAL_VAD_PROBE
+                if vadOnly {
+                    logger.notice("asr_vad_short_pair id=\(turnID.uuidString, privacy: .public) present=\(evidence.hasStrongSpeechPair, privacy: .public) threshold=\(SpeechPresencePolicy.shortSpeechThreshold, privacy: .public) full_window_samples=\(SpeechPresencePolicy.chunkSize, privacy: .public)")
+                }
+                #endif
                 logger.notice("asr_vad_result id=\(turnID.uuidString, privacy: .public) mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) duration_seconds=\(Double(samples.count) / 16000, privacy: .public) windows=\(evidence.windowCount, privacy: .public) max_probability=\(evidence.maxProbability, privacy: .public) mean_probability=\(evidence.meanProbability, privacy: .public) speech_score=\(evidence.speechScore, privacy: .public) active_windows=\(evidence.activeWindows, privacy: .public) active_window_seconds=\(Double(evidence.activeWindowSamples) / 16000, privacy: .public) first_active_sample=\(evidence.firstActiveSample ?? -1, privacy: .public) last_active_sample_exclusive=\(evidence.lastActiveSampleExclusive ?? -1, privacy: .public) complete=\(evidence.complete, privacy: .public) would_reject=\(evidence.wouldReject, privacy: .public) rejected=\(rejected, privacy: .public) analysis_seconds=\(elapsed, privacy: .public)")
                 return analysis
             } catch is CancellationError {
@@ -1076,6 +1226,9 @@ enum LocalSpeechVoice {
 
         func transcribe(_ samples: [Float]) async throws -> String {
             try Task.checkCancellation()
+            #if MURAL_VAD_PROBE
+            guard !vadOnly else { throw CaptureError.operation("VAD-only cannot invoke ASR.") }
+            #endif
             #if canImport(CoreAI)
             if usesStagedEncoder {
                 return try await transcribeStaged(samples)

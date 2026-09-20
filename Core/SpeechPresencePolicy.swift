@@ -6,6 +6,7 @@ public enum SpeechPresencePolicy {
     public static let chunkSize = 4_096 // FluidAudio 0.15.7 Silero, not upstream's 512.
     public static let threshold: Float = 0.30
     public static let speechScoreThreshold: Float = 0.85 // Mean of the three strongest windows.
+    public static let shortSpeechThreshold: Float = 0.999 // Two consecutive full windows, not one noise spike.
     // Whole 256 ms windows: protect uncertain word boundaries and keep natural pauses.
     public static let preRollSamples = 2 * chunkSize // 512 ms before an active window.
     public static let hangoverSamples = 4 * chunkSize // 1,024 ms after an active window.
@@ -49,6 +50,8 @@ public enum SpeechPresencePolicy {
         public private(set) var lastActiveSampleExclusive: Int?
         public private(set) var maxProbability: Float = 0
         public private(set) var valid = true
+        public private(set) var hasStrongSpeechPair = false
+        private var previousFullWindowWasStrong = false
         private var probabilitySum: Double = 0
         private var strongestProbability: Float = 0
         private var secondStrongestProbability: Float = 0
@@ -71,6 +74,10 @@ public enum SpeechPresencePolicy {
             windowCount += 1
             probabilitySum += Double(probability)
             maxProbability = max(maxProbability, probability)
+            // Repeat-last padding must not turn a tiny final fragment into short-speech evidence.
+            let strong = count == chunkSize && probability >= shortSpeechThreshold
+            hasStrongSpeechPair = hasStrongSpeechPair || (previousFullWindowWasStrong && strong)
+            previousFullWindowWasStrong = strong
             if probability > strongestProbability {
                 thirdStrongestProbability = secondStrongestProbability
                 secondStrongestProbability = strongestProbability
@@ -102,8 +109,8 @@ public enum SpeechPresencePolicy {
             windowCount < 3 ? 0 : (strongestProbability + secondStrongestProbability + thirdStrongestProbability) / 3
         }
         public var complete: Bool { valid && processedSamples == sampleCount }
-        // Three strong windows preserve tested quiet Yes/No while rejecting observed fan and breathing spikes.
-        public var wouldReject: Bool { complete && speechScore < speechScoreThreshold }
+        // Retain the aggregate gate; a much stricter adjacent pair rescues qualified short replies.
+        public var wouldReject: Bool { complete && speechScore < speechScoreThreshold && !hasStrongSpeechPair }
         public func rejects(in mode: Mode) -> Bool { mode == .gate && wouldReject }
 
         /// No PCM leaves this turn until all evidence qualifies. Missing/bad evidence

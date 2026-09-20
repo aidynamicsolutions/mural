@@ -16,6 +16,8 @@ import WhisperKit
     @State private var startupError: String?
 
     init() {
+        // Explicit VAD-only launch never creates Talk, a tutor, or a learning store.
+        if LocalTutorProbeView.vadOnlyRequested { return }
         #if MURAL_FIRERED_FILE_PROBE
         // The file probe must not open/migrate learning data or create the normal audio owner.
         if FireRedFileProbe.requested { return }
@@ -45,6 +47,9 @@ import WhisperKit
 
     var body: some Scene {
         WindowGroup {
+            if LocalTutorProbeView.vadOnlyRequested {
+                LocalTutorProbeView().preferredColorScheme(.light)
+            } else {
             #if MURAL_FIRERED_FILE_PROBE
             if FireRedFileProbe.requested {
                 FireRedFileProbe()
@@ -60,6 +65,7 @@ import WhisperKit
             #else
             mainContent
             #endif
+            }
         }
     }
 }

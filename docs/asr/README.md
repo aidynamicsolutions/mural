@@ -40,6 +40,19 @@ labels. The staged harness starts after audio-file read and includes diagnostics
 Only ID-correlated `asr_trial_send`/`final`/`audio` measure app Send-to-final and
 first tutor audio. Phase footprint is not process-lifetime RSS or model-only RAM.
 
+## Speech-presence gate
+
+VAD gate remains the default. Complete valid evidence qualifies with the existing
+three-strongest-window mean of at least `0.85`, or the user-approved short-reply
+exception: two consecutive full 4,096-sample windows each scoring at least `0.999`.
+A padded partial window cannot supply the exception. The `.30` active-window
+threshold and PhoWhisper trimming constants are unchanged; Breeze and FireRed
+still pass full accepted PCM. ASR defaults and the memory-warning latch are unchanged.
+
+See the [short-reply fix and paired phone result](short-reply-vad-fix-20260920.md)
+for matched probability evidence, remaining limits, and the eight consented private
+audio fixtures. VAD-only qualification did not run ASR or clear FireRed's memory STOP.
+
 ## Historical evidence, not current work orders
 
 The [PAL8 live result](combined-pal8-mixed-result-20260918.md),
@@ -51,7 +64,8 @@ results and limitations. Earlier plans, checkpoints, patch generators and
 their pending-work instructions are superseded by this index. Retain useful
 identity/layout/policy regressions and immutable export provenance. Do not restart
 PAL4/PAL6, mixed precision, prewarm-policy comparisons, conversion or compact-model
-research. Silence/VAD is separate and is not started by this review.
+research. Silence/VAD is separate; use the current gate result above rather than
+restarting a historical single-window candidate.
 
 Keep recordings, stores, screenshots and complete device logs local. Publish only
 a concise sanitized result with source/build/artifact hashes and explicit limits.

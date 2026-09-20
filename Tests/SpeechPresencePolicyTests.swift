@@ -78,10 +78,123 @@ final class SpeechPresencePolicyTests: XCTestCase {
         XCTAssertEqual(result.speechScore, 0.9, accuracy: 0.000001)
     }
 
-    func testFewerThanThreeWindowsCannotQualifySpeech() {
-        XCTAssertTrue(evidence([1], tail: 320).wouldReject)
-        XCTAssertTrue(evidence([1, 1], tail: 320).wouldReject)
-        XCTAssertFalse(evidence([1, 1, 1], tail: 320).wouldReject)
+    func testShortCapturesNeedTwoFullVeryStrongWindows() {
+        // Synthetic probabilities, not an acoustic minimum word duration.
+        for count in [1, 320, 4096, 4097, 8191] {
+            var result = SpeechPresencePolicy.Evidence(sampleCount: count)
+            for offset in stride(from: 0, to: count, by: SpeechPresencePolicy.chunkSize) {
+                result.append(probability: 1, sampleCount: min(4096, count - offset))
+            }
+            XCTAssertTrue(result.complete)
+            XCTAssertEqual(result.speechScore, 0)
+            XCTAssertTrue(result.wouldReject)
+        }
+        let pair = evidence([1, 1])
+        XCTAssertEqual(pair.sampleCount, 8192)
+        XCTAssertEqual(pair.speechScore, 0) // Legacy three-window score is unchanged.
+        XCTAssertTrue(pair.hasStrongSpeechPair)
+        XCTAssertFalse(pair.wouldReject)
+        let partialThird = evidence([1, 1, 1], tail: 1)
+        XCTAssertEqual(partialThird.sampleCount, 8193) // Captured geometry, not a word-duration requirement.
+        XCTAssertEqual(partialThird.activeWindowSamples, 8193) // No SDK padding counted.
+        XCTAssertEqual(partialThird.speechScore, 1)
+        XCTAssertFalse(partialThird.wouldReject)
+    }
+
+    func testVeryStrongFullPairSurvivesSurroundingQuiet() {
+        // Synthetic evidence at the FireRed rejected capture lengths. NOT their lost traces.
+        for count in [36_800, 44_800, 54_400] {
+            let windows = (count + 4095) / 4096
+            for onset in 0..<windows - 1 {
+                var probabilities = Array(repeating: Float(0.01), count: windows)
+                probabilities[onset] = 1
+                probabilities[onset + 1] = 1
+                let result = evidence(probabilities, tail: count - (windows - 1) * 4096)
+                XCTAssertTrue(result.complete)
+                XCTAssertEqual(result.activeWindows, 2)
+                XCTAssertEqual(result.speechScore, 0.67, accuracy: 0.000001)
+                // A pair touching the padded final window cannot use the rescue.
+                XCTAssertEqual(result.rejects(in: .gate), onset == windows - 2)
+                XCTAssertFalse(result.rejects(in: .observe))
+            }
+        }
+    }
+
+    func testHistoricalObserveSpeechBlockTurnUsesPairBelowAggregateScore() {
+        // Real logged probabilities: September 19 observe, ECCF6D2B-34C6-4540-BF60-A2761D2370E5.
+        // No retained PCM or independently checked words: this documents policy behavior only.
+        let result = evidence([0.046387, 0.025391, 1, 1, 0.497070, 0.330078], tail: 3520)
+        XCTAssertEqual(result.sampleCount, 24_000)
+        XCTAssertTrue(result.complete)
+        XCTAssertEqual(result.activeWindows, 4) // 0.30 is not the turn acceptance threshold.
+        XCTAssertEqual(result.speechScore, 0.8323567, accuracy: 0.000001)
+        XCTAssertTrue(result.hasStrongSpeechPair)
+        XCTAssertFalse(result.rejects(in: .gate))
+        XCTAssertFalse(result.rejects(in: .observe))
+    }
+
+    func testVADOnlyPhoneShortRepliesUsePairWithoutLoweringAggregateCutoff() {
+        // September 20, human-labeled normal Yes/No; actual logged probabilities, not PCM replay.
+        // 0B83DFCD-9CFA-4423-9DF8-9AF2485D6551 and D354FEA0-FDE0-4FFD-9110-164B314BF6E1.
+        let yes = evidence([0.099609, 0.048828, 0.023926, 1, 1, 0.392578, 0.104492, 0.038574], tail: 1728)
+        let no = evidence([0.085449, 0.039551, 0.032715, 0.051758, 1, 1, 0.500977, 0.145508, 0.143066], tail: 4032)
+        XCTAssertEqual(yes.sampleCount, 30_400)
+        XCTAssertEqual(no.sampleCount, 36_800)
+        XCTAssertEqual(yes.speechScore, 0.797526, accuracy: 0.000001)
+        XCTAssertEqual(no.speechScore, 0.833659, accuracy: 0.000001)
+        for result in [yes, no] {
+            XCTAssertTrue(result.complete)
+            XCTAssertEqual(result.activeWindows, 3) // Active coverage is not three strong windows.
+            XCTAssertTrue(result.hasStrongSpeechPair)
+            XCTAssertFalse(result.rejects(in: .gate))
+            XCTAssertFalse(result.rejects(in: .observe))
+        }
+        // Lowering only the top-three cutoff enough to rescue this Yes reopens known breathing.
+        let recordedBreathingScore: Float = (0.993164 + 0.990723 + 0.424805) / 3
+        XCTAssertGreaterThan(recordedBreathingScore, yes.speechScore)
+        XCTAssertLessThan(recordedBreathingScore, SpeechPresencePolicy.speechScoreThreshold)
+    }
+
+    func testFollowupShortSpeechIsRescuedWithoutAcceptingThroatClear() {
+        // Real held-out phone probabilities: normal No, quiet Yes, quiet No (September 20 follow-up).
+        // IDs: 72A2B33E, DE7FD4E0, 42BA5229. No original PCM retained for these turns.
+        let speech: [([Float], Int)] = [
+            ([0.071289, 0.041992, 0.024414, 0.081055, 1, 1, 0.229980, 0.233887, 0.101074], 4032),
+            ([0.072266, 0.046387, 0.024902, 0.023926, 1, 1, 0.253906, 0.144043, 0.077637, 0.038574, 0.023438], 2240),
+            ([0.091309, 0.042969, 0.031250, 0.024414, 1, 1, 0.312500, 0.187988, 0.074707], 4032)
+        ]
+        for (probabilities, tail) in speech {
+            let result = evidence(probabilities, tail: tail)
+            XCTAssertTrue(result.complete)
+            XCTAssertLessThan(result.speechScore, SpeechPresencePolicy.speechScoreThreshold)
+            XCTAssertFalse(result.rejects(in: .gate))
+        }
+        // Real non-word control 559D9CD5: near-saturated spike is not a pair.
+        let throat = evidence([0.105469, 0.083496, 0.045898, 0.996582, 0.859863, 0.065430,
+                               0.023926, 0.030762, 0.017090, 0.013672, 0.009277], tail: 2240)
+        XCTAssertTrue(throat.rejects(in: .gate))
+    }
+
+    func testShortSpeechPairRequiresAdjacencyFullWindowsAndStrictScore() {
+        let threshold = SpeechPresencePolicy.shortSpeechThreshold
+        XCTAssertFalse(evidence([threshold, threshold]).wouldReject)
+        for probabilities: [Float] in [[threshold.nextDown, 1], [1, threshold.nextDown], [1, 0, 1]] {
+            let result = evidence(probabilities)
+            XCTAssertFalse(result.hasStrongSpeechPair)
+            XCTAssertTrue(result.wouldReject)
+        }
+        for tail in [1, 320, 4095] {
+            let result = evidence([1, 1], tail: tail)
+            XCTAssertFalse(result.hasStrongSpeechPair)
+            XCTAssertTrue(result.wouldReject)
+        }
+        var incomplete = SpeechPresencePolicy.Evidence(sampleCount: 12_288)
+        incomplete.append(probability: 1, sampleCount: 4096)
+        incomplete.append(probability: 1, sampleCount: 4096)
+        XCTAssertTrue(incomplete.hasStrongSpeechPair)
+        XCTAssertTrue(incomplete.analyze(pcm(12_288), mode: .gate).failedOpen)
+        incomplete.append(probability: .nan, sampleCount: 4096)
+        XCTAssertTrue(incomplete.analyze(pcm(12_288), mode: .gate).failedOpen)
     }
 
     func testSpeechScoreBoundary() {
@@ -149,8 +262,10 @@ final class SpeechPresencePolicyTests: XCTestCase {
     }
 
     func testEvidenceDoesNotLeakBetweenTurns() {
-        let first = evidence([1, 1, 1])
+        let first = evidence([1, 1])
         let second = evidence([0, 0, 0])
+        XCTAssertTrue(first.hasStrongSpeechPair)
+        XCTAssertFalse(second.hasStrongSpeechPair)
         XCTAssertFalse(first.wouldReject)
         XCTAssertTrue(second.wouldReject)
         XCTAssertEqual(second.activeWindows, 0)
