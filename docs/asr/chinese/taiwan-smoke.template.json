@@ -1,0 +1,135 @@
+{
+  "schema": "mural.chinese-asr.corpus.v1",
+  "status": "recording-script-not-ground-truth",
+  "instructions": "Copy outside Git. Record actual speech; replace references and anonymous speaker labels before inspecting ASR. Clip 15: quiet room. Clip 16: non-speech background noise. These prompts are not recorded data.",
+  "clips": [
+    {
+      "id": "tw01",
+      "wav": "tw01.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh",
+      "reference": "我想搭捷運去臺北車站。"
+    },
+    {
+      "id": "tw02",
+      "wav": "tw02.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh",
+      "reference": "這個軟體需要更新，網路現在很慢。"
+    },
+    {
+      "id": "tw03",
+      "wav": "tw03.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "en",
+      "reference": "Could we move the meeting to Friday?"
+    },
+    {
+      "id": "tw04",
+      "wav": "tw04.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "en",
+      "reference": "I would like a small iced coffee, please."
+    },
+    {
+      "id": "tw05",
+      "wav": "tw05.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh-en",
+      "reference": "我想要一杯 iced latte，不要糖。"
+    },
+    {
+      "id": "tw06",
+      "wav": "tw06.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh-en",
+      "reference": "這個 deadline 可以延到 Friday 嗎？"
+    },
+    {
+      "id": "tw07",
+      "wav": "tw07.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "en-zh",
+      "reference": "Could you help me 查一下高鐵時刻表？"
+    },
+    {
+      "id": "tw08",
+      "wav": "tw08.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "en-zh",
+      "reference": "I forgot 我的悠遊卡放在哪裡了。"
+    },
+    {
+      "id": "tw09",
+      "wav": "tw09.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "multi-switch",
+      "reference": "我先 check 一下 calendar，然後再跟你 confirm。"
+    },
+    {
+      "id": "tw10",
+      "wav": "tw10.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "multi-switch",
+      "reference": "Let me 想一下，我今天有 meeting，明天比較有空。"
+    },
+    {
+      "id": "tw11",
+      "wav": "tw11.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh-en",
+      "reference": "我是說 next Tuesday，不是這個星期二。"
+    },
+    {
+      "id": "tw12",
+      "wav": "tw12.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "zh-en",
+      "reference": "幫我寄 email 給 Alex，提醒他下午三點開會。"
+    },
+    {
+      "id": "tw13",
+      "wav": "tw13.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "short",
+      "reference": "對。"
+    },
+    {
+      "id": "tw14",
+      "wav": "tw14.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "short",
+      "reference": "No."
+    },
+    {
+      "id": "tw15",
+      "wav": "tw15.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "silence",
+      "reference": ""
+    },
+    {
+      "id": "tw16",
+      "wav": "tw16.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-TW",
+      "group": "silence",
+      "reference": ""
+    }
+  ]
+}

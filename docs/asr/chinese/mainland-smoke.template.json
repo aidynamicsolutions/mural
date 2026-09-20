@@ -1,0 +1,135 @@
+{
+  "schema": "mural.chinese-asr.corpus.v1",
+  "status": "recording-script-not-ground-truth",
+  "instructions": "Copy outside Git. Record actual speech; replace references and anonymous speaker labels before inspecting ASR. Clip 15: quiet room. Clip 16: non-speech background noise. These prompts are not recorded data.",
+  "clips": [
+    {
+      "id": "cn01",
+      "wav": "cn01.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh",
+      "reference": "我想坐地铁去火车站。"
+    },
+    {
+      "id": "cn02",
+      "wav": "cn02.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh",
+      "reference": "这个软件需要更新，网络现在很慢。"
+    },
+    {
+      "id": "cn03",
+      "wav": "cn03.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "en",
+      "reference": "Could we move the meeting to Friday?"
+    },
+    {
+      "id": "cn04",
+      "wav": "cn04.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "en",
+      "reference": "I would like a small iced coffee, please."
+    },
+    {
+      "id": "cn05",
+      "wav": "cn05.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh-en",
+      "reference": "我想要一杯 iced latte，不要糖。"
+    },
+    {
+      "id": "cn06",
+      "wav": "cn06.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh-en",
+      "reference": "这个 deadline 可以延到 Friday 吗？"
+    },
+    {
+      "id": "cn07",
+      "wav": "cn07.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "en-zh",
+      "reference": "Could you help me 查一下高铁时刻表？"
+    },
+    {
+      "id": "cn08",
+      "wav": "cn08.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "en-zh",
+      "reference": "I forgot 我的公交卡放在哪里了。"
+    },
+    {
+      "id": "cn09",
+      "wav": "cn09.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "multi-switch",
+      "reference": "我先 check 一下 calendar，然后再跟你 confirm。"
+    },
+    {
+      "id": "cn10",
+      "wav": "cn10.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "multi-switch",
+      "reference": "Let me 想一下，我今天有 meeting，明天比较有空。"
+    },
+    {
+      "id": "cn11",
+      "wav": "cn11.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh-en",
+      "reference": "我是说 next Tuesday，不是这个星期二。"
+    },
+    {
+      "id": "cn12",
+      "wav": "cn12.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "zh-en",
+      "reference": "帮我发 email 给 Alex，提醒他下午三点开会。"
+    },
+    {
+      "id": "cn13",
+      "wav": "cn13.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "short",
+      "reference": "对。"
+    },
+    {
+      "id": "cn14",
+      "wav": "cn14.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "short",
+      "reference": "No."
+    },
+    {
+      "id": "cn15",
+      "wav": "cn15.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "silence",
+      "reference": ""
+    },
+    {
+      "id": "cn16",
+      "wav": "cn16.wav",
+      "speaker": "replace-with-anonymous-speaker",
+      "locale": "zh-CN",
+      "group": "silence",
+      "reference": ""
+    }
+  ]
+}
