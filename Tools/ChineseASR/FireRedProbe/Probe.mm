@@ -1,4 +1,4 @@
-// Development-only file replay. No microphone, network, Mural data, or custom decoder.
+// Development-only file replay. No microphone, network, learning data, or custom decoder.
 // C API ownership follows sherpa-onnx/c-api-examples/fire-red-asr-c-api.c
 // (Copyright 2025 Xiaomi Corporation, Apache-2.0), with validation and metrics added.
 #import <UIKit/UIKit.h>
@@ -14,6 +14,11 @@
 
 static void Require(bool valid, const char *message) {
     if (!valid) throw std::runtime_error(message);
+}
+
+static NSURL *ProbeDirectory(void) {
+    NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+    return [documents URLByAppendingPathComponent:@"FireRedProbe" isDirectory:YES];
 }
 
 static NSString *Digest(NSURL *url) {
@@ -67,7 +72,7 @@ static NSDictionary *Memory(void) {
     self.statusView.editable = NO;
     self.statusView.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     self.statusView.adjustsFontForContentSizeCategory = YES;
-    self.statusView.text = @"Local file replay only.\n\nNo microphone or network. Mural is unchanged.\n\nStage the pinned model files in Documents/model and a 3-10-second mono 16 kHz PCM16 file as Documents/probe.wav.\n\nRuns three replays, releases the recognizer, then reloads for three more. This is not an accuracy qualification.";
+    self.statusView.text = @"Local file replay only.\n\nNo microphone or network. Mural is unchanged.\n\nStage the pinned model files in Documents/FireRedProbe/model and a 3-10-second mono 16 kHz PCM16 file as Documents/FireRedProbe/probe.wav.\n\nRuns three replays, releases the recognizer, then reloads for three more. This is not an accuracy qualification.";
     self.runButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.runButton.configuration = UIButtonConfiguration.filledButtonConfiguration;
     [self.runButton setTitle:@"Run file probe" forState:UIControlStateNormal];
@@ -113,8 +118,7 @@ static NSDictionary *Memory(void) {
     _warnings.fetch_add(1);
     self.stopReason = @"Memory warning; qualification blocked";
     _stopped.store(true);
-    NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
-    [@"Memory warning received. Do not retry inference.\n" writeToURL:[documents URLByAppendingPathComponent:@"memory-warning.txt"]
+    [@"Memory warning received. Do not retry inference.\n" writeToURL:[ProbeDirectory() URLByAppendingPathComponent:@"memory-warning.txt"]
         atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 - (void)show:(NSString *)message {
@@ -158,7 +162,7 @@ static NSDictionary *Memory(void) {
     });
 }
 - (void)replay {
-    NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+    NSURL *documents = ProbeDirectory();
     NSURL *reportURL = [documents URLByAppendingPathComponent:[NSString stringWithFormat:@"firered-%@.json", NSUUID.UUID.UUIDString]];
     NSMutableDictionary *report = [@{@"schema": @"mural.firered.file-probe.v1", @"complete": @NO,
         @"events": [NSMutableArray new], @"predictions": [NSMutableArray new],
@@ -170,6 +174,8 @@ static NSDictionary *Memory(void) {
     if (uname(&device) == 0) report[@"hardware"] = @(device.machine);
     try {
         NSError *error = nil;
+        Require([NSFileManager.defaultManager createDirectoryAtURL:documents withIntermediateDirectories:YES attributes:nil error:&error],
+                "Cannot create isolated probe directory");
         Require([documents setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&error], "Cannot exclude probe files from backup");
         [self checkpoint:@"Validating local assets" report:report url:reportURL];
         Require([Memory()[@"memory_available"] boolValue], "Native footprint measurement unavailable");
@@ -274,6 +280,12 @@ static NSDictionary *Memory(void) {
 }
 @end
 
+#if MURAL_FIRERED_EMBEDDED
+#import "Probe.h"
+UIViewController *MuralFireRedProbeViewController(void) {
+    return [[UINavigationController alloc] initWithRootViewController:[ProbeController new]];
+}
+#else
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic) UIWindow *window;
 @end
@@ -296,3 +308,4 @@ static NSDictionary *Memory(void) {
 int main(int argc, char *argv[]) {
     @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(AppDelegate.class)); }
 }
+#endif

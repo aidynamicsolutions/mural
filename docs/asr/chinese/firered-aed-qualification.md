@@ -1,4 +1,49 @@
-# FireRedASR2-AED: Mac preparation complete, physical gate pending
+# FireRedASR2-AED qualification
+
+## Physical file gate passed, 2026-09-20
+
+Merged the FireRed work fast-forward onto completed Breeze checkpoint `1b12b77`
+in `mvp`, preserving all existing changes. Initial standalone installation was
+blocked by the free-development-profile three-app limit. At the user's request,
+added a compile-time-only file-probe entry inside the existing Mural installation.
+No app uninstall, data reset, live-capture integration or default-model change.
+Normal project generation omits all FireRed native sources, bridge and runtime
+links. The special launch bypasses LearningStore and normal audio/model startup.
+
+- Device: physical **iPhone 17 / iPhone18,3, iOS 27.2 (24B5084k)**.
+- Release built from `e6beb35` plus the reviewed embedded-probe change;
+  `Probe.mm` SHA-256 `41bb4f53e05c3cc07cd8ee20dc07a2da0acf55127d816b8d0616c3857905b7a2`.
+- Tested signed executable SHA-256:
+  `8664ecc159a1e2db134b940d67cf711034fea058711d0758f88b5a3a6dde6239`.
+- Exact model/runtime pins below verified on the phone. CPU, one thread, greedy,
+  batch one. Upstream 5.1-second example 1, no independent human reference.
+- **PASS:** six identical nonempty outputs, exact raw match to the Mac INT8 output;
+  two recognizer creations/destructions and six result/stream cleanups completed.
+- Verification **0.811 s**; model preparation **2.003 / 1.749 s**.
+- Cycle 1 decode **1.592 / 1.508 / 1.520 s**; cycle 2
+  **1.580 / 1.516 / 1.582 s**. Includes stream/frontend/result copy, not live
+  Send-to-final. These six repeats are not a speech latency distribution.
+- Kernel lifetime peak footprint **1,517,849,760 B**; lifetime RSS peak
+  **1,547,059,200 B**. Before load **18,794,288 B**, after first recognizer release
+  **364,268,368 B**, after second/final cleanup **30,051,008 B**. These are process
+  metrics, not isolated model memory or a proof of leak freedom.
+- **Zero recorded memory warnings**, nominal thermal state at every checkpoint,
+  no crash during the completed run. UI screenshot confirms completed replay,
+  readable raw text and disabled run/stop controls.
+- Embedded and ordinary Release builds passed. Ordinary generated-project check
+  confirms no FireRed native links/flags. Signing and resolved-package hashes
+  unchanged. ChineseASR **45** and Swift core **86** tests passed again.
+- Private reports, screenshot, scoped app logs, source diff/hashes and signed apps
+  retained under `.build/verification/firered-device-20260920/`. Owned capture
+  stopped. No device-wide archive or recording/transcript publication.
+
+This passes only the initial resource gate. Human accuracy, 20 warm live turns,
+near-30-second speech, silence/noise, offline restart and cancellation/interruption
+remain unqualified. Next is the small recognizer actor through the existing audio
+owner, without changing Talk defaults. The historical Mac preparation below is
+retained as evidence, not current physical status.
+
+## Historical Mac preparation, before phone handoff
 
 Date: 2026-09-20. **Not an iPhone qualification or an accuracy acceptance.**
 The user requested finishing Mac preparation and waiting for an exclusive phone

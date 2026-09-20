@@ -16,6 +16,10 @@ import WhisperKit
     @State private var startupError: String?
 
     init() {
+        #if MURAL_FIRERED_FILE_PROBE
+        // The file probe must not open/migrate learning data or create the normal audio owner.
+        if FireRedFileProbe.requested { return }
+        #endif
         let args = ProcessInfo.processInfo.arguments
         #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
         let coreAIProbeRequested = CoreAIASRProbe.requested
@@ -41,7 +45,13 @@ import WhisperKit
 
     var body: some Scene {
         WindowGroup {
-            #if (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
+            #if MURAL_FIRERED_FILE_PROBE
+            if FireRedFileProbe.requested {
+                FireRedFileProbe()
+            } else {
+                mainContent
+            }
+            #elseif (DEBUG || MURAL_COREAI_W8) && canImport(CoreAI)
             if CoreAIASRProbe.requested {
                 CoreAIASRProbeView().preferredColorScheme(.light)
             } else {

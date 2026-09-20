@@ -1,7 +1,8 @@
 # FireRedASR2-AED native file probe
 
-Development-only, standalone iPhone app. No Mural dependency, capture, tutor,
-network client, ASR-default change, or custom decoder. **Do not add live capture
+Development-only native iPhone file replay, either standalone or hosted by an
+explicit Mural build variant. No capture, tutor, network client, ASR-default
+change, or custom decoder. **Do not add live capture
 until the physical file probe passes.** See the [qualification result](../../../docs/asr/chinese/firered-aed-qualification.md).
 
 `pin.json` identifies the inspected official checkpoint, conversion recipe,
@@ -11,7 +12,7 @@ INT8 graphs are self-contained; inspection found no external tensor files.
 
 ## Prepared local layout
 
-Run from this FireRed worktree, not the concurrent Breeze checkout:
+Run from the merged `mvp` checkout. The completed Breeze work is preserved:
 
 ```sh
 export MURAL_ROOT="$PWD"
@@ -107,11 +108,38 @@ choices, but is not proof of graph-level or dataset-wide quantization parity.
 `evaluate.py` measured model-to-model agreement only. No script conversion,
 translation, or transcript correction was applied.
 
-## Physical gate: wait for exclusive phone handoff
+## Existing Mural slot (free-signing device)
+
+The first standalone installation hit the free-profile three-app limit. The user
+requested using the existing Mural app instead. Do not uninstall any app. Generate
+the explicit variant, build and copy its signed app, then regenerate the ordinary
+project. Commit only the ordinary generated project. This adds no runtime link or
+native source to an ordinary build and changes no ASR default.
+
+```sh
+python3 scripts/generate_project.py --firered-file-probe
+xcodebuild -project Mural.xcodeproj -scheme Mural -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath .build/local-mvp-phase-1-device-derived-data \
+  -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+  PRODUCT_BUNDLE_IDENTIFIER=com.kevintruong.mural.dev build
+# Preserve this signed app outside derived data before rebuilding the default.
+python3 scripts/generate_project.py
+```
+
+Use `BUNDLE=com.kevintruong.mural.dev` and that preserved `Mural.app` for the
+commands below. `--run-firered` routes directly to the same file-probe controller,
+**before LearningStore or the normal audio/model owner is created**. No launch
+argument means normal Mural. Files live only in `Documents/FireRedProbe`; backup
+exclusion applies only to that directory, not Mural's Documents or learning data.
+The initial six-replay gate passed in this mode; see the qualification result.
+
+## Physical gate: exclusive phone handoff
 
 Do not run these commands until the user confirms Breeze is not using the phone.
 Rediscover the connected physical iPhone 17 and set `DEVICE_UDID` locally. Never
-uninstall Mural, reset its data, or use `com.kevintruong.mural.dev` for this probe.
+uninstall Mural or reset its data. Use its bundle only with the explicit variant
+above, not by renaming the standalone replacement app.
 
 ```sh
 xcrun devicectl list devices
@@ -120,15 +148,15 @@ export BUNDLE=com.kevintruong.mural.fireredprobe
 export APP="$F/probe-derived/Build/Products/Release-iphoneos/FireRedProbe.app"
 xcrun devicectl device install app --device "$DEVICE_UDID" "$APP"
 export MODEL="$F/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26"
-mkdir -p "$F/staging/model"
-cp -n "$MODEL/encoder.int8.onnx" "$MODEL/decoder.int8.onnx" "$MODEL/tokens.txt" "$F/staging/model/"
+mkdir -p "$F/staging/FireRedProbe/model"
+cp -n "$MODEL/encoder.int8.onnx" "$MODEL/decoder.int8.onnx" "$MODEL/tokens.txt" "$F/staging/FireRedProbe/model/"
 xcrun devicectl device copy to --device "$DEVICE_UDID" \
   --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-  --source "$F/staging/model" --destination Documents/model
+  --source "$F/staging/FireRedProbe" --destination Documents/FireRedProbe
 # Upstream 5.1-second mixed-language fixture, NOT human-reference accuracy.
 xcrun devicectl device copy to --device "$DEVICE_UDID" \
   --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-  --source "$MODEL/test_wavs/1.wav" --destination Documents/probe.wav
+  --source "$MODEL/test_wavs/1.wav" --destination Documents/FireRedProbe/probe.wav
 xcrun devicectl device process launch --device "$DEVICE_UDID" \
   --terminate-existing "$BUNDLE" --run-firered
 ```
@@ -143,9 +171,9 @@ and serious thermal state prevent further work. Cancellation cannot interrupt
 an in-flight C call or free its handles early. A completed load/decode over 60 s
 is a resource blocker, not a recommended product latency target.
 
-Reports are private, atomic `Documents/firered-<UUID>.json` checkpoints with
+Reports are private, atomic `Documents/FireRedProbe/firered-<UUID>.json` checkpoints with
 raw output, input SHA-256, model pins, OS/hardware, preparation/decode times,
-thermal state, warning count and Mach footprint. Documents are excluded from
+thermal state, warning count and Mach footprint. Only the probe directory is excluded from
 backup. A memory warning also writes a marker immediately. Last checkpoint
 without `complete: true` is **not a pass**, including termination during load.
 Never retry a crash or memory warning just to obtain a completion.

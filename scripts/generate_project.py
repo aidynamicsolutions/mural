@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Generate Mural.xcodeproj using only Python's standard library."""
 from pathlib import Path
+import argparse
 import hashlib
 import json
 import re
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--firered-file-probe', action='store_true',
+                    help='Include the local-only native file probe; regenerate normally after building.')
+firered = parser.parse_args().firered_file_probe
 root = Path(__file__).resolve().parents[1]
 existing_project = root/'Mural.xcodeproj'/'project.pbxproj'
 existing_team = re.search(r'DEVELOPMENT_TEAM\s*=\s*"?([A-Z0-9]+)', existing_project.read_text()) if existing_project.exists() else None
@@ -32,6 +37,13 @@ for file in sorted([*(root/'App').rglob('*.swift'), root/'Tools/CoreAI/W8Identit
     path = str(file.relative_to(root))
     ref = add(path, 'PBXFileReference', lastKnownFileType='sourcecode.swift', path=path, sourceTree='<group>')
     refs.append(ref); sources.append(add(path+'build','PBXBuildFile',fileRef=ref))
+if firered:
+    path = 'Tools/ChineseASR/FireRedProbe/Probe.mm'
+    ref = add(path, 'PBXFileReference', lastKnownFileType='sourcecode.cpp.objcpp', path=path, sourceTree='<group>')
+    refs.append(ref); sources.append(add(path+'build', 'PBXBuildFile', fileRef=ref))
+    pin = add('fireredPin', 'PBXFileReference', lastKnownFileType='text.json',
+              path='Tools/ChineseASR/FireRedProbe/pin.json', sourceTree='<group>')
+    refs.append(pin)
 asset = add('assets','PBXFileReference',lastKnownFileType='folder.assetcatalog',path='App/Assets.xcassets',sourceTree='<group>')
 refs.append(asset)
 notices = add('notices','PBXFileReference',lastKnownFileType='text',path='App/ThirdPartyNotices.txt',sourceTree='<group>')
@@ -61,6 +73,22 @@ common = {'SDKROOT':'iphoneos','IPHONEOS_DEPLOYMENT_TARGET':'27.0','SWIFT_VERSIO
 targetSettings = {'PRODUCT_BUNDLE_IDENTIFIER':'no.william.mural','PRODUCT_NAME':'$(TARGET_NAME)','TARGETED_DEVICE_FAMILY':'1','GENERATE_INFOPLIST_FILE':'NO','INFOPLIST_FILE':'App/Info.plist','CODE_SIGN_STYLE':'Automatic','MARKETING_VERSION':'0.1.0','CURRENT_PROJECT_VERSION':'1','ASSETCATALOG_COMPILER_APPICON_NAME':'AppIcon','ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME':'AccentColor','LD_RUNPATH_SEARCH_PATHS':['$(inherited)','@executable_path/Frameworks'],'ENABLE_PREVIEWS':'YES','SUPPORTED_PLATFORMS':'iphoneos iphonesimulator'}
 targetSettings.update({'CODE_SIGN_ENTITLEMENTS':'$(MURAL_APPLE_ENTITLEMENTS)',
                       'SWIFT_ACTIVE_COMPILATION_CONDITIONS':'$(inherited) $(MURAL_APPLE_SWIFT_FLAGS)'})
+if firered:
+    runtime = '$(SRCROOT)/.build/firered'
+    targetSettings.update({
+        'SWIFT_ACTIVE_COMPILATION_CONDITIONS': '$(inherited) $(MURAL_APPLE_SWIFT_FLAGS) MURAL_FIRERED_FILE_PROBE',
+        'SWIFT_OBJC_BRIDGING_HEADER': 'Tools/ChineseASR/FireRedProbe/Probe.h',
+        'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'MURAL_FIRERED_EMBEDDED=1'],
+        'CLANG_CXX_LANGUAGE_STANDARD': 'c++20',
+        'HEADER_SEARCH_PATHS': [runtime+'/sherpa-onnx', runtime+'/ort-ios/onnxruntime.xcframework/ios-arm64/onnxruntime.framework/Headers'],
+        'LIBRARY_SEARCH_PATHS': runtime+'/ios-build/lib',
+        'FRAMEWORK_SEARCH_PATHS': runtime+'/ort-ios/onnxruntime.xcframework/ios-arm64',
+        'OTHER_LDFLAGS': ['$(inherited)', '-lsherpa-onnx-c-api', '-lsherpa-onnx-core',
+                         '-lsherpa-onnx-fstfar', '-lsherpa-onnx-kaldifst-core', '-lkaldi-decoder-core',
+                         '-lsherpa-onnx-fst', '-lssentencepiece_core', '-lkaldi-native-fbank-core',
+                         '-lkissfft-float', '-framework', 'onnxruntime', '-lc++'],
+    })
+    objects[resources]['files'].append(add('fireredPinBuild', 'PBXBuildFile', fileRef=pin))
 def configs(prefix, settings):
     ids=[]
     for name in ['Debug','Release']:
