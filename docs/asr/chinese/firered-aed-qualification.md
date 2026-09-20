@@ -10,6 +10,16 @@ warning latch stopped/released it and prevented preparation in that process.
 Testing stopped as required. The ordinary Mural build was restored in place;
 Breeze, PhoWhisper, asset caches, learning data and defaults were preserved.
 
+### Memory investigation follow-up
+
+A separately approved, instrumented two-turn run showed stable sampled idle
+footprint near 1.57 GB without an observed warning. Capture timing missed the full
+planned idle and delayed release logs, so the original pressure cause remains
+**inconclusive**. Wider system pressure is possible, not established; Mural is not
+exonerated. No allocation fix, model change or Talk promotion. See the
+[memory investigation and preserved evidence](firered-memory-investigation-20260920.md).
+The original qualification identities below remain historical and unchanged.
+
 ### Tested implementation and identities
 
 - Source: `737a29e7a3b3f9f2ff67033573c05d3afb1b832c`, on `mvp` after the preserved

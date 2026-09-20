@@ -147,8 +147,60 @@ enum LocalSpeechVoice {
     private var ownsAudio = false
     private var audioRelease: Task<Void, Never>?
     var asrBusy: Bool { asrTask != nil }
-    var canRecord: Bool { (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && completion == nil }
-    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && completion == nil && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
+    var canRecord: Bool { fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && completion == nil }
+    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && fireRedDiagnosticAllowsPrepare && completion == nil && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
+    private var fireRedDiagnosticAllowsPrepare: Bool {
+        #if MURAL_FIRERED_FILE_PROBE
+        if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && !fireRedDiagnosticStarted }
+        #endif
+        return true
+    }
+    private var fireRedDiagnosticAllowsRecord: Bool {
+        #if MURAL_FIRERED_FILE_PROBE
+        if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && fireRedDiagnosticTurns < 2 }
+        #endif
+        return true
+    }
+    #if MURAL_FIRERED_FILE_PROBE
+    private var fireRedDiagnosticStarted = false
+    private var fireRedDiagnosticTurns = 0
+    private var fireRedDiagnosticTask: Task<Void, Never>?
+
+    /// One approved residency observation, not a production memory policy.
+    private func startFireRedMemoryDiagnostic() {
+        guard FireRedEnglishRecognizer.memoryDiagnostic else { return }
+        fireRedDiagnosticStarted = true
+        FireRedEnglishRecognizer.diagnosticMemory("owner-baseline")
+        let deadline = ProcessInfo.processInfo.systemUptime + 420
+        fireRedDiagnosticTask = Task { [weak self] in
+            defer { self?.fireRedDiagnosticTask = nil }
+            while let self {
+                let thermal = ProcessInfo.processInfo.thermalState
+                let expired = ProcessInfo.processInfo.systemUptime >= deadline
+                let finished = self.asrState == .ended || self.asrState == .failed
+                if finished || expired || thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
+                    let task = self.asrTask
+                    let previousError = self.asrError
+                    self.stop() // Cancellation drains native work through the existing owner.
+                    if let previousError { self.asrError = previousError; self.asrState = .failed }
+                    self.asrNotice = "Memory diagnostic stopped. Do not prepare again; report the result."
+                    self.logger.notice("firered_diagnostic_stop expired=\(expired, privacy: .public) thermal_state=\(thermal.rawValue, privacy: .public)")
+                    await task?.value
+                    await self.audioRelease?.value
+                    FireRedEnglishRecognizer.diagnosticMemory("owner-drained")
+                    // These samples run after the actor and remaining Swift properties release.
+                    for delay in [2, 8, 20] {
+                        do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                        FireRedEnglishRecognizer.diagnosticMemory("post-drain")
+                    }
+                    return
+                }
+                FireRedEnglishRecognizer.diagnosticMemory("residency-checkpoint")
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            }
+        }
+    }
+    #endif
     private var stagedMemoryWarning = false
     private static let memoryWarningMessage = "Speech stopped after a memory warning. End this session, close Mural from the app switcher, then reopen it."
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
@@ -199,7 +251,10 @@ enum LocalSpeechVoice {
         #endif
     }
 
-    deinit {
+    isolated deinit {
+        #if MURAL_FIRERED_FILE_PROBE
+        fireRedDiagnosticTask?.cancel()
+        #endif
         if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
     }
 
@@ -379,6 +434,9 @@ enum LocalSpeechVoice {
 
     func prepareASR(repairDownload: Bool = false) {
         guard canPrepare else { return }
+        #if MURAL_FIRERED_FILE_PROBE
+        startFireRedMemoryDiagnostic()
+        #endif
         lastRecordingHadNoSpeech = false
         let previousWarmup = stagedDecoderWarmup
         previousWarmup?.cancel()
@@ -524,6 +582,9 @@ enum LocalSpeechVoice {
 
     func record() {
         guard canRecord else { return }
+        #if MURAL_FIRERED_FILE_PROBE
+        if FireRedEnglishRecognizer.memoryDiagnostic { fireRedDiagnosticTurns += 1 }
+        #endif
         let manager = asr, whisper = whisper, parakeet = parakeet, breeze = breeze, fireRed = fireRed
         let decoderWarmup = stagedDecoderWarmup
         let limit = recordingLimitSeconds

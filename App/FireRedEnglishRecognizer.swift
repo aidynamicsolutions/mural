@@ -14,6 +14,20 @@ actor FireRedEnglishRecognizer {
         #endif
     }
 
+    nonisolated static var memoryDiagnostic: Bool {
+        #if MURAL_FIRERED_FILE_PROBE
+        ProcessInfo.processInfo.arguments.contains("--firered-memory-diagnostic")
+        #else
+        false
+        #endif
+    }
+
+    nonisolated static func diagnosticMemory(_ stage: String) {
+        guard memoryDiagnostic else { return }
+        Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("firered_memory_boundary stage=\(stage, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+        VietnameseEnglishRecognizer.logMemory(stage: stage, model: "firered-memory-diagnostic")
+    }
+
     #if MURAL_FIRERED_FILE_PROBE
     private var recognizer: OpaquePointer?
     private var vad: VadManager?
@@ -36,6 +50,8 @@ actor FireRedEnglishRecognizer {
     }
 
     @concurrent static func localDirectory() async throws -> URL {
+        diagnosticMemory("verification-begin")
+        defer { diagnosticMemory("verification-end") }
         guard let pinURL = Bundle.main.url(forResource: "pin", withExtension: "json") else {
             throw Failure("Missing built-in FireRed v2 AED pin.")
         }
@@ -82,13 +98,21 @@ actor FireRedEnglishRecognizer {
         busy = true; defer { busy = false }
         try checkReadyForWork()
         vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)
+        if Self.memoryDiagnostic {
+            guard vadMode != .off else { throw Failure("Memory diagnostic requires VAD.") }
+            // Preserve existing assets even if Core ML loading fails. No repair or download.
+            ModelHub.offlineMode = true
+        }
         if vadMode != .off {
+            Self.diagnosticMemory("vad-prepare-begin")
+            defer { Self.diagnosticMemory("vad-prepare-end") }
             do {
                 vad = try await VadManager(config: VadConfig(
                     defaultThreshold: SpeechPresencePolicy.threshold, computeUnits: .cpuAndNeuralEngine))
             } catch is CancellationError { throw CancellationError() }
             catch {
                 try Task.checkCancellation()
+                if Self.memoryDiagnostic { throw error }
                 logger.warning("firered_vad_unavailable phase=prepare action=allow_asr")
             }
         }
@@ -99,6 +123,7 @@ actor FireRedEnglishRecognizer {
             logger.notice("firered_native_return phase=prepare uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public)")
             VietnameseEnglishRecognizer.logMemory(stage: "prepared-or-draining", model: Self.identity)
         }
+        Self.diagnosticMemory("native-prepare-begin")
         // Every config string lives through the synchronous constructor; sherpa copies its config.
         recognizer = directory.appending(path: "encoder.int8.onnx").path.withCString { encoder in
             directory.appending(path: "decoder.int8.onnx").path.withCString { decoder in
@@ -146,6 +171,8 @@ actor FireRedEnglishRecognizer {
         busy = true; defer { busy = false }
         // Reuse the accepted whole-turn speech gate, without changing waveform/script/words.
         if vadMode != .off, let vad {
+            Self.diagnosticMemory("vad-turn-begin")
+            defer { Self.diagnosticMemory("vad-turn-end") }
             do {
                 var state = VadStreamState.initial()
                 var evidence = SpeechPresencePolicy.Evidence(sampleCount: samples.count)
@@ -163,6 +190,7 @@ actor FireRedEnglishRecognizer {
             } catch is CancellationError { throw CancellationError() }
             catch {
                 try Task.checkCancellation()
+                if Self.memoryDiagnostic { throw error }
                 logger.warning("firered_vad_unavailable phase=turn action=allow_asr")
             }
         }

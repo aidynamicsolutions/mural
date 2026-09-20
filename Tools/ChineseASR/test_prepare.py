@@ -148,6 +148,21 @@ class IntegrationTests(unittest.TestCase):
         self.assertNotIn("withTaskCancellationHandler", self.firered)
         self.assertIn("deinit {\n        if let recognizer { SherpaOnnxDestroyOfflineRecognizer(recognizer) }", self.firered)
 
+    def test_firered_memory_diagnostic_is_bounded_and_drains(self):
+        self.assertIn('arguments.contains("--firered-memory-diagnostic")', self.firered)
+        self.assertIn('ModelHub.offlineMode = true', self.firered)
+        self.assertEqual(self.firered.count('if Self.memoryDiagnostic { throw error }'), 2)
+        self.assertIn('asrModel == .fireRed && !fireRedDiagnosticStarted', self.engine)
+        self.assertIn('fireRedDiagnosticTurns < 2', self.engine)
+        monitor = self.engine.split('private func startFireRedMemoryDiagnostic()', 1)[1].split('    #endif', 1)[0]
+        self.assertIn('systemUptime + 420', monitor)
+        self.assertIn('ThermalState.serious.rawValue', monitor)
+        self.assertLess(monitor.index('self.stop()'), monitor.index('await task?.value'))
+        self.assertLess(monitor.index('await task?.value'), monitor.index('diagnosticMemory("owner-drained")'))
+        self.assertIn('await self.audioRelease?.value', monitor)
+        self.assertNotIn('SherpaOnnxDestroy', monitor)
+        self.assertIn('for delay in [2, 8, 20]', monitor)
+
     def test_reference_is_transcribe_auto(self):
         options = generation_options()
         self.assertEqual(options["task"], "transcribe")
