@@ -1,0 +1,28 @@
+{
+  "model": "FireRedASR2-AED",
+  "official_checkpoint_revision": "2304afed56eacfee6256dee5937ed22ffa0b64ec",
+  "official_checkpoint_sha256": "4677cbd30988d63ed3e777f6a42a1e5260a3865317f6e15e488bef40954f7054",
+  "official_code_revision": "4e7d9aaf4482a47cec1724807026b9b151926eb5",
+  "conversion_code_revision": "5febe49b840d976a52aaa8e50d5f49df14e550e8",
+  "export_archive": "sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+  "export_archive_sha256": "43015b3f1643a5688b4821e8ed323473d38b798c4ec291471fe00df1bcfc4f1c",
+  "sherpa_revision": "a5b4a944c5186a68bcdc0ac3011e4c541781ac84",
+  "sherpa_version": "1.13.8",
+  "ort_version": "1.28.2",
+  "ort_ios_archive_sha256": "2c2299acbb461d26d4bac4bc85985d40e7c7177ed6072703ae0846d88b0b4599",
+  "external_weight_files": [],
+  "artifacts": {
+    "encoder.int8.onnx": {
+      "bytes": 817286833,
+      "sha256": "54048d66b6e8f3c80ea7ce95efe794587b0fd81d7271651d0decd3803852ae82"
+    },
+    "decoder.int8.onnx": {
+      "bytes": 417291928,
+      "sha256": "b840ce7196ae4a14d05ae84bbf56082b6b61ccec5610fda907dddbcea37354ff"
+    },
+    "tokens.txt": {
+      "bytes": 79172,
+      "sha256": "1bc613de2112d257e61a349c3e72d1b1a9cf19c33d3ca954197ad2171e5ea07b"
+    }
+  }
+}

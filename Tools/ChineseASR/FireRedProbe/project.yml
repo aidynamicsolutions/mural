@@ -1,0 +1,48 @@
+name: FireRedProbe
+options:
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    CLANG_CXX_LANGUAGE_STANDARD: c++20
+    CLANG_ENABLE_OBJC_ARC: YES
+    CODE_SIGN_STYLE: Automatic
+    HEADER_SEARCH_PATHS:
+      - $(MURAL_ROOT)/.build/firered/sherpa-onnx
+      - $(MURAL_ROOT)/.build/firered/ort-ios/onnxruntime.xcframework/ios-arm64/onnxruntime.framework/Headers
+    LIBRARY_SEARCH_PATHS: $(MURAL_ROOT)/.build/firered/ios-build/lib
+    FRAMEWORK_SEARCH_PATHS: $(MURAL_ROOT)/.build/firered/ort-ios/onnxruntime.xcframework/ios-arm64
+    OTHER_LDFLAGS:
+      - -lsherpa-onnx-c-api
+      - -lsherpa-onnx-core
+      - -lsherpa-onnx-fstfar
+      - -lsherpa-onnx-kaldifst-core
+      - -lkaldi-decoder-core
+      - -lsherpa-onnx-fst
+      - -lssentencepiece_core
+      - -lkaldi-native-fbank-core
+      - -lkissfft-float
+      - -framework onnxruntime
+      - -lc++
+targets:
+  FireRedProbe:
+    type: application
+    platform: iOS
+    sources:
+      - ${MURAL_ROOT}/Tools/ChineseASR/FireRedProbe/Probe.mm
+      - path: ${MURAL_ROOT}/Tools/ChineseASR/FireRedProbe/pin.json
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevintruong.mural.fireredprobe
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: FireRed Probe
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: AVFoundation.framework
