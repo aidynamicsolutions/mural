@@ -1,6 +1,6 @@
 ---
 name: verify-mural
-description: Verify Mural by building and launching its iOS app, using serve-sim for simulator UI and Device Hub for iPhone 17 AI and audio flows. Use after changes affecting onboarding, conversation, themes, words, settings, persistence, audio, or OpenAI integration, when reproducing bugs, and before claiming work complete.
+description: Verify Mural by building and launching its iOS app, using serve-sim for simulator UI and Device Hub for iPhone 17 AI and audio flows. Use after changes affecting onboarding, conversation, themes, words, settings, persistence, audio, or OpenAI integration, when reproducing bugs including animation, shifting, flicker, or transient clipping, and before claiming work complete.
 ---
 
 # Verify Mural
@@ -137,6 +137,10 @@ xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --previe
 ```
 
 `--preview` uses temporary SwiftData and skips normal onboarding. `--preview-onboarding` reopens the two-screen onboarding fixture. `--preview-existing-user` starts with an onboarded user. `--ended-conversation` seeds a finished coffee conversation. `--screenshot` seeds synthetic simulator-only content and never calls OpenAI.
+
+## Animation and transient layout bugs
+
+For shifting, snapping, flicker, menu dismissal, or transient clipping, follow [UI animation verification](features/ui-animation.md). Reproduce through the real UI, record comparable before/after interactions, and inspect frames around the transition. Settled screenshots and passing UI tests alone cannot prove the animation is fixed. The workflow includes bounded recording, cleanup, sibling-control checks, long labels, and accessibility checks. Report blocked recording explicitly.
 
 ## Serve-sim readiness and observation
 
@@ -320,6 +324,7 @@ Read `features/README.md`, then the relevant feature file before choosing a chec
 
 - `features/onboarding-consent.md`
 - `features/themes-words-settings.md`
+- `features/ui-animation.md`
 - `features/conversation-lifecycle.md`
 - `features/live-ai-device.md`
 
