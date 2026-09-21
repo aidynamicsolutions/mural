@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14), .iOS(.v17)],
     products: [.library(name: "MuralCore", targets: ["MuralCore"])],
     targets: [
-        .target(name: "MuralCore", path: "Core"),
+        .target(name: "MuralCore", path: "Core", resources: [.process("Resources/tts-corpus.json")]),
         .testTarget(name: "MuralCoreTests", dependencies: ["MuralCore"], path: "Tests")
     ]
 )

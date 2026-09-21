@@ -33,10 +33,10 @@ import MuralCore
     private(set) var localReplySeconds: Double?
     private(set) var localModelSeconds: Double?
     var localResourcesBusy: Bool {
-        localTask != nil || localResumeTask != nil || localAudio.asrBusy || localTutor.isBusy || localMeanings.isLoading ||
+        localTask != nil || localResumeTask != nil || localAudio.asrBusy || localAudio.speechBusy || localTutor.isBusy || localMeanings.isLoading ||
         localLookupTask != nil || localPostTask != nil || localAssessmentRunning
     }
-    var canChangeMode: Bool { !isRunning && localTask == nil && localResumeTask == nil && !localAudio.asrBusy }
+    var canChangeMode: Bool { !isRunning && localTask == nil && localResumeTask == nil && !localAudio.asrBusy && !localAudio.speechBusy }
     var canRecordLocal: Bool { isLocal && state == .active && localPhase == .ready && !localResourcesBusy && localAudio.canRecord }
     var canRetryLocalReply: Bool { canRecordLocal && session?.fragments.last?.speaker == .user }
     private let localLogger = Logger(subsystem: "no.william.mural", category: "LocalConversation")
@@ -136,6 +136,16 @@ import MuralCore
                 self.session = nil
             }
         }
+        localAudio.onTTSSafetyStop = { [weak self] message in
+            guard let self, self.isLocal, self.isRunning else { return }
+            if self.localAudio.thermalStopped, message == LocalTTSError.phoneTooWarm.localizedDescription {
+                self.pauseLocal()
+            } else {
+                self.endLocal(reason: message)
+                self.cancelLocalSupporting()
+            }
+            self.error = message
+        }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
@@ -182,6 +192,7 @@ import MuralCore
     var caption: String { assistantPassage?.text ?? (isLocal ? "Hi! What did you do today?" : language.greeting) }
     var status: String {
         if isLocal {
+            if needsThermalResume { return "Speech paused · Let your iPhone cool, then tap Resume" }
             switch localPhase {
             case .idle: return "Prepare to talk on this iPhone"
             case .preparing: return "Preparing on this iPhone…"
@@ -351,6 +362,7 @@ import MuralCore
             self.error = "The Apple model took too long. No cloud fallback was used."
         }
         defer { localTimeout?.cancel(); localTimeout = nil }
+        var generatedReply = false
         do {
             let result = try await self.localTutor.reply(to: current.text, history: history, help: help)
             try checkLocal(sessionID)
@@ -359,10 +371,11 @@ import MuralCore
             localReplySeconds = (help || current.typed ? nil : localAudio.lastSubmissionTime).map { ProcessInfo.processInfo.systemUptime - $0 }
             localLogger.notice("local_reply_complete send_to_reply_seconds=\(self.localReplySeconds ?? 0, privacy: .public)")
             let fragmentID = try appendLocal(result.text, speaker: .assistant, sessionID: sessionID)
+            generatedReply = true
             try await speakLocal(result.text, sessionID: sessionID, fragmentID: fragmentID)
         } catch {
             guard !Task.isCancelled, session?.id == sessionID, isRunning else { return }
-            self.error = localPhase == .speaking ? error.localizedDescription : LocalTutorModel.message(for: error)
+            self.error = generatedReply ? error.localizedDescription : LocalTutorModel.message(for: error)
             if localAudio.canRecord { localPhase = .ready }
             else { endLocal(reason: "Local audio stopped. Start again when ready.") }
         }
@@ -370,11 +383,11 @@ import MuralCore
 
     private func speakLocal(_ text: String, sessionID: UUID, fragmentID: String) async throws {
         try checkLocal(sessionID)
-        localPhase = .speaking
         let origin = localStartedAt
         localAudio.onPlayback = { [weak self] start, end, completed in
             guard let self, self.session?.id == sessionID, self.state == .active,
                   let index = self.session?.fragments.firstIndex(where: { $0.id == fragmentID }) else { return }
+            if end == nil { self.localPhase = .speaking }
             self.session?.fragments[index].playbackStartMS = max(0, Int((start - origin) * 1000))
             self.session?.fragments[index].playbackEndMS = end.map { max(0, Int(($0 - origin) * 1000)) }
             self.session?.fragments[index].playbackCompleted = completed
@@ -729,7 +742,13 @@ import MuralCore
                 self.session?.localPausedAt = nil
                 self.saveIfEligible()
                 self.lastActivity = .now
-                self.localPhase = .ready
+                if self.session?.fragments.isEmpty == true {
+                    let greeting = "Hi! What did you do today?"
+                    let fragmentID = try self.appendLocal(greeting, speaker: .assistant, sessionID: id)
+                    try await self.speakLocal(greeting, sessionID: id, fragmentID: fragmentID)
+                } else {
+                    self.localPhase = .ready
+                }
             } catch is CancellationError {
                 if self.session?.id == id, self.state == .active { self.localPhase = .paused }
             } catch {
@@ -740,7 +759,29 @@ import MuralCore
             }
         }
     }
+    var needsThermalResume: Bool { isLocal && localAudio.thermalStopped }
+    var thermalAlertPresented: Bool { needsThermalResume && error == LocalTTSError.phoneTooWarm.localizedDescription }
+    func resumeAfterCooling() {
+        guard !localResourcesBusy else { return }
+        do {
+            try localAudio.resumeAfterCooling()
+            error = nil; notice = nil
+            if localPhase == .paused { resumeLocal() }
+            else { start() }
+        } catch { self.error = error.localizedDescription }
+    }
+    #if DEBUG && targetEnvironment(simulator)
+    func prepareThermalStopPreview() {
+        mode = .local; sessionMode = .local
+        session = SessionRecord(languageID: "en", title: "Thermal recovery preview")
+        state = .active; localPhase = .ready
+        localAudio.testThermalState = .serious
+        localAudio.stopForTTSSafety(footprint: 80_000_000, thermal: .serious)
+    }
+    #endif
+
     func resume() {
+        if needsThermalResume { return } // Cooling/foregrounding must never restart speech by itself.
         if isLocal { resumeLocal() }
         refreshLocalMeaning()
     }

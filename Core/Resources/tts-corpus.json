@@ -1,0 +1,152 @@
+[
+  {
+    "id": "01",
+    "category": "acknowledgment",
+    "text": "Yes."
+  },
+  {
+    "id": "02",
+    "category": "acknowledgment",
+    "text": "No."
+  },
+  {
+    "id": "03",
+    "category": "question",
+    "text": "Really?"
+  },
+  {
+    "id": "04",
+    "category": "acknowledgment",
+    "text": "Exactly!"
+  },
+  {
+    "id": "05",
+    "category": "instruction",
+    "text": "Try again."
+  },
+  {
+    "id": "06",
+    "category": "question",
+    "text": "What did you buy?"
+  },
+  {
+    "id": "07",
+    "category": "question",
+    "text": "Where did you go yesterday?"
+  },
+  {
+    "id": "08",
+    "category": "question",
+    "text": "Did you walk, or did you take the bus?"
+  },
+  {
+    "id": "09",
+    "category": "question",
+    "text": "Can you say that in the past tense?"
+  },
+  {
+    "id": "10",
+    "category": "question",
+    "text": "Why do you think that happened?"
+  },
+  {
+    "id": "11",
+    "category": "correction",
+    "text": "Almost. Say, “I went,” not “I goed.”"
+  },
+  {
+    "id": "12",
+    "category": "correction",
+    "text": "Use “an apple,” because “apple” starts with a vowel sound."
+  },
+  {
+    "id": "13",
+    "category": "correction",
+    "text": "That's a good start. Now try the whole sentence."
+  },
+  {
+    "id": "14",
+    "category": "contrast",
+    "text": "I said thirteen, not thirty."
+  },
+  {
+    "id": "15",
+    "category": "contrast",
+    "text": "Listen carefully: ship, sheep, ship, sheep."
+  },
+  {
+    "id": "16",
+    "category": "number",
+    "text": "It costs twelve dollars and fifty cents."
+  },
+  {
+    "id": "17",
+    "category": "number",
+    "text": "The total is $12.50."
+  },
+  {
+    "id": "18",
+    "category": "time",
+    "text": "Let's meet at 3:45 p.m. on Friday."
+  },
+  {
+    "id": "19",
+    "category": "date",
+    "text": "My appointment is on September 20, 2026."
+  },
+  {
+    "id": "20",
+    "category": "number",
+    "text": "The temperature fell from twenty degrees to minus five."
+  },
+  {
+    "id": "21",
+    "category": "contraction",
+    "text": "I don't know, but I'll ask her when she arrives."
+  },
+  {
+    "id": "22",
+    "category": "prosody",
+    "text": "You bought all of that? That's impressive!"
+  },
+  {
+    "id": "23",
+    "category": "pronunciation",
+    "text": "Please record a short message about your favorite record."
+  },
+  {
+    "id": "24",
+    "category": "proper name",
+    "text": "My friend Maya lives in San Francisco."
+  },
+  {
+    "id": "25",
+    "category": "punctuation",
+    "text": "“Wait,” she said. “Are you sure?”"
+  },
+  {
+    "id": "26",
+    "category": "tutor reply",
+    "text": "Yesterday you went to the supermarket and bought apples. What else did you buy?"
+  },
+  {
+    "id": "27",
+    "category": "tutor reply",
+    "text": "You can say, “I usually cook at home, but yesterday I ate at a restaurant.”"
+  },
+  {
+    "id": "28",
+    "category": "tutor reply",
+    "text": "Good job using the past tense. Tell me one more thing you did after work."
+  },
+  {
+    "id": "29",
+    "category": "long answer",
+    "text": "First, tell me where you went. Then describe what you saw and who you met. Finally, explain how you felt about the experience. Take your time; one short sentence for each part is enough."
+  },
+  {
+    "id": "30",
+    "category": "long answer",
+    "text": "Imagine that you're ordering lunch at a small café. Ask what the waiter recommends, choose a dish, and request a glass of water. If you don't understand the answer, ask the waiter to repeat it more slowly."
+  }
+]

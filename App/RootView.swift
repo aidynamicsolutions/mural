@@ -35,7 +35,7 @@ struct RootView: View {
             AIConsentView(agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
         }
         .fullScreenCover(isPresented: $onboarding) { OnboardingView(coordinator: coordinator) { coordinator.store.updatePreferences { $0.hasOnboarded = true }; onboarding = false } }
-        .alert("A little interruption", isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil } })) {
+        .alert(errorTitle, isPresented: Binding(get: { coordinator.error != nil || coordinator.store.error != nil }, set: { if !$0 { coordinator.error = nil; coordinator.store.error = nil } })) {
             Button("OK", role: .cancel) { coordinator.error = nil; coordinator.store.error = nil }
         } message: { Text(coordinator.error ?? coordinator.store.error ?? "") }
         .onAppear {
@@ -47,6 +47,9 @@ struct RootView: View {
             }
             #endif
             onboarding = !coordinator.store.preferences.hasOnboarded && !arguments.contains("--preview") && !AudioVerification.requested
+            #if DEBUG && targetEnvironment(simulator)
+            if arguments.contains("--preview-thermal-stop") { coordinator.prepareThermalStopPreview() }
+            #endif
             if !onboarding, scenePhase == .active { coordinator.resume() }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -59,6 +62,10 @@ struct RootView: View {
             else if ProcessInfo.processInfo.arguments.contains("--ended-conversation") { coordinator.prepareEndedPreview() }
         }
         #endif
+    }
+    private var errorTitle: String {
+        if coordinator.thermalAlertPresented { return "Your iPhone needs to cool down" }
+        return "A little interruption"
     }
     private func shell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         NavigationStack {
@@ -189,6 +196,12 @@ struct TalkView: View {
     }
     private var localControls: some View {
         VStack(spacing: 12) {
+            if coordinator.needsThermalResume {
+                Button("Resume", systemImage: "play.fill") { coordinator.resumeAfterCooling() }
+                    .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
+                    .controlSize(.large).disabled(coordinator.localResourcesBusy)
+                    .accessibilityIdentifier("local-thermal-resume")
+            }
             if coordinator.isRunning {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) { localTurnButtons }

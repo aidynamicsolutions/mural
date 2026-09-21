@@ -1,6 +1,146 @@
 import XCTest
 
 final class MuralUITests: XCTestCase {
+    func testThermalAlertAndExplicitResume() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--preview-thermal-stop"]
+        app.launch()
+        let title = "Your iPhone needs to cool down"
+        XCTAssertTrue(app.alerts[title].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.alerts.staticTexts.matching(NSPredicate(format: "label == %@", "iOS reports that your iPhone is too warm. Mural has paused speech to protect performance. Let your phone cool down, then tap Resume.")).firstMatch.exists)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Thermal pause alert"; image.lifetime = .keepAlways; add(image)
+        app.alerts.buttons["OK"].tap()
+        let resume = app.buttons["local-thermal-resume"]
+        XCTAssertTrue(resume.isEnabled)
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertTrue(resume.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.alerts[title].exists) // Foregrounding did not attempt recovery.
+        resume.tap()
+        XCTAssertTrue(app.alerts[title].waitForExistence(timeout: 5)) // Still hot: no inference.
+        app.alerts.buttons["OK"].tap()
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].isEnabled)
+        app.buttons["local-conversation-end"].tap()
+    }
+
+    func testMuralVoiceSelectionPersists() {
+        let app = launch(ended: true)
+        func openVoice() -> XCUIElement {
+            app.buttons["Settings"].tap()
+            let backend = app.buttons["tts-talk-backend"]
+            backend.tap(); app.buttons["Mural Voice"].tap()
+            let picker = app.buttons["tts-supertonic-voice"]
+            for _ in 0..<5 where !picker.isHittable { app.swipeUp() }
+            return picker
+        }
+        var picker = openVoice()
+        picker.tap()
+        XCTAssertTrue(app.staticTexts["Female voices"].exists)
+        XCTAssertTrue(app.staticTexts["Male voices"].exists)
+        for voice in ["Bella", "Clara", "Maya", "Nora", "Zoe", "Adam", "Jack", "Leo", "Ethan", "Theo"] {
+            XCTAssertTrue(app.buttons[voice].exists)
+        }
+        let menuImage = XCTAttachment(screenshot: app.screenshot())
+        menuImage.name = "Mural Voice groups"; menuImage.lifetime = .keepAlways; add(menuImage)
+        app.buttons["Bella"].tap()
+        XCTAssertTrue(picker.label.contains("Bella") || (picker.value as? String ?? "").contains("Bella"))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Mural Voice settings"; image.lifetime = .keepAlways; add(image)
+        app.terminate(); app.launch()
+        picker = openVoice()
+        XCTAssertTrue(picker.label.contains("Bella") || (picker.value as? String ?? "").contains("Bella"))
+        picker.tap(); app.buttons["Theo"].tap()
+        XCTAssertTrue(picker.label.contains("Theo") || (picker.value as? String ?? "").contains("Theo"))
+
+        var speed = app.buttons["tts-supertonic-speed"]
+        for _ in 0..<3 where !speed.isHittable { app.swipeUp() }
+        speed.tap(); app.buttons["1.5× · Very fast"].tap()
+        XCTAssertTrue(speed.label.contains("1.5") || (speed.value as? String ?? "").contains("1.5"))
+        app.terminate(); app.launch()
+        _ = openVoice()
+        speed = app.buttons["tts-supertonic-speed"]
+        for _ in 0..<3 where !speed.isHittable { app.swipeUp() }
+        XCTAssertTrue(speed.label.contains("1.5") || (speed.value as? String ?? "").contains("1.5"))
+        speed.tap(); app.buttons["1.0× · Normal"].tap()
+    }
+
+    func testOnDeviceVoiceSelectionPersists() {
+        let app = launch(ended: true)
+        func openBackend() -> XCUIElement {
+            app.buttons["Settings"].tap()
+            return app.buttons["tts-talk-backend"]
+        }
+        var picker = openBackend()
+        XCTAssertTrue(picker.isEnabled)
+        let menuWidth = picker.frame.width
+        picker.tap(); app.buttons["Apple"].tap()
+        XCTAssertEqual(picker.frame.width, menuWidth, accuracy: 0.5)
+        assertReselectingVoiceKeepsRowStable("Apple", picker: picker, app: app)
+        app.terminate(); app.launch()
+        picker = openBackend()
+        XCTAssertTrue(picker.label.contains("Apple") || (picker.value as? String ?? "").contains("Apple"), picker.debugDescription)
+        picker.tap(); app.buttons["Mural Voice"].tap()
+        XCTAssertEqual(picker.frame.width, menuWidth, accuracy: 0.5)
+        assertReselectingVoiceKeepsRowStable("Mural Voice", picker: picker, app: app)
+        app.terminate(); app.launch()
+        picker = openBackend()
+        XCTAssertTrue(picker.label.contains("Mural Voice") || (picker.value as? String ?? "").contains("Mural Voice"), picker.debugDescription)
+    }
+
+    private func assertReselectingVoiceKeepsRowStable(_ voice: String, picker: XCUIElement, app: XCUIApplication) {
+        let frame = picker.frame
+        for _ in 0..<2 {
+            picker.tap()
+            app.buttons[voice].tap()
+            XCTAssertEqual(picker.frame, frame)
+            XCTAssertTrue(picker.label.contains(voice) || (picker.value as? String ?? "").contains(voice))
+        }
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Reselected \(voice)"; image.lifetime = .keepAlways; add(image)
+    }
+
+    #if MURAL_TTS_EXPERIMENT
+    func testTTSExperimentSmokeContinuesAfterAudioSessionRelease() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--tts-comparison"]
+        app.launch()
+        XCTAssertTrue(app.buttons["tts-prepare"].waitForExistence(timeout: 10))
+        app.buttons["tts-prepare"].tap()
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: app.buttons["tts-play"])
+        waitForExpectations(timeout: 10)
+        for _ in 0..<3 where !app.buttons["tts-smoke"].isHittable { app.swipeUp() }
+        app.buttons["tts-smoke"].tap()
+        for _ in 0..<3 where !app.staticTexts["tts-summary"].isHittable { app.swipeUp() }
+        expectation(for: NSPredicate(format: "label == %@", "5 completed; 0 failed or cancelled."), evaluatedWith: app.staticTexts["tts-summary"])
+        waitForExpectations(timeout: 90)
+        // Let the final app-initiated deactivation arrive: preparation must remain usable.
+        expectation(for: NSPredicate(format: "label == %@", "Finished."), evaluatedWith: app.staticTexts["tts-status"])
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.staticTexts["tts-error"].exists)
+    }
+
+    func testTTSExperimentLifecycleAndPCM() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--tts-comparison"]
+        app.launch()
+        XCTAssertTrue(app.buttons["tts-prepare"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["tts-play"].isEnabled)
+        for _ in 0..<3 where !app.buttons["tts-lifecycle"].isHittable { app.swipeUp() }
+        app.buttons["tts-lifecycle"].tap()
+        let status = app.staticTexts["tts-status"]
+        expectation(for: NSPredicate(format: "label == %@", "Lifecycle checks passed. No audio or models used."), evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        for id in ["tts-signal24", "tts-signal44"] {
+            app.buttons[id].tap()
+            expectation(for: NSPredicate(format: "label == %@", "Finished."), evaluatedWith: status)
+            waitForExpectations(timeout: 10)
+            XCTAssertFalse(app.staticTexts["tts-error"].exists)
+        }
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "TTS PCM completed"; image.lifetime = .keepAlways; add(image)
+    }
+    #endif
+
     private func launch(ended: Bool = false) -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = ["--preview"] + (ended ? ["--ended-conversation"] : [])
         app.launch(); return app
@@ -131,6 +271,52 @@ final class MuralUITests: XCTestCase {
         app.buttons["onboarding-continue"].tap()
         XCTAssertTrue(app.staticTexts["target-caption"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "¡Hola!")
+    }
+
+    func testSettingsDropdownTransitions() {
+        let app = launch(ended: true)
+        app.buttons["Settings"].tap()
+        for (title, choices) in [
+            ("Conversation mode", ["On-device", "On-device", "GPT-Live", "GPT-Live"]),
+            ("Learning language", ["English · International", "English · International", "French · France", "French · France"]),
+            ("Meaning language", ["Vietnamese", "Vietnamese", "English", "English"])
+        ] {
+            let menu = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            var menuWidth: CGFloat?
+            for choice in choices {
+                for _ in 0..<5 where !menu.isHittable { app.swipeUp() }
+                XCTAssertTrue(menu.isHittable)
+                menu.tap()
+                app.buttons[choice].tap()
+                XCTAssertTrue(menu.label.contains(choice) || (menu.value as? String ?? "").contains(choice))
+                XCTAssertGreaterThanOrEqual(menu.frame.minX, 0)
+                XCTAssertLessThanOrEqual(menu.frame.maxX, app.frame.maxX)
+                if let menuWidth { XCTAssertEqual(menu.frame.width, menuWidth, accuracy: 0.5) }
+                menuWidth = menu.frame.width
+                if title == "Learning language" {
+                    let label = app.staticTexts[title].frame
+                    XCTAssertTrue(menu.frame.minY >= label.maxY || menu.frame.minX >= label.maxX, "Title and selection must not overlap")
+                }
+                let image = XCTAttachment(screenshot: app.screenshot())
+                image.name = "\(title) - \(choice)"; image.lifetime = .keepAlways; add(image)
+            }
+        }
+    }
+
+    func testSettingsLanguageRowAtAccessibilityTextSize() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--ended-conversation", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        app.buttons["Settings"].tap()
+        let menu = app.buttons["learning-language-picker"]
+        for _ in 0..<10 where !menu.isHittable { app.swipeUp() }
+        XCTAssertTrue(menu.isHittable)
+        let title = app.staticTexts["Learning language"]
+        XCTAssertGreaterThanOrEqual(menu.frame.minY, title.frame.maxY)
+        XCTAssertGreaterThanOrEqual(menu.frame.minX, 0)
+        XCTAssertLessThanOrEqual(menu.frame.maxX, app.frame.maxX)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Settings at accessibility text size"; image.lifetime = .keepAlways; add(image)
     }
 
     func testSettingsCanSwitchToEnglishAndFrench() {

@@ -147,8 +147,196 @@ enum LocalSpeechVoice {
     private var ownsAudio = false
     private var audioRelease: Task<Void, Never>?
     var asrBusy: Bool { asrTask != nil }
-    var canRecord: Bool { fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && completion == nil }
-    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && fireRedDiagnosticAllowsPrepare && completion == nil && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
+    private var speechAdmission = LocalSpeechAdmission()
+    private var speechTask: Task<Void, Error>?
+    private var speechStopRequestedAt: Double?
+    private(set) var speechDrainMilliseconds: Double?
+    private(set) var speechStopMilliseconds: Double?
+    var speechBusy: Bool {
+        if ttsCleanup != nil { return true }
+        return speechAdmission.isBusy
+    }
+    var speechDraining: Bool {
+        if ttsCleanup != nil { return true }
+        return speechAdmission.isDraining
+    }
+    private let pcmPlayback = LocalPCMPlayback()
+    private let neuralTTS = LocalNeuralTTS()
+    private var ttsCleanup: Task<Void, Never>?
+    private var ttsConversationMonitor: Task<Void, Never>?
+    private(set) var thermalStopped = false
+    #if DEBUG && targetEnvironment(simulator)
+    var testThermalState: ProcessInfo.ThermalState?
+    #endif
+    var ttsThermalState: ProcessInfo.ThermalState {
+        #if DEBUG && targetEnvironment(simulator)
+        if let testThermalState { return testThermalState }
+        #endif
+        return ProcessInfo.processInfo.thermalState
+    }
+
+    func resumeAfterCooling() throws {
+        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
+        guard ttsThermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { throw LocalTTSError.phoneTooWarm }
+        thermalStopped = false
+        asrError = nil
+    }
+
+    func stopForTTSSafety(footprint: UInt64, thermal: ProcessInfo.ThermalState) {
+        let memoryStop = footprint >= 3_000_000_000
+        guard memoryStop || thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue else { return }
+        let message = memoryStop
+            ? "On-device speech stopped at the 3.0 GB sampled memory guard. Close Mural before trying again."
+            : LocalTTSError.phoneTooWarm.localizedDescription
+        if memoryStop { stagedMemoryWarning = true }
+        else { thermalStopped = true }
+        stop()
+        asrState = .failed; asrError = message
+        logger.fault("tts_safety_stop max_sampled_footprint_bytes=\(footprint, privacy: .public) thermal_state=\(thermal.rawValue, privacy: .public)")
+        onTTSSafetyStop?(message)
+    }
+    private static let conversationTTSPreferenceKey = "localConversationTTSBackend"
+    private(set) var conversationTTSBackend = LocalTTSBackend(
+        rawValue: UserDefaults.standard.string(forKey: LocalConversationEngine.conversationTTSPreferenceKey) ?? ""
+    ) ?? .supertonic
+    private(set) var supertonicVoice = Supertonic3Voice(rawValue: UserDefaults.standard.string(forKey: "supertonicVoice") ?? "") ?? .m5
+    private(set) var supertonicSpeed = SupertonicSpeed(rawValue: UserDefaults.standard.string(forKey: "supertonicSpeed") ?? "") ?? .normal
+    var ttsVoiceDescription: String { ttsBackend.voice(supertonic: supertonicVoice, speed: supertonicSpeed) }
+
+    func selectSupertonicVoice(_ voice: Supertonic3Voice) throws {
+        guard canSelectTTS else { throw LocalTTSError.busy }
+        guard voice != supertonicVoice else { return }
+        unloadTTSAfterDrain()
+        supertonicVoice = voice
+        UserDefaults.standard.set(voice.rawValue, forKey: "supertonicVoice")
+    }
+
+    func selectSupertonicSpeed(_ speed: SupertonicSpeed) throws {
+        guard canSelectTTS else { throw LocalTTSError.busy }
+        supertonicSpeed = speed
+        UserDefaults.standard.set(speed.rawValue, forKey: "supertonicSpeed")
+    }
+
+    var onTTSSafetyStop: (@MainActor (String) -> Void)?
+    struct TTSSynthesisMetrics {
+        let milliseconds: Double
+        let audioMilliseconds: Double
+        let first: Bool
+        let clipping: Bool
+    }
+    private(set) var lastSynthesis: TTSSynthesisMetrics?
+    var ttsPreparation: [String: Any] { neuralTTS.preparation }
+    private(set) var ttsBackend: LocalTTSBackend = .apple
+    var canSelectTTS: Bool { !speechBusy && !asrBusy && !stagedDecoderWarmupActive && canPrepare }
+
+    func selectTTS(_ backend: LocalTTSBackend) throws {
+        guard canSelectTTS else { throw LocalTTSError.busy }
+        if backend != ttsBackend { unloadTTSAfterDrain() }
+        ttsBackend = backend
+    }
+
+    func selectConversationTTS(_ backend: LocalTTSBackend) throws {
+        guard backend != .kokoro else { throw LocalTTSError.busy }
+        try selectTTS(backend)
+        conversationTTSBackend = backend
+        UserDefaults.standard.set(backend.rawValue, forKey: Self.conversationTTSPreferenceKey)
+    }
+
+    func prepareTTS(progress: @escaping @MainActor @Sendable (String) -> Void = { _ in }) async throws {
+        guard canSelectTTS else { throw LocalTTSError.busy }
+        let started = ProcessInfo.processInfo.systemUptime
+        try await performSpeech { id in
+            try self.ttsBackend.checkAvailable()
+            if self.ttsBackend == .supertonic {
+                try await self.neuralTTS.prepare(voice: self.supertonicVoice) { [self] message in
+                    guard speechAdmission.accepts(id) else { return }
+                    progress(message)
+                }
+            }
+        }
+        logger.notice("tts_prepared backend=\(self.ttsBackend.rawValue, privacy: .public) total_ms=\((ProcessInfo.processInfo.systemUptime - started) * 1_000, privacy: .public) policy=neural-before-asr-preparation")
+    }
+
+    private func speakNeural(_ text: String) async throws {
+        try await performSpeech { id in
+            try self.ttsBackend.checkAvailable()
+            // A typed reply or Help may arrive before greeting prewarm has drained.
+            if let warmup = self.stagedDecoderWarmup { try await warmup.value }
+            try Task.checkCancellation()
+            guard self.speechAdmission.accepts(id) else { throw CancellationError() }
+            let speed = self.supertonicSpeed
+            let rendered = try await self.neuralTTS.synthesize(text, speed: speed.value)
+            self.lastSynthesis = TTSSynthesisMetrics(milliseconds: rendered.synthMilliseconds,
+                audioMilliseconds: rendered.audio.duration * 1_000, first: rendered.first, clipping: rendered.audio.hasClipping)
+            try Task.checkCancellation()
+            guard self.speechAdmission.accepts(id) else { throw CancellationError() }
+            self.voiceDescription = "Mural Voice · \(self.supertonicVoice.muralName) · \(speed.label)"
+            self.logger.notice("tts_synthesized backend=supertonic3-ane-int4 voice=\(self.supertonicVoice.rawValue, privacy: .public) steps=8 speed=\(speed.value, privacy: .public) first=\(rendered.first, privacy: .public) synth_ms=\(rendered.synthMilliseconds, privacy: .public) audio_ms=\(rendered.audio.duration * 1_000, privacy: .public) clipping=\(rendered.audio.hasClipping, privacy: .public) prewarm=after-playback")
+            try await self.playPCM(rendered.audio, id: id)
+            #if canImport(CoreAI)
+            self.startStagedDecoderPrewarmIfNeeded(schedule: "after-neural-playback")
+            #endif
+        }
+    }
+
+    func waitForTTSCleanup() async { await ttsCleanup?.value }
+
+    func finishTTSComparison() async {
+        stopSpeech()
+        await ttsCleanup?.value
+        ttsBackend = conversationTTSBackend
+    }
+
+    private func unloadTTSAfterDrain() {
+        guard ttsCleanup == nil, neuralTTS.hasResources else { return }
+        let worker = speechTask
+        ttsCleanup = Task { [self] in
+            // Upstream native predictions are not cooperative. Never overlap cleanup with them.
+            _ = await worker?.result
+            await neuralTTS.unload()
+            VietnameseEnglishRecognizer.logMemory(stage: "tts-cleanup-returned", model: "supertonic3-ane-int4")
+            ttsCleanup = nil
+        }
+    }
+
+    private func playPCM(_ audio: LocalTTSAudio, id: UUID) async throws {
+        try await activateAudio(category: .playback)
+        defer { releaseAudio() }
+        try Task.checkCancellation()
+        guard speechAdmission.accepts(id) else { throw CancellationError() }
+        try await pcmPlayback.play(audio) { [self] time in
+            guard speechAdmission.accepts(id) else { return }
+            beginPlayback(at: time)
+        }
+        guard speechAdmission.accepts(id) else { throw CancellationError() }
+        finishPlayback(completed: true)
+        logger.notice("tts_finished backend=pcm uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
+    }
+
+    private func startTTSConversationMonitor() {
+        guard ttsConversationMonitor == nil else { return }
+        ttsConversationMonitor = Task { [weak self] in
+            var maximum: UInt64 = 0
+            while !Task.isCancelled, let self {
+                let sample = VietnameseEnglishRecognizer.logMemory(stage: "tts-talk-sampled-100ms", model: "supertonic3-ane-int4")
+                maximum = max(maximum, sample["footprintBytes"] ?? 0)
+                self.stopForTTSSafety(footprint: maximum, thermal: self.ttsThermalState)
+                if Task.isCancelled { return }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
+        }
+    }
+
+    func playTestSignal(sampleRate: Double) async throws {
+        try await performSpeech { id in
+            try await self.playPCM(LocalTTSAudio.testSignal(sampleRate: sampleRate), id: id)
+        }
+    }
+    var canRecord: Bool {
+        if ttsBackend == .supertonic, !neuralTTS.isReady { return false }
+        return fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && !speechBusy
+    }
+    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
     private var fireRedDiagnosticAllowsPrepare: Bool {
         #if MURAL_FIRERED_FILE_PROBE
         if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && !fireRedDiagnosticStarted }
@@ -244,6 +432,7 @@ enum LocalSpeechVoice {
                         self.stop()
                         self.asrState = .failed
                         self.asrError = Self.memoryWarningMessage
+                        self.onTTSSafetyStop?(Self.memoryWarningMessage)
                         self.logger.fault("asr_staged_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
                     }
                 }
@@ -252,42 +441,112 @@ enum LocalSpeechVoice {
     }
 
     isolated deinit {
+        ttsConversationMonitor?.cancel()
         #if MURAL_FIRERED_FILE_PROBE
         fireRedDiagnosticTask?.cancel()
         #endif
         if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
     }
 
-    func speak(_ text: String) async throws {
+    /// Reserve before audio activation (the first await). Stop never reopens admission early.
+    func performSpeech(_ operation: @escaping @MainActor (UUID) async throws -> Void) async throws {
         try Task.checkCancellation()
-        guard completion == nil else { throw SpeechError.busy }
-        guard let voice = LocalSpeechVoice.resolvedVoice() else { throw SpeechError.noVoice }
         guard asrTask == nil else { throw SpeechError.busy }
-        try await activateAudio(category: .playback)
-        let current = AVSpeechUtterance(string: text)
-        current.voice = voice
-        voiceDescription = LocalSpeechVoice.description(for: voice)
-        utterance = current
+        guard !speechBusy else { throw LocalTTSError.busy }
+        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
+        guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
+        lastSynthesis = nil
+        let id = try speechAdmission.begin()
+        speechStopRequestedAt = nil; speechDrainMilliseconds = nil; speechStopMilliseconds = nil
         playbackStartSeconds = nil; playbackDurationSeconds = nil; playbackStartedAt = nil
         requestedAt = ProcessInfo.processInfo.systemUptime
-        let requestTime = requestedAt
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                completion = continuation
-                #if canImport(CoreAI)
-                startStagedDecoderPrewarmIfNeeded()
-                #endif
-                synthesizer.speak(current)
+        let task = Task { @MainActor in
+            try Task.checkCancellation()
+            guard self.speechAdmission.accepts(id) else { throw CancellationError() }
+            try await operation(id)
+            try Task.checkCancellation()
+        }
+        speechTask = task
+        defer {
+            if let stopped = speechStopRequestedAt {
+                speechDrainMilliseconds = (ProcessInfo.processInfo.systemUptime - stopped) * 1_000
             }
+            speechAdmission.finish(id)
+            speechTask = nil
+        }
+        try await withTaskCancellationHandler {
+            do { try await task.value }
+            catch { stopSpeech(); throw error }
         } onCancel: {
             Task { @MainActor [weak self] in
-                guard self?.requestedAt == requestTime else { return }
-                self?.stop()
+                guard self?.speechAdmission.requestID == id else { return }
+                self?.stopSpeech()
             }
         }
     }
 
+    func speak(_ text: String) async throws {
+        _ = try LocalTTSAudio.validatedText(text)
+        if ttsBackend != .apple {
+            do {
+                try await speakNeural(text)
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let failure = error as NSError
+                logger.error("tts_fallback backend=supertonic reason=synthesis domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
+                await ttsCleanup?.value
+                ttsBackend = .apple
+            }
+        }
+        try await performSpeech { id in
+            guard let voice = LocalSpeechVoice.resolvedVoice() else { throw SpeechError.noVoice }
+            try await self.activateAudio(category: .playback)
+            defer { self.releaseAudio() }
+            try Task.checkCancellation()
+            guard self.speechAdmission.accepts(id) else { throw CancellationError() }
+            let current = AVSpeechUtterance(string: text)
+            current.voice = voice
+            self.voiceDescription = LocalSpeechVoice.description(for: voice)
+            self.utterance = current
+            try await withCheckedThrowingContinuation { continuation in
+                self.completion = continuation
+                #if canImport(CoreAI)
+                self.startStagedDecoderPrewarmIfNeeded()
+                #endif
+                self.synthesizer.speak(current)
+            }
+        }
+    }
+
+    /// Playback cancellation is separate from ASR/session teardown.
+    func stopSpeech() {
+        let stoppingPlayback = playbackStartedAt != nil
+        let stopTime = ProcessInfo.processInfo.systemUptime
+        if speechAdmission.isBusy, speechStopRequestedAt == nil { speechStopRequestedAt = stopTime }
+        speechAdmission.cancel()
+        speechTask?.cancel()
+        finishPlayback(completed: false)
+        utterance = nil
+        synthesizer.stopSpeaking(at: .immediate)
+        pcmPlayback.stop()
+        unloadTTSAfterDrain()
+        if stoppingPlayback { speechStopMilliseconds = (ProcessInfo.processInfo.systemUptime - stopTime) * 1_000 }
+        let pending = completion; completion = nil
+        pending?.resume(throwing: CancellationError())
+        releaseAudio()
+    }
+
+    private func finishPlayback(completed: Bool, at time: Double = ProcessInfo.processInfo.systemUptime) {
+        guard let start = playbackStartedAt else { return }
+        playbackStartedAt = nil
+        playbackDurationSeconds = time - start
+        onPlayback?(start, time, completed)
+    }
+
     func stop() {
+        ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil
         generation = UUID()
         limitTask?.cancel(); limitTask = nil
         stopCapture()
@@ -302,34 +561,29 @@ enum LocalSpeechVoice {
         asr = nil; whisper = nil; parakeet = nil; breeze = nil; fireRed = nil
         asrState = .ended
         asrNotice = "Stopped. Prepare speech models again to restart."
-        if utterance != nil, let start = playbackStartedAt {
-            let end = ProcessInfo.processInfo.systemUptime
-            playbackDurationSeconds = end - start
-            onPlayback?(start, end, false)
+        stopSpeech()
+    }
+
+    private func beginPlayback(at time: Double) {
+        playbackStartedAt = time
+        onPlayback?(time, nil, false)
+        playbackStartSeconds = time - requestedAt
+        sendToPlaybackSeconds = submittedAt.map { time - $0 }
+        if let gap = sendToPlaybackSeconds {
+            logger.notice("local_audio_started send_to_audio_seconds=\(gap, privacy: .public)")
+            if trialFirstAudioGeneration != generation {
+                trialFirstAudioGeneration = generation
+                logger.notice("asr_trial_audio id=\(self.generation.uuidString, privacy: .public) uptime=\(time, privacy: .public) send_to_audio_seconds=\(gap, privacy: .public)")
+            }
         }
-        utterance = nil
-        synthesizer.stopSpeaking(at: .immediate)
-        let pending = completion; completion = nil
-        pending?.resume(throwing: CancellationError())
-        releaseAudio()
+        logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public) uptime=\(time, privacy: .public)")
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         let time = ProcessInfo.processInfo.systemUptime
         Task { @MainActor [weak self] in
             guard let self, self.utterance === utterance else { return }
-            self.playbackStartedAt = time
-            self.onPlayback?(time, nil, false)
-            self.playbackStartSeconds = time - self.requestedAt
-            self.sendToPlaybackSeconds = self.submittedAt.map { time - $0 }
-            if let gap = self.sendToPlaybackSeconds {
-                self.logger.notice("local_audio_started send_to_audio_seconds=\(gap, privacy: .public)")
-                if self.trialFirstAudioGeneration != self.generation {
-                    self.trialFirstAudioGeneration = self.generation
-                    self.logger.notice("asr_trial_audio id=\(self.generation.uuidString, privacy: .public) uptime=\(time, privacy: .public) send_to_audio_seconds=\(gap, privacy: .public)")
-                }
-            }
-            self.logger.notice("tts_started startup_seconds=\(time - self.requestedAt, privacy: .public) uptime=\(time, privacy: .public)")
+            self.beginPlayback(at: time)
         }
     }
 
@@ -337,12 +591,10 @@ enum LocalSpeechVoice {
         let time = ProcessInfo.processInfo.systemUptime
         Task { @MainActor [weak self] in
             guard let self, self.utterance === utterance else { return }
-            self.playbackDurationSeconds = self.playbackStartedAt.map { time - $0 }
-            if let start = self.playbackStartedAt { self.onPlayback?(start, time, true) }
+            self.finishPlayback(completed: true, at: time)
             self.logger.notice("tts_finished uptime=\(time, privacy: .public)")
             self.utterance = nil
             let pending = self.completion; self.completion = nil
-            self.releaseAudio()
             pending?.resume()
         }
     }
@@ -350,14 +602,14 @@ enum LocalSpeechVoice {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor [weak self] in
             guard let self, self.utterance === utterance else { return }
-            self.stop()
+            self.stopSpeech()
         }
     }
 
     #if canImport(CoreAI)
-    private func startStagedDecoderPrewarmIfNeeded() {
+    private func startStagedDecoderPrewarmIfNeeded(schedule: String = "with-greeting") {
         guard PhoWhisperStagedEncoder.enabled, stagedDecoderWarmup == nil, let whisper else { return }
-        logger.notice("asr_staged_decoder_schedule schedule=with-greeting")
+        logger.notice("asr_staged_decoder_schedule schedule=\(schedule, privacy: .public)")
         stagedDecoderWarmupActive = true
         stagedDecoderWarmup = Task { [weak self] in
             // Remain active until native loading returns, even after Stop requests cancellation.
@@ -395,9 +647,31 @@ enum LocalSpeechVoice {
         guard !stagedMemoryWarning else {
             throw CaptureError.operation(asrError ?? Self.memoryWarningMessage)
         }
+        await ttsCleanup?.value
+        try Task.checkCancellation()
         guard canPrepare else { throw SpeechError.busy }
         selectASR(.phoWhisper)
         submittedAt = nil; sendToPlaybackSeconds = nil
+        await ttsCleanup?.value
+        try Task.checkCancellation()
+        ttsBackend = conversationTTSBackend
+        if ttsBackend == .supertonic {
+            stopForTTSSafety(footprint: 0, thermal: ttsThermalState)
+            guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
+            startTTSConversationMonitor()
+            do {
+                try await prepareTTS()
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let failure = error as NSError
+                logger.error("tts_fallback backend=supertonic reason=preparation domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
+                ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil
+                await ttsCleanup?.value
+                ttsBackend = .apple
+            }
+        }
         prepareASR()
         await asrTask?.value
         try Task.checkCancellation()
@@ -423,7 +697,7 @@ enum LocalSpeechVoice {
     }
 
     func selectASR(_ model: ASRModel) {
-        guard !asrBusy, completion == nil, model != asrModel else { return }
+        guard !asrBusy, !speechBusy, model != asrModel else { return }
         stop() // Release weights, never delete either model's cached assets.
         asrModel = model; asrState = .idle
         asrText = ""; asrError = nil; asrNotice = nil

@@ -1,4 +1,5 @@
 import SwiftUI
+import FluidAudio
 import AVFoundation
 import Combine
 import OSLog
@@ -512,8 +513,11 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
-                        ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    SettingsMenuRow(title: "Conversation mode", value: coordinator.mode.rawValue,
+                                    options: ConversationCoordinator.Mode.allCases.map(\.rawValue), identifier: "settings-conversation-mode") {
+                        Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
+                            ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
                     }.disabled(!coordinator.canChangeMode)
                     Text(coordinator.isLocal
                          ? "On-device: English with Vietnamese support. Finalized text stays on this iPhone."
@@ -521,29 +525,89 @@ struct SettingsView: View {
                         .font(.footnote)
                 } header: { Text("Conversation") }
                 Section {
-                    NavigationLink {
-                        LocalVoicePickerView(selection: $localVoiceIdentifier, options: $localVoiceOptions)
-                    } label: {
-                        LabeledContent("Voice", value: selectedVoiceSummary)
+                    SettingsMenuRow(title: "Voice", value: coordinator.localAudio.conversationTTSBackend == .apple ? "Apple" : "Mural Voice",
+                                    options: ["Mural Voice", "Apple"], identifier: "tts-talk-backend") {
+                        Picker("Voice", selection: Binding(get: { coordinator.localAudio.conversationTTSBackend }, set: { backend in
+                            do { try coordinator.localAudio.selectConversationTTS(backend) }
+                            catch { message = error.localizedDescription }
+                        })) {
+                            Text("Mural Voice").tag(LocalTTSBackend.supertonic)
+                            Text("Apple").tag(LocalTTSBackend.apple)
+                        }
                     }
-                    .disabled(coordinator.isLocal && coordinator.isRunning)
-                    .accessibilityIdentifier("local-voice-picker")
-                    if hasPremiumVoice {
-                        Label("Premium voice installed", systemImage: "checkmark.circle.fill")
-                            .accessibilityIdentifier("local-voice-premium-ready")
+                    .disabled(coordinator.isRunning || coordinator.localResourcesBusy || !coordinator.localAudio.canSelectTTS)
+
+                    if coordinator.localAudio.conversationTTSBackend == .supertonic {
+                        Picker("Mural voice", selection: Binding(get: { coordinator.localAudio.supertonicVoice }, set: { voice in
+                            do { try coordinator.localAudio.selectSupertonicVoice(voice) }
+                            catch { message = error.localizedDescription }
+                        })) {
+                            Section("Female voices") {
+                                ForEach(Supertonic3Voice.allCases.filter { $0.rawValue.hasPrefix("F") }, id: \.self) { voice in
+                                    Text(voice.muralName).tag(voice)
+                                }
+                            }
+                            Section("Male voices") {
+                                ForEach(Supertonic3Voice.allCases.filter { $0.rawValue.hasPrefix("M") }, id: \.self) { voice in
+                                    Text(voice.muralName).tag(voice)
+                                }
+                            }
+                        }
+                        .disabled(coordinator.isRunning || coordinator.localResourcesBusy || !coordinator.localAudio.canSelectTTS)
+                        .accessibilityIdentifier("tts-supertonic-voice")
+                        SettingsMenuRow(title: "Speech speed", value: coordinator.localAudio.supertonicSpeed.label,
+                                        options: SupertonicSpeed.allCases.map(\.label), identifier: "tts-supertonic-speed") {
+                            Picker("Speech speed", selection: Binding(get: { coordinator.localAudio.supertonicSpeed }, set: { speed in
+                                do { try coordinator.localAudio.selectSupertonicSpeed(speed) }
+                                catch { message = error.localizedDescription }
+                            })) {
+                                ForEach(SupertonicSpeed.allCases) { speed in
+                                    Text(speed.label).tag(speed)
+                                }
+                            }
+                        }
+                        .disabled(coordinator.isRunning || coordinator.localResourcesBusy || !coordinator.localAudio.canSelectTTS)
+                    } else {
+                        NavigationLink {
+                            LocalVoicePickerView(selection: $localVoiceIdentifier, options: $localVoiceOptions)
+                        } label: {
+                            LabeledContent("Apple voice", value: selectedVoiceSummary)
+                        }
+                        .disabled(coordinator.isLocal && coordinator.isRunning)
+                        .accessibilityIdentifier("local-voice-picker")
+                        if hasPremiumVoice {
+                            Label("Premium voice installed", systemImage: "checkmark.circle.fill")
+                                .accessibilityIdentifier("local-voice-premium-ready")
+                        }
+                        Button("Get more Apple voices", systemImage: "arrow.down.circle") { showingVoiceUpgrade = true }
+                            .accessibilityIdentifier("local-voice-upgrade")
                     }
-                    Button("Get more Apple voices", systemImage: "arrow.down.circle") { showingVoiceUpgrade = true }
-                        .accessibilityIdentifier("local-voice-upgrade")
                 } header: { Text("On-device voice") } footer: {
-                    Text("Best available prefers Premium, then Enhanced, then Standard. Within the highest available quality, it prefers a voice matching your iPhone region. You can also pin any installed English accent manually.")
+                    if coordinator.localAudio.conversationTTSBackend == .supertonic {
+                        Text("Mural Voice defaults to Theo at 1.0×. If it is unavailable or cannot speak, Mural uses your Apple voice for that conversation.")
+                    } else {
+                        Text("Best available prefers Premium, then Enhanced, then Standard. Within the highest available quality, it prefers a voice matching your iPhone region. You can also pin any installed English accent manually.")
+                    }
                 }
+                #if MURAL_TTS_EXPERIMENT
+                Section("Experiments") {
+                    NavigationLink("Speech comparison") {
+                        TTSComparisonView(audio: coordinator.localAudio)
+                    }
+                    .disabled(coordinator.isRunning || coordinator.localResourcesBusy)
+                    .accessibilityIdentifier("tts-comparison")
+                }
+                #endif
                 Section {
                     LearningLanguagePicker(coordinator: coordinator)
                     Toggle("Meaning subtitles", isOn: Binding(get: { store.preferences.meaningVisible }, set: { value in
                         if value != store.preferences.meaningVisible { coordinator.toggleMeaning() }
                     }))
-                    Picker("Meaning language", selection: Binding(get: { store.preferences.meaningLanguage }, set: { coordinator.selectMeaningLanguage($0) })) {
-                        ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
+                    SettingsMenuRow(title: "Meaning language", value: store.preferences.meaningLanguage,
+                                    options: MeaningLanguages.all, identifier: "settings-meaning-language") {
+                        Picker("Meaning language", selection: Binding(get: { store.preferences.meaningLanguage }, set: { coordinator.selectMeaningLanguage($0) })) {
+                            ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
+                        }
                     }
                     .disabled(coordinator.isLocal && (coordinator.isRunning || coordinator.localResourcesBusy))
                     LabeledContent("Corrections", value: "Gently, as we talk")
@@ -579,8 +643,11 @@ struct SettingsView: View {
                 } header: { Text("Advanced") }
                 Section {
                     if !coordinator.isLocal {
-                        Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
-                            ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
+                        SettingsMenuRow(title: "Conversation limit", value: "\(store.preferences.sessionMinutes) minutes",
+                                        options: [5, 10, 15, 20, 30, 60].map { "\($0) minutes" }, identifier: "settings-conversation-limit") {
+                            Picker("Conversation limit", selection: Binding(get: { store.preferences.sessionMinutes }, set: { value in store.updatePreferences { $0.sessionMinutes = value } })) {
+                                ForEach([5, 10, 15, 20, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
+                            }
                         }
                     }
                     LabeledContent("GPT-Live voice time", value: "\(Int(totalVoiceSeconds / 60)) min \(Int(totalVoiceSeconds) % 60) sec")
@@ -765,11 +832,71 @@ private struct LocalVoiceUpgradeView: View {
 struct LearningLanguagePicker: View {
     let coordinator: ConversationCoordinator
     var body: some View {
-        Picker("Learning language", selection: Binding(get: { coordinator.language.id }, set: { coordinator.selectLanguage($0) })) {
-            ForEach(LanguageRegistry.all) { language in Text(language.settingsTitle).tag(language.id) }
+        SettingsMenuRow(title: "Learning language", value: coordinator.language.name,
+                        options: LanguageRegistry.all.map(\.name), identifier: "learning-language-picker",
+                        subtitle: coordinator.language.variety, subtitleOptions: LanguageRegistry.all.map(\.variety)) {
+            Picker("Learning language", selection: Binding(get: { coordinator.language.id }, set: { coordinator.selectLanguage($0) })) {
+                ForEach(LanguageRegistry.all) { language in Text(language.settingsTitle).tag(language.id) }
+            }
         }
-        .pickerStyle(.menu)
         .disabled(!coordinator.canChangeMode)
-        .accessibilityIdentifier("learning-language-picker")
+    }
+}
+
+/// A stable menu source, with optional secondary detail and a stacked accessibility layout.
+private struct SettingsMenuRow<Content: View>: View {
+    let title: String
+    let value: String
+    let options: [String]
+    let identifier: String
+    var subtitle: String? = nil
+    var subtitleOptions: [String] = []
+    @ViewBuilder let content: Content
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                menu.frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                Spacer()
+                menu.fixedSize(horizontal: true, vertical: false)
+            }
+        }
+    }
+
+    private var menu: some View {
+        Menu { content } label: {
+            HStack {
+                // Size for every choice, not just the current value, including at larger text sizes.
+                VStack(alignment: .trailing, spacing: 2) {
+                    ZStack(alignment: .trailing) {
+                        ForEach(options, id: \.self) { Text($0).hidden() }
+                        Text(value)
+                    }
+                    if let subtitle {
+                        ZStack(alignment: .trailing) {
+                            ForEach(subtitleOptions, id: \.self) { Text($0).hidden() }
+                            Text(subtitle)
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(MuralColor.secondary)
+                    }
+                }
+                .multilineTextAlignment(.trailing)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(title)
+        .accessibilityValue(subtitle.map { "\(value) · \($0)" } ?? value)
+        .accessibilityIdentifier(identifier)
     }
 }

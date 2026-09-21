@@ -16,6 +16,9 @@ import WhisperKit
     @State private var startupError: String?
 
     init() {
+        #if MURAL_TTS_EXPERIMENT
+        if ProcessInfo.processInfo.arguments.contains("--tts-comparison") { return }
+        #endif
         // Explicit VAD-only launch never creates Talk, a tutor, or a learning store.
         if LocalTutorProbeView.vadOnlyRequested { return }
         #if MURAL_FIRERED_FILE_PROBE
@@ -34,6 +37,18 @@ import WhisperKit
     }
 
     @ViewBuilder private var mainContent: some View {
+        #if MURAL_TTS_EXPERIMENT
+        if ProcessInfo.processInfo.arguments.contains("--tts-comparison") {
+            NavigationStack { TTSComparisonView() }
+        } else {
+            normalContent
+        }
+        #else
+        normalContent
+        #endif
+    }
+
+    @ViewBuilder private var normalContent: some View {
         if let store {
             RootView(store: store).preferredColorScheme(.light)
         } else {
