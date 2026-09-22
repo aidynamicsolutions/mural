@@ -14,6 +14,7 @@ actor BreezeEnglishRecognizer {
     private var vad: VadManager?
     private var vadMode: SpeechPresencePolicy.Mode = .off
     private var busy = false
+    private var inferenceCount = 0
     private var suppressTokens: [Int] = []
     private let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
 
@@ -29,6 +30,13 @@ actor BreezeEnglishRecognizer {
     /// The expected digest comes from the local export, not from the same downloaded bundle.
     /// A release must replace this diagnostic launch argument with a reviewed build-time pin.
     @concurrent static func localDirectory() async throws -> URL {
+        let started = ProcessInfo.processInfo.systemUptime
+        let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+        var verified = false
+        logger.notice("breeze_asset_verification_begin")
+        defer {
+            logger.notice("breeze_asset_verification_end success=\(verified, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
+        }
         let prefix = "--breeze-manifest-sha256="
         let flags = ProcessInfo.processInfo.arguments.filter { $0.hasPrefix(prefix) }
         guard flags.count == 1 else { throw Failure("Supply exactly one Breeze manifest SHA-256 launch argument from the local export.") }
@@ -79,6 +87,8 @@ actor BreezeEnglishRecognizer {
         var excluded = folder
         var resources = URLResourceValues(); resources.isExcludedFromBackup = true
         try excluded.setResourceValues(resources)
+        try Task.checkCancellation()
+        verified = true
         return folder
     }
 
@@ -132,14 +142,26 @@ actor BreezeEnglishRecognizer {
                 }
             }
             try Task.checkCancellation()
-            try await loaded.prewarmModels()
+            let receipt = try CoreMLPreparationReceipt(verifiedDirectory: directory, scope: .eager,
+                computeUnits: ["mel": loaded.modelCompute.melCompute.rawValue,
+                               "encoder": loaded.modelCompute.audioEncoderCompute.rawValue,
+                               "decoder": loaded.modelCompute.textDecoderCompute.rawValue])
+            _ = try await receipt.prepare(prewarm: {
+                VietnameseEnglishRecognizer.logMemory(stage: "prewarm-begin", model: Self.identity)
+                defer { VietnameseEnglishRecognizer.logMemory(stage: "prewarm-end", model: Self.identity) }
+                try await loaded.prewarmModels()
+            }, loadAndValidate: {
+                VietnameseEnglishRecognizer.logMemory(stage: "load-begin", model: Self.identity)
+                defer { VietnameseEnglishRecognizer.logMemory(stage: "load-end", model: Self.identity) }
+                try await loaded.loadModels()
+                try Task.checkCancellation()
+                guard loaded.textDecoder.logitsSize == 51865, loaded.audioEncoder.embedSize == 1280 else {
+                    throw Failure("Breeze compiled encoder/decoder shapes do not match.")
+                }
+            })
             try Task.checkCancellation()
-            try await loaded.loadModels()
-            try Task.checkCancellation()
-            guard loaded.textDecoder.logitsSize == 51865, loaded.audioEncoder.embedSize == 1280 else {
-                throw Failure("Breeze compiled encoder/decoder shapes do not match.")
-            }
             vad = detector; kit = loaded
+            inferenceCount = 0
             VietnameseEnglishRecognizer.logMemory(stage: "loaded", model: Self.identity)
         } catch {
             await loaded.unloadModels()
@@ -188,6 +210,8 @@ actor BreezeEnglishRecognizer {
         // Don't copy PhoWhisper's threshold overrides, force English, translate,
         // prompt with the reference, or normalize characters in the recognizer.
         let started = ProcessInfo.processInfo.systemUptime
+        inferenceCount += 1
+        logger.notice("breeze_inference_begin turn=\(self.inferenceCount, privacy: .public) first_since_prepare=\(self.inferenceCount == 1, privacy: .public)")
         let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
         try Task.checkCancellation()
         logger.notice("breeze_decode scope=whisperkit-transcribe-not-ui-send seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) windows=\(results.count, privacy: .public)")
