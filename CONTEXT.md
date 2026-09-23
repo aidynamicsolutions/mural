@@ -48,6 +48,8 @@ _Avoid_: reset conversation, conversation list
 - An **Eligible transcript** requires at least one **User message**, whether spoken or typed.
 - A **System interruption** may close a live session, but it does not make an assistant-only session eligible for history.
 - On-device conversations have no automatic inactivity or elapsed-time ending and should keep the same session, return to Ready, and resume across backgrounding when possible.
+- Remember successful speech preparation per language pair across app relaunches, only after native preparation succeeds. Later same-pair preparation uses compact Talk feedback instead of the full Speech Setup card, including background resume and a new conversation. Keep the currently displayed conversation content visible, disable Record, Type and Help until Ready, and keep End available. Keep the full card for a pair that has not prepared successfully or when assets are missing or need download or verification.
+- Compact preparation keeps the status text below the orb: “Getting your speech ready again…”; it has no separate spinner. A gentle breathing pulse or soft glow on the orb distinguishes preparation from Ready, then returns to normal orb motion. Reduce Motion keeps the orb static while the status text remains.
 - If iOS kills an On-device session, restore only eligible saved text and require a new session after relaunch.
 - GPT-Live retains its existing cost-protection behavior, including its inactivity and maximum-duration limits and current background handling.
 - **New conversation** clears the active Talk state but preserves eligible conversation history.

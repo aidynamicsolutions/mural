@@ -28,9 +28,38 @@ import MuralCore
     private var needsSpeechDownload = false
     private var stoppedDuringPreparation = false
     private var preparingNativeSpeech = false
+    private var detailedSpeechSetup = true
+    #if DEBUG && targetEnvironment(simulator)
+    private static var didClearSpeechPreparation = false
+    #endif
     private(set) var speechSetupError: String?
     private(set) var speechSetupDiagnostic: String?
     var isStoppingSpeechSetup: Bool { stoppedDuringPreparation && localResourcesBusy }
+    var isCompactSpeechPreparation: Bool {
+        localPhase == .preparing && !isStoppingSpeechSetup && !detailedSpeechSetup &&
+        !needsSpeechDownload && !awaitingSpeechDownload && speechDownloadOffer == nil
+    }
+    private static func speechPreparationKey(for pair: LocalSpeechPair) -> String {
+        "mural.speechPreparationSucceeded.\(pair.rawValue)"
+    }
+    private func speechPreparationSucceeded(for pair: LocalSpeechPair) -> Bool {
+        UserDefaults.standard.bool(forKey: Self.speechPreparationKey(for: pair))
+    }
+    private func markSpeechPreparationSucceeded(for pair: LocalSpeechPair) {
+        UserDefaults.standard.set(true, forKey: Self.speechPreparationKey(for: pair))
+    }
+    private func shouldShowDetailedSpeechSetup(for pair: LocalSpeechPair) -> Bool {
+        guard speechPreparationSucceeded(for: pair) else { return true }
+        #if DEBUG && targetEnvironment(simulator)
+        if speechSetupPreview == "resume" { return false }
+        #endif
+        do {
+            if try !localAudio.hasConversationAssets(for: pair) { return true }
+            if try localAudio.conversationVoiceNeedsDownload { return true }
+            if try localAudio.speechDetectionNeedsDownload { return true }
+            return false
+        } catch { return true }
+    }
     var speechSetupProgress: SpeechSetupProgress? {
         if isStoppingSpeechSetup { return .init(.cancelled) }
         guard localPhase == .preparing else { return nil }
@@ -127,6 +156,14 @@ import MuralCore
 
     init(store: LearningStore) {
         self.store = store
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--preview-clear-speech-preparation"), !Self.didClearSpeechPreparation {
+            Self.didClearSpeechPreparation = true
+            for pair in LocalSpeechPair.allCases {
+                UserDefaults.standard.removeObject(forKey: Self.speechPreparationKey(for: pair))
+            }
+        }
+        #endif
         let api = APIClient(); self.api = api
         let localTutor = LocalTutorModel(); self.localTutor = localTutor
         localMeanings = MeaningController { request in
@@ -247,7 +284,7 @@ import MuralCore
             if needsThermalResume { return "Speech paused · Let your iPhone cool, then tap Resume" }
             switch localPhase {
             case .idle: return "Prepare to talk on this iPhone"
-            case .preparing: return "Preparing on this iPhone…"
+            case .preparing: return isCompactSpeechPreparation ? "Getting your speech ready again…" : "Preparing on this iPhone…"
             case .paused: return "Paused · Return to continue"
             case .ready: return localResourcesBusy ? "Finishing on-device support" : "Ready · Tap Record"
             case .recording:
@@ -313,6 +350,7 @@ import MuralCore
     }
 
     private func startLocal() {
+        let pair = selectedLocalSpeechPair
         guard localPairSupported else {
             error = "On-device Talk supports English learning with Vietnamese or Traditional Chinese meanings. Set those languages in Settings; your learning history stays unchanged."
             return
@@ -323,7 +361,8 @@ import MuralCore
         #else
         let isSetupPreview = false
         #endif
-        if !isSetupPreview, let message = LocalTutorModel.availabilityMessage(for: selectedLocalSpeechPair) { error = message; return }
+        if !isSetupPreview, let message = LocalTutorModel.availabilityMessage(for: pair) { error = message; return }
+        detailedSpeechSetup = !speechPreparationSucceeded(for: pair)
         speechSetupError = nil; speechSetupDiagnostic = nil
         stoppedDuringPreparation = false; needsSpeechDownload = false; preparingNativeSpeech = false
         meanings.reset(); cancelLocalSupporting()
@@ -335,8 +374,8 @@ import MuralCore
         startAfterConsent = false; showAIConsent = false
         sessionMode = .local
         selectedTheme = nil; pendingTopic = nil
-        var record = SessionRecord(languageID: "en", title: selectedLocalSpeechPair == .vietnameseEnglish ? "On-device conversation" : "Taiwan Mandarin–English practice")
-        record.localSpeechPair = selectedLocalSpeechPair
+        var record = SessionRecord(languageID: "en", title: pair == .vietnameseEnglish ? "On-device conversation" : "Taiwan Mandarin–English practice")
+        record.localSpeechPair = pair
         localStartedAt = ProcessInfo.processInfo.systemUptime
         session = record
         error = nil; notice = nil; isMuted = true; working = false
@@ -350,7 +389,7 @@ import MuralCore
         try Task.checkCancellation()
         #if DEBUG && targetEnvironment(simulator)
         if let preview = speechSetupPreview, preview != "unavailable" {
-            needsSpeechDownload = preview != "cached"
+            needsSpeechDownload = preview != "cached" && preview != "resume"
             return needsSpeechDownload ? SpeechDownloadOffer(recognitionBytes: 64_000_000,
                 recognitionStorageBytes: 128_000_000, availableBytes: 1_000_000_000, needsVoice: preview == "voice", needsSpeechDetection: false) : nil
         }
@@ -396,13 +435,15 @@ import MuralCore
             do {
                 if !downloadsApproved, let offer = try await self.speechDownloadNeeded(for: pair) {
                     try self.checkLocal(id)
+                    self.detailedSpeechSetup = true
                     self.awaitingSpeechDownload = true; self.speechDownloadOffer = offer
                     return // No weights are downloaded until the user confirms.
                 }
                 try self.checkLocal(id)
                 #if DEBUG && targetEnvironment(simulator)
                 if self.speechSetupPreview != nil {
-                    try await self.runSpeechSetupPreview(sessionID: id)
+                    try await self.runSpeechSetupPreview(sessionID: id, pair: pair)
+                    try self.checkLocal(id)
                     return
                 }
                 #endif
@@ -416,6 +457,7 @@ import MuralCore
                 self.preparingNativeSpeech = true
                 try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
                 try self.checkLocal(id)
+                self.markSpeechPreparationSucceeded(for: pair)
                 self.state = .active; self.lastActivity = .now
                 let greeting = "Hi! What did you do today?"
                 let fragmentID = try self.appendLocal(greeting, speaker: .assistant, sessionID: id)
@@ -892,6 +934,9 @@ import MuralCore
         }
     }
     private func scheduleTranslation() {
+        #if DEBUG && targetEnvironment(simulator)
+        if isLocal && speechSetupPreview != nil { return }
+        #endif
         if isLocal {
             guard canUseLocalSupport, UIApplication.shared.applicationState == .active,
                   store.preferences.meaningVisible, let session, let passage = assistantPassage else { return }
@@ -927,6 +972,8 @@ import MuralCore
         guard isLocal, state == .active, localPhase == .paused, localResumeTask == nil,
               let id = session?.id else { return }
         let finishing = localTask
+        let pair = localSpeechPair
+        detailedSpeechSetup = shouldShowDetailedSpeechSetup(for: pair)
         localPhase = .preparing; preparingNativeSpeech = true
         localResumeTask = Task { [weak self] in
             guard let self else { return }
@@ -935,8 +982,23 @@ import MuralCore
             guard !Task.isCancelled, self.isLocal, self.state == .active,
                   self.localPhase == .preparing, self.session?.id == id else { return }
             do {
-                try await self.localAudio.prepareConversation(model: self.localSpeechPair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
+                #if DEBUG && targetEnvironment(simulator)
+                if self.speechSetupPreview == "resume" {
+                    self.previewSetupProgress = .init(.preparingSpeech)
+                    try await Task.sleep(for: .seconds(2))
+                    try self.checkLocal(id)
+                    self.markSpeechPreparationSucceeded(for: pair)
+                    self.session?.localPausedAt = nil
+                    self.saveIfEligible()
+                    self.lastActivity = .now
+                    self.localPhase = .ready
+                    self.previewSetupProgress = nil
+                    return
+                }
+                #endif
+                try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
                 try self.checkLocal(id)
+                self.markSpeechPreparationSucceeded(for: pair)
                 self.session?.localPausedAt = nil
                 self.saveIfEligible()
                 self.lastActivity = .now
@@ -977,7 +1039,7 @@ import MuralCore
         return String(argument.dropFirst("--preview-speech-setup=".count))
     }
     private var previewSetupProgress: SpeechSetupProgress?
-    private func runSpeechSetupPreview(sessionID: UUID) async throws {
+    private func runSpeechSetupPreview(sessionID: UUID, pair: LocalSpeechPair) async throws {
         if needsSpeechDownload {
             for step in 0...4 {
                 try checkLocal(sessionID)
@@ -993,12 +1055,17 @@ import MuralCore
             // Deliberately non-cooperative native-work stand-in. The parent must retain
             // admission until it returns; a cancellation flag alone must not unlock UI.
             await Task.detached { try? await Task.sleep(for: .seconds(30)) }.value
-        } else { try await Task.sleep(for: .seconds(1)) }
+        } else { try await Task.sleep(for: .seconds(speechSetupPreview == "resume" ? 2 : 1)) }
         try checkLocal(sessionID)
         if speechSetupPreview == "failure" { throw SpeechPackageError.integrity }
+        markSpeechPreparationSucceeded(for: pair)
         state = .active; localPhase = .ready
         previewSetupProgress = nil
         _ = try appendLocal("Hi! What did you do today?", speaker: .assistant, sessionID: sessionID)
+        if speechSetupPreview == "resume" {
+            _ = try appendLocal("I went for a walk by the river.", speaker: .user, sessionID: sessionID)
+            _ = try appendLocal("That sounds peaceful. What did you enjoy most?", speaker: .assistant, sessionID: sessionID)
+        }
     }
     func prepareThermalStopPreview() {
         mode = .local; sessionMode = .local

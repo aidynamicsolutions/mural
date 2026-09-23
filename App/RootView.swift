@@ -105,18 +105,18 @@ struct TalkView: View {
                         .padding(.horizontal, 14).padding(.vertical, 9).background(MuralColor.butter.opacity(0.58), in: Capsule()).padding(.top, 12)
                         .accessibilityIdentifier("conversation-language-pair")
                     Spacer(minLength: 8)
-                    MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing)
+                    MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing, preparing: coordinator.isCompactSpeechPreparation)
                         .frame(width: compactOrb ? 170 : 220, height: compactOrb ? 180 : 222).padding(.vertical, 8)
                     Text(coordinator.status).font(.system(.caption, design: .rounded)).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                         .contentTransition(.numericText()).padding(.top, 6).accessibilityAddTraits(.updatesFrequently)
                         .accessibilityIdentifier("conversation-status")
-                        .opacity(coordinator.speechSetupProgress == nil ? 1 : 0)
-                        .accessibilityHidden(coordinator.speechSetupProgress != nil)
+                        .opacity(coordinator.speechSetupProgress == nil || coordinator.isCompactSpeechPreparation ? 1 : 0)
+                        .accessibilityHidden(coordinator.speechSetupProgress != nil && !coordinator.isCompactSpeechPreparation)
                     if let notice = coordinator.notice {
                         Text(notice).font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                             .padding(.top, 6).accessibilityIdentifier("conversation-notice")
                     }
-                    if coordinator.speechSetupProgress == nil { captionArea.padding(.top, 16) }
+                    if coordinator.speechSetupProgress == nil || (coordinator.isCompactSpeechPreparation && coordinator.assistantPassage != nil) { captionArea.padding(.top, 16) }
                     Spacer(minLength: 12)
                     if coordinator.isLocal { localControls } else { controls }
                     HStack(spacing: 24) {
@@ -146,7 +146,7 @@ struct TalkView: View {
         .onChange(of: coordinator.localResourcesBusy) { if !coordinator.localResourcesBusy { coordinator.refreshLocalMeaning() } }
         .onChange(of: coordinator.state) { if coordinator.isLocal && !coordinator.isRunning { typing = false; lookup = nil } }
     }
-    private var compactOrb: Bool { typeSize.isAccessibilitySize || coordinator.speechSetupProgress != nil }
+    private var compactOrb: Bool { typeSize.isAccessibilitySize || (coordinator.speechSetupProgress != nil && !coordinator.isCompactSpeechPreparation) }
     private var captionArea: some View {
         VStack(spacing: 12) {
             Text(linkedCaption).font(.system(coordinator.assistantPassage == nil ? .largeTitle : .title2, design: .rounded, weight: .medium))
@@ -213,10 +213,10 @@ struct TalkView: View {
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-thermal-resume")
             }
-            if let progress = coordinator.speechSetupProgress {
+            if let progress = coordinator.speechSetupProgress, !coordinator.isCompactSpeechPreparation {
                 SpeechSetupCard(progress: progress, canCancel: !coordinator.isStoppingSpeechSetup) { coordinator.end() }
             }
-            if coordinator.isRunning, coordinator.speechSetupProgress == nil {
+            if coordinator.isRunning && (coordinator.speechSetupProgress == nil || coordinator.isCompactSpeechPreparation) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) { localTurnButtons }
                     VStack(spacing: 12) { localTurnButtons }

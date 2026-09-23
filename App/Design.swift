@@ -58,6 +58,7 @@ struct MuralOrb: View {
     var energy: Double = 0
     var listening = false
     var active = true
+    var preparing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
@@ -65,6 +66,7 @@ struct MuralOrb: View {
             let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
             let phase = t * 0.72
             let e = reduceMotion ? 0 : min(1, max(0, energy))
+            let preparationPulse = preparing && !reduceMotion ? (sin(t * 1.5) + 1) / 2 : 0
             GeometryReader { geometry in
                 let side = min(geometry.size.width, geometry.size.height)
                 ZStack {
@@ -86,9 +88,10 @@ struct MuralOrb: View {
                             .blur(radius: 12).rotationEffect(.degrees(-15)).offset(y: side * 0.54)
                     }
                     .mask(OrbShape(phase: phase, energy: e))
-                    .shadow(color: MuralColor.orange.opacity(0.12), radius: 16, y: 10)
+                    .shadow(color: MuralColor.orange.opacity(0.12 + preparationPulse * 0.1), radius: 16 + preparationPulse * 7, y: 10)
                     .rotationEffect(.degrees(sin(phase * 0.5) * 3))
-                    .scaleEffect(1 + e * 0.045)
+                    .scaleEffect(1 + e * 0.045 + preparationPulse * 0.018)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: preparing)
                     .offset(y: reduceMotion ? 0 : sin(t * 0.9) * 4 - 5)
                     Circle().fill(RadialGradient(colors: [.white, MuralColor.peach, MuralColor.orange.opacity(0.5)], center: .topLeading, startRadius: 0, endRadius: 12))
                         .frame(width: 12, height: 12).offset(x: side * 0.55, y: -side * 0.24)

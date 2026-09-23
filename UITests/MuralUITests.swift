@@ -44,10 +44,11 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(recognizer.waitForExistence(timeout: 5))
         return recognizer
     }
-    private func setupPreview(_ scenario: String, meaningLanguage: String = "Traditional Chinese", largeText: Bool = false) -> XCUIApplication {
+    private func setupPreview(_ scenario: String, meaningLanguage: String = "Traditional Chinese", largeText: Bool = false, clearSpeechPreparation: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-existing-user", "--preview-speech-setup=\(scenario)"]
         if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        if clearSpeechPreparation { app.launchArguments.append("--preview-clear-speech-preparation") }
         app.launch()
         setConversationMode("On-device", app: app)
         setLearningLanguage("English · International", app: app)
@@ -237,6 +238,42 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
         app.buttons["speech-download-decline"].tap()
     }
+    func testSuccessfulSpeechPreparationResumesCompactlyWithoutHidingConversation() {
+        let app = setupPreview("resume", clearSpeechPreparation: true)
+
+        let stage = app.staticTexts["speech-setup-stage"]
+        expectation(for: NSPredicate(format: "label == %@", "Getting speech ready…"), evaluatedWith: stage)
+        waitForExpectations(timeout: 5)
+
+        let status = app.staticTexts["conversation-status"]
+        let assistant = app.staticTexts["target-caption"]
+        let learner = app.staticTexts.matching(NSPredicate(format: "label == %@", "I went for a walk by the river.")).firstMatch
+        XCTAssertTrue(app.buttons["local-conversation-end"].waitForExistence(timeout: 10))
+        XCTAssertTrue(assistant.waitForExistence(timeout: 5))
+        XCTAssertTrue(learner.waitForExistence(timeout: 5))
+        keepScreenshot("Conversation after first speech preparation", app: app)
+
+        XCUIDevice.shared.press(.home)
+        app.activate()
+
+        let resuming = NSPredicate(format: "label == %@", "Getting your speech ready again…")
+        expectation(for: resuming, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(stage.exists)
+        XCTAssertTrue(app.buttons["local-conversation-end"].isEnabled)
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].isEnabled)
+        XCTAssertFalse(app.buttons["Type instead"].isEnabled)
+        XCTAssertFalse(app.buttons["A little help"].isEnabled)
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(learner.exists)
+        keepScreenshot("Conversation stays visible during compact speech resume", app: app)
+
+        expectation(for: NSPredicate(format: "label != %@", "Getting your speech ready again…"), evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(learner.exists)
+    }
+
     func testSpeechSetupBackgroundDoesNotRestartDownload() {
         let app = setupPreview("drain")
         defer { restorePremium(app) }
