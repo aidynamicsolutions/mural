@@ -17,6 +17,8 @@ public struct Fragment: Codable, Identifiable, Equatable, Sendable {
     public var typed: Bool
     /// Explicit finalized local turn; absent in legacy/premium streaming fragments.
     public var turnID: UUID?
+    /// Exact recognizer result before display whitespace handling. Never replace with teaching text.
+    public var rawASRText: String?
     public var playbackStartMS: Int?
     public var playbackEndMS: Int?
     public var playbackCompleted: Bool?
@@ -121,6 +123,8 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
     public var startedAt = Date()
     public var endedAt: Date?
     public var localPausedAt: Date?
+    /// Missing legacy local records are Vietnamese–English, never inferred from their words.
+    public var localSpeechPair: LocalSpeechPair?
     public var themeID: String?
     public var title: String
     public var fragments: [Fragment] = []
@@ -166,6 +170,7 @@ public struct Preferences: Codable, Sendable {
     public var learningLanguageID = LanguageRegistry.defaultID
     public var meaningVisible = true
     public var meaningLanguage = "English"
+    public var localSpeechPair: LocalSpeechPair?
     public var sessionMinutes = 15
     public var hiddenWords: [String] = []
     public var interests = ""
@@ -234,6 +239,7 @@ public struct Archive: Codable, Sendable {
                   s.assessments.allSatisfy({ validDate($0.createdAt) }) else { throw ArchiveError.invalid }
             guard Set(s.fragments.map(\.id)).count == s.fragments.count,
                   s.fragments.allSatisfy({ $0.startMS >= 0 && $0.endMS >= $0.startMS && $0.text.count <= 50_000 &&
+                      ($0.rawASRText.map { $0.count <= 50_000 } ?? true) &&
                       (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) &&
                       ($0.playbackStartMS.map { $0 >= 0 } ?? true) &&
                       ($0.playbackEndMS == nil || ($0.playbackStartMS != nil && $0.playbackEndMS! >= $0.playbackStartMS!)) &&

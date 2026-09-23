@@ -24,7 +24,7 @@ SWIFTC = shutil.which("swiftc")
 def selection_source() -> str:
     source = SOURCE.read_text()
     selection = source.split("    enum CompressionCandidate:", 1)[1].split("    static var enabled:", 1)[0]
-    enabled = source.split("    static var enabled:", 1)[1].split("    @concurrent static func verifiedURL", 1)[0]
+    enabled = source.split("    static var enabled:", 1)[1].split("    @concurrent static func prepareForConversation", 1)[0]
     policy = "enum DecoderTrialPolicy {" + source.split("enum DecoderTrialPolicy {", 1)[1]
     return r'''import Foundation
 #if os(Linux)
@@ -38,6 +38,10 @@ enum AIModel {
     static var deviceArchitectureName: String {
         ProcessInfo.processInfo.environment["REVIEW_ARCH"] ?? "h18p"
     }
+}
+enum LocalSpeechPair { case vietnameseEnglish }
+enum LocalSpeechProvisioning {
+    static func installedDirectory(for pair: LocalSpeechPair, component: String) throws -> URL? { nil }
 }
 enum PhoWhisperStagedEncoder {
     typealias Failure = ReviewFailure

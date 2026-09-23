@@ -1,6 +1,198 @@
 import XCTest
 
 final class MuralUITests: XCTestCase {
+    private func setConversationMode(_ selection: String, app: XCUIApplication) {
+        let settings = app.buttons["Settings"]
+        for _ in 0..<8 where !settings.isHittable { app.swipeDown() }
+        settings.tap()
+        let mode = app.buttons["settings-conversation-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        if mode.isEnabled {
+            mode.tap()
+            app.buttons[selection].tap()
+        }
+        app.buttons["Done"].tap()
+    }
+    private func setupPreview(_ scenario: String, largeText: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--preview-existing-user", "--preview-speech-setup=\(scenario)"]
+        if largeText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launch()
+        setConversationMode("On-device", app: app)
+        app.buttons["local-speech-pair"].tap(); app.buttons["Traditional Chinese - English"].tap()
+        let start = app.buttons["local-conversation-start"]
+        for _ in 0..<8 where !start.isHittable { app.swipeUp() }
+        XCTAssertTrue(start.isHittable)
+        start.tap()
+        return app
+    }
+    private func restorePremium(_ app: XCUIApplication) {
+        // Mode is a UserDefaults preference even when preview learning data is temporary.
+        setConversationMode("GPT-Live", app: app)
+    }
+    private func keepScreenshot(_ name: String, app: XCUIApplication) {
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = name; image.lifetime = .keepAlways; add(image)
+    }
+    func testTaiwanSpeechPackageUnavailableDoesNotStartOrSwitchModes() {
+        let app = setupPreview("unavailable")
+        defer { restorePremium(app) }
+        let error = app.staticTexts["speech-setup-error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertTrue(error.label.contains("isn’t available to download"))
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists)
+        XCTAssertFalse(app.buttons["speech-models-open"].exists)
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists)
+        let originalError = error.label
+        app.buttons["local-conversation-start"].tap()
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertEqual(error.label, originalError)
+        let pair = app.buttons["local-speech-pair"]
+        XCTAssertTrue(pair.label.contains("Traditional Chinese - English") || (pair.value as? String ?? "").contains("Traditional Chinese - English"))
+        keepScreenshot("Start explains unavailable download", app: app)
+    }
+    func testSpeechSetupConsentThenAutomaticContinuation() {
+        let app = setupPreview("download")
+        defer { restorePremium(app) }
+        XCTAssertTrue(app.buttons["speech-download-decline"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.progressIndicators["speech-setup-download-progress"].exists)
+        XCTAssertGreaterThanOrEqual(app.buttons["speech-download-decline"].frame.height, 44)
+        keepScreenshot("Download consent before any transfer", app: app)
+        app.buttons["speech-download-decline"].tap()
+        XCTAssertTrue(app.buttons["local-conversation-start"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+        app.buttons["local-conversation-start"].tap()
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-confirm"].tap()
+        XCTAssertTrue(app.buttons["local-conversation-end"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["conversation-status"].label.contains("Ready"))
+        XCTAssertFalse(app.staticTexts["speech-setup-stage"].exists)
+        app.buttons["local-conversation-end"].tap()
+        XCTAssertTrue(app.buttons["local-conversation-start"].waitForExistence(timeout: 5))
+    }
+    func testSpeechSetupCancelKeepsAdmissionClosedUntilDrain() {
+        let app = setupPreview("drain")
+        defer { restorePremium(app) }
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-confirm"].tap()
+        let stage = app.staticTexts["speech-setup-stage"]
+        expectation(for: NSPredicate(format: "label == %@", "Getting speech ready…"), evaluatedWith: stage)
+        waitForExpectations(timeout: 8)
+        XCTAssertFalse(app.progressIndicators["speech-setup-download-progress"].exists)
+        keepScreenshot("Native setup has no fake percentage", app: app)
+        XCTAssertGreaterThanOrEqual(app.buttons["speech-setup-cancel"].frame.height, 44)
+        app.buttons["speech-setup-cancel"].tap()
+        XCTAssertEqual(stage.label, "Setup cancelled")
+        let start = app.buttons["local-conversation-start"]
+        XCTAssertTrue(start.exists)
+        XCTAssertFalse(start.isEnabled)
+        XCTAssertTrue(app.buttons["local-speech-pair"].isEnabled)
+        XCTAssertFalse(app.buttons["local-tutor-probe"].isEnabled)
+        app.buttons["local-speech-pair"].tap(); app.buttons["Vietnamese–English"].tap()
+        XCTAssertTrue(app.buttons["local-speech-pair"].label.contains("Vietnamese") ||
+                      (app.buttons["local-speech-pair"].value as? String ?? "").contains("Vietnamese"))
+        XCTAssertEqual(stage.label, "Setup cancelled")
+        XCTAssertFalse(start.isEnabled) // Selecting a future pair must not release the old owner.
+        keepScreenshot("Cancel acknowledges immediately; next language is selectable", app: app)
+        app.tabBars.buttons["Words"].tap()
+        XCTAssertTrue(app.buttons["Settings"].isHittable)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["settings-conversation-mode"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        app.tabBars.buttons["Talk"].tap()
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: start)
+        waitForExpectations(timeout: 40)
+        XCTAssertTrue(start.isEnabled)
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists)
+        XCTAssertTrue(app.buttons["local-tutor-probe"].isEnabled)
+        // Retry is explicit, and cancelling the new consent does not resurrect the old draft.
+        start.tap()
+        XCTAssertTrue(app.buttons["speech-download-decline"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-decline"].tap()
+        XCTAssertTrue(start.isEnabled)
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+    }
+    func testSpeechSetupCancelAtLargeTextThenBackgroundAndRetry() {
+        let app = setupPreview("drain", largeText: true)
+        defer { restorePremium(app) }
+        let confirm = app.buttons["speech-download-confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        for _ in 0..<10 where !confirm.isHittable { app.swipeUp() }
+        confirm.tap()
+        let stage = app.staticTexts["speech-setup-stage"]
+        expectation(for: NSPredicate(format: "label == %@", "Getting speech ready…"), evaluatedWith: stage)
+        waitForExpectations(timeout: 8)
+        let cancel = app.buttons["speech-setup-cancel"]
+        for _ in 0..<8 where !cancel.isHittable { app.swipeUp() }
+        XCTAssertTrue(cancel.isHittable)
+        cancel.tap()
+        XCTAssertEqual(stage.label, "Setup cancelled")
+        let start = app.buttons["local-conversation-start"]
+        XCTAssertFalse(start.isEnabled)
+        XCTAssertFalse(app.buttons["local-tutor-probe"].isEnabled)
+        keepScreenshot("Cancelled setup at largest text size", app: app)
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists)
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists)
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: start)
+        waitForExpectations(timeout: 40)
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+        for _ in 0..<8 where !start.isHittable { app.swipeUp() }
+        start.tap()
+        XCTAssertTrue(app.buttons["speech-download-decline"].waitForExistence(timeout: 5))
+        let decline = app.buttons["speech-download-decline"]
+        for _ in 0..<10 where !decline.isHittable { app.swipeUp() }
+        decline.tap()
+        XCTAssertTrue(start.isEnabled)
+    }
+
+    func testSpeechSetupCachedAndFailureRecovery() {
+        var app = setupPreview("cached")
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists)
+        XCTAssertTrue(app.buttons["local-conversation-end"].waitForExistence(timeout: 5))
+        app.buttons["local-conversation-end"].tap()
+        restorePremium(app); app.terminate()
+        app = setupPreview("failure")
+        defer { restorePremium(app) }
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-confirm"].tap()
+        XCTAssertTrue(app.staticTexts["speech-setup-error"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["local-conversation-start"].isEnabled)
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+        app.buttons["local-conversation-start"].tap()
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-decline"].tap()
+    }
+    func testSpeechSetupBackgroundDoesNotRestartDownload() {
+        let app = setupPreview("drain")
+        defer { restorePremium(app) }
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-confirm"].tap()
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(app.buttons["local-conversation-start"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists)
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists)
+        XCTAssertTrue(app.staticTexts["conversation-notice"].label.contains("Setup paused"))
+    }
+    func testSpeechSetupConsentAtAccessibilityTextSize() {
+        let app = setupPreview("download", largeText: true)
+        defer { restorePremium(app) }
+        let confirm = app.buttons["speech-download-confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        for _ in 0..<10 where !confirm.isHittable { app.swipeUp() }
+        XCTAssertTrue(confirm.isHittable)
+        XCTAssertGreaterThanOrEqual(confirm.frame.minX, 0)
+        XCTAssertLessThanOrEqual(confirm.frame.maxX, app.frame.maxX)
+        keepScreenshot("Download consent at largest text size", app: app)
+        let decline = app.buttons["speech-download-decline"]
+        for _ in 0..<5 where !decline.isHittable { app.swipeUp() }
+        XCTAssertTrue(decline.isHittable)
+        decline.tap()
+        XCTAssertTrue(app.buttons["local-conversation-start"].waitForExistence(timeout: 5))
+    }
+
     func testThermalAlertAndExplicitResume() {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-thermal-stop"]
@@ -143,7 +335,9 @@ final class MuralUITests: XCTestCase {
 
     private func launch(ended: Bool = false) -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = ["--preview"] + (ended ? ["--ended-conversation"] : [])
-        app.launch(); return app
+        app.launch()
+        if !ended { setConversationMode("GPT-Live", app: app) }
+        return app
     }
     func testGreetingAndMeaningToggle() {
         let app = launch()
@@ -212,6 +406,7 @@ final class MuralUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--preview", "--preview-existing-user"]
         app.launch()
+        setConversationMode("GPT-Live", app: app)
         XCTAssertTrue(app.buttons["start-conversation"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["onboarding-language-fr"].exists)
         app.buttons["start-conversation"].tap()
@@ -273,9 +468,23 @@ final class MuralUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["meaning-caption"].label, "¡Hola!")
     }
 
+    func testOnDeviceDefaultsOnFirstLaunchAndModeLivesInSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "-mural.conversationMode", ""]
+        app.launch()
+        XCTAssertFalse(app.buttons["conversation-mode"].exists)
+        app.buttons["Settings"].tap()
+        let mode = app.buttons["settings-conversation-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+        XCTAssertTrue(mode.label.contains("On-device") || (mode.value as? String ?? "").contains("On-device"))
+        app.buttons["Done"].tap()
+    }
+
     func testSettingsDropdownTransitions() {
         let app = launch(ended: true)
+        XCTAssertFalse(app.buttons["conversation-mode"].exists)
         app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["settings-conversation-mode"].waitForExistence(timeout: 5))
         for (title, choices) in [
             ("Conversation mode", ["On-device", "On-device", "GPT-Live", "GPT-Live"]),
             ("Learning language", ["English · International", "English · International", "French · France", "French · France"]),

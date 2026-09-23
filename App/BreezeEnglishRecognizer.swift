@@ -6,7 +6,7 @@ import MuralCore
 import OSLog
 import WhisperKit
 
-/// Development-only probe, not enabled in Talk.
+/// Explicit Taiwan Mandarin–English Talk/test recognizer, never an automatic fallback.
 /// The existing audio owner serializes calls and retains this actor through cancellation.
 actor BreezeEnglishRecognizer {
     static let identity = "breeze-asr25-pal8-v1"
@@ -27,8 +27,8 @@ actor BreezeEnglishRecognizer {
         let files: [String: File]
     }
 
-    /// The expected digest comes from the local export, not from the same downloaded bundle.
-    /// A release must replace this diagnostic launch argument with a reviewed build-time pin.
+    /// Fixed reviewed artifact pin. Neither launch arguments nor remote metadata can override it.
+    /// Managed downloads and retained development assets pass the same full verification.
     @concurrent static func localDirectory() async throws -> URL {
         let started = ProcessInfo.processInfo.systemUptime
         let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
@@ -37,20 +37,15 @@ actor BreezeEnglishRecognizer {
         defer {
             logger.notice("breeze_asset_verification_end success=\(verified, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
         }
-        let prefix = "--breeze-manifest-sha256="
-        let flags = ProcessInfo.processInfo.arguments.filter { $0.hasPrefix(prefix) }
-        guard flags.count == 1 else { throw Failure("Supply exactly one Breeze manifest SHA-256 launch argument from the local export.") }
-        let expected = String(flags[0].dropFirst(prefix.count))
-        guard expected.count == 64, expected.allSatisfy({ "0123456789abcdef".contains($0) }) else {
-            throw Failure("Invalid Breeze manifest SHA-256.")
-        }
-        let folder = URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(identity)", directoryHint: .isDirectory)
+        let expected = SpeechPackagePins.breezeManifest
+        let folder = try LocalSpeechProvisioning.installedDirectory(for: .taiwanMandarinEnglish, component: "support") ??
+            URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(identity)", directoryHint: .isDirectory)
         let data = try Data(contentsOf: folder.appending(path: "manifest.json"))
         guard digest(data) == expected else { throw Failure("Breeze manifest pin mismatch. No model loaded.") }
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
         guard manifest.schema == "mural.breeze-coreml.v1", manifest.model == "MediaTek-Research/Breeze-ASR-25",
-              manifest.precision == "pal8", manifest.revision.count == 40,
-              manifest.revision.allSatisfy({ "0123456789abcdef".contains($0) }) else {
+              manifest.precision == "pal8", manifest.revision == SpeechPackagePins.breezeRevision,
+              manifest.files.count == 27 else {
             throw Failure("Wrong Breeze artifact contract.")
         }
         let required = ["config.json", "generation_config.json", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json"]
@@ -123,6 +118,9 @@ actor BreezeEnglishRecognizer {
             tokenizerFolder: directory,
             computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
                                                 textDecoderCompute: .cpuAndNeuralEngine),
+            featureExtractor: CancellableWhisperModel(FeatureExtractor()),
+            audioEncoder: CancellableWhisperModel(AudioEncoder()),
+            textDecoder: CancellableWhisperModel(TextDecoder()),
             verbose: false, prewarm: false, load: false, download: false))
         loaded.tokenizer = PhoWhisperTokenizer(base: lexical)
         loaded.textDecoder.isModelMultilingual = true
@@ -155,8 +153,9 @@ actor BreezeEnglishRecognizer {
                 defer { VietnameseEnglishRecognizer.logMemory(stage: "load-end", model: Self.identity) }
                 try await loaded.loadModels()
                 try Task.checkCancellation()
-                guard loaded.textDecoder.logitsSize == 51865, loaded.audioEncoder.embedSize == 1280 else {
-                    throw Failure("Breeze compiled encoder/decoder shapes do not match.")
+                guard loaded.textDecoder.logitsSize == 51865, loaded.audioEncoder.embedSize == 1280,
+                      loaded.featureExtractor.melCount == 80, loaded.featureExtractor.windowSamples == 480_000 else {
+                    throw Failure("Breeze compiled frontend/encoder/decoder shapes do not match.")
                 }
             })
             try Task.checkCancellation()

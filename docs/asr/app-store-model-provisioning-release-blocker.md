@@ -1,8 +1,12 @@
 # App Store ASR model provisioning release blocker
 
 Date: September 22, 2026
-Status: **P0 release blocker, not implemented**
+Status: **P0 release blocker: provisioning candidate exists; distribution qualification is parked by owner, hosted artifacts and clean-install qualification incomplete**
 Related implementation: Core ML preparation receipt reuse in `3a2734c`
+
+Current source audit and primary/backup distribution TODOs: [Model distribution release plan](model-distribution-release-plan.md). The original failure below is historical. The current candidate includes explicit Taiwan Talk and an installer, but its production catalog remains empty. Upstream-compatible models can use existing hosting; the exact locally converted Breeze and PhoWhisper packages have not been located there. The owner authorized removing Full Moon to free a development-app slot; the separate Mural QA installation now installs and launches using free signing, without altering daily Mural. Hosting is deliberately deferred until hosted-download qualification. The owner is not ready to enroll in the paid Apple Developer Program, so TestFlight/App Store clean-install qualification is parked until they say they are ready and enroll. Do not initiate enrollment, spending or hosting setup. Independent local QA may continue; it does not close this release gate.
+
+Latest context: [findings and evidence limits](local-speech-findings-handoff.md), [next-agent prompt](local-speech-review-prompt.md), [accepted cancellation closeout](speech-setup-ux.md#accepted-cancellation-follow-up), and [local installer fault tests](local-speech-qa.md#local-installer-transaction-fault-tests-2026-09-23). Start owns setup/consent/progress; cancellation stops following native components while keeping safe navigation and next-pair selection usable. Four physical cancellation/retry runs and eight simulator UI checks passed. Post-install Cancel-to-drain measured 19.315 seconds for Breeze and 15.403 seconds for PhoWhisper; the owner accepts that residual wait. The older 195.051-second Breeze result is historical, not the current closeout. The new disposable installer tests pass range, recovery, integrity, simulated storage/write and pointer-boundary cases, but do not qualify actual process kills, device-wide low storage, hosted packages, failover or customer provisioning. The catalog remains empty and this P0 distribution/clean-install gate remains open. Language-quality investigation is explicitly deferred by the owner.
 
 ## Decision
 
@@ -24,7 +28,7 @@ A fresh App Store installation cannot inherit developer-staged files or a privat
 
 This is separate from the following verification gaps, which are not themselves user-facing provisioning dependencies:
 
-- Breeze remains a development-only probe and is not selected by Talk.
+- At the original checkpoint Breeze was a development-only probe. The current candidate adds explicit Taiwan Talk; that does not qualify its distribution or language accuracy.
 - The exact prerecorded transcript fixture was not retained after container recreation.
 - Destructive receipt/cache clearing was avoided during cancellation verification.
 

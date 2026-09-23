@@ -30,7 +30,11 @@ struct RootView: View {
         }
         .tint(MuralColor.ink)
         .sheet(isPresented: $coordinator.showSettings) { SettingsView(coordinator: coordinator) }
-        .sheet(isPresented: $localProbe) { LocalTutorProbeView() }
+        .sheet(item: $coordinator.speechDownloadOffer, onDismiss: { coordinator.dismissSpeechDownload() }) { offer in
+            SpeechDownloadConfirmationView(offer: offer, confirm: coordinator.confirmSpeechDownload,
+                                           decline: coordinator.dismissSpeechDownload)
+        }
+        .sheet(isPresented: $localProbe) { LocalTutorProbeView(audio: coordinator.localAudio) }
         .sheet(isPresented: $coordinator.showAIConsent, onDismiss: { coordinator.resumeAfterAIConsent() }) {
             AIConsentView(agree: { coordinator.acceptAIConsent() }, decline: { coordinator.declineAIConsent() })
         }
@@ -88,6 +92,7 @@ struct RootView: View {
 struct TalkView: View {
     @Bindable var coordinator: ConversationCoordinator
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var typing = false
     @State private var transcript: SessionRecord?
     @State private var lookup: WordLookup?
@@ -95,24 +100,37 @@ struct TalkView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 0) {
-                    Picker("Conversation mode", selection: Binding(get: { coordinator.mode }, set: { coordinator.selectMode($0) })) {
-                        ForEach(ConversationCoordinator.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.menu).disabled(!coordinator.canChangeMode)
-                        .accessibilityIdentifier("conversation-mode")
-                    Text(coordinator.isLocal ? "English · Vietnamese support" : coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
+                    if coordinator.isLocal {
+                        Menu {
+                            Picker("On-device speech pair", selection: Binding(get: { coordinator.selectedLocalSpeechPair }, set: { coordinator.selectLocalSpeechPair($0) })) {
+                                ForEach(LocalSpeechPair.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(coordinator.selectedLocalSpeechPair.title).multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Image(systemName: "chevron.up.chevron.down").font(.caption2).accessibilityHidden(true)
+                            }.frame(minHeight: 44)
+                        }.disabled(!coordinator.canSelectLocalSpeechPair).accessibilityLabel("On-device speech pair")
+                            .accessibilityValue(coordinator.selectedLocalSpeechPair.title)
+                            .accessibilityIdentifier("local-speech-pair")
+                    }
+                    Text(coordinator.isLocal ? "English · \(coordinator.localSpeechPair.supportLanguage) support" : coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
                         .font(.system(.caption, design: .rounded, weight: .medium)).foregroundStyle(MuralColor.secondary)
                         .padding(.horizontal, 14).padding(.vertical, 9).background(MuralColor.butter.opacity(0.58), in: Capsule()).padding(.top, 12)
                     Spacer(minLength: 8)
                     MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing)
-                        .frame(width: typeSize.isAccessibilitySize ? 170 : 220, height: typeSize.isAccessibilitySize ? 180 : 222).padding(.vertical, 8)
+                        .frame(width: compactOrb ? 170 : 220, height: compactOrb ? 180 : 222).padding(.vertical, 8)
                     Text(coordinator.status).font(.system(.caption, design: .rounded)).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                         .contentTransition(.numericText()).padding(.top, 6).accessibilityAddTraits(.updatesFrequently)
                         .accessibilityIdentifier("conversation-status")
+                        .opacity(coordinator.speechSetupProgress == nil ? 1 : 0)
+                        .accessibilityHidden(coordinator.speechSetupProgress != nil)
                     if let notice = coordinator.notice {
                         Text(notice).font(.footnote).foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center)
                             .padding(.top, 6).accessibilityIdentifier("conversation-notice")
                     }
-                    captionArea.padding(.top, 16)
+                    if coordinator.speechSetupProgress == nil { captionArea.padding(.top, 16) }
                     Spacer(minLength: 12)
                     if coordinator.isLocal { localControls } else { controls }
                     HStack(spacing: 24) {
@@ -132,7 +150,7 @@ struct TalkView: View {
             }.scrollIndicators(.hidden)
         }
         .sheet(isPresented: $typing) { TypedReplyView(coordinator: coordinator) }
-        .animation(.smooth(duration: 0.35), value: coordinator.state)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: coordinator.state)
         .sheet(item: $transcript) { session in
             TranscriptView(session: session, meaningLanguage: coordinator.store.preferences.meaningLanguage)
         }
@@ -142,6 +160,7 @@ struct TalkView: View {
         .onChange(of: coordinator.localResourcesBusy) { if !coordinator.localResourcesBusy { coordinator.refreshLocalMeaning() } }
         .onChange(of: coordinator.state) { if coordinator.isLocal && !coordinator.isRunning { typing = false; lookup = nil } }
     }
+    private var compactOrb: Bool { typeSize.isAccessibilitySize || coordinator.speechSetupProgress != nil }
     private var captionArea: some View {
         VStack(spacing: 12) {
             Text(linkedCaption).font(.system(coordinator.assistantPassage == nil ? .largeTitle : .title2, design: .rounded, weight: .medium))
@@ -161,6 +180,12 @@ struct TalkView: View {
                             .disabled(coordinator.isLocal && !coordinator.canUseLocalSupport)
                     }.font(.caption).multilineTextAlignment(.center)
                 }
+            }
+            if let help = coordinator.localAssistance, coordinator.isLocal {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("A little help · \(coordinator.localSpeechPair.supportLanguage)").font(.caption)
+                    Text(help).font(.subheadline).textSelection(.enabled)
+                }.accessibilityIdentifier("local-learning-assistance")
             }
             if shouldShowWordHint {
                 Text("Tap an English word for its meaning.").font(.caption).foregroundStyle(MuralColor.secondary)
@@ -202,7 +227,10 @@ struct TalkView: View {
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-thermal-resume")
             }
-            if coordinator.isRunning {
+            if let progress = coordinator.speechSetupProgress {
+                SpeechSetupCard(progress: progress, canCancel: !coordinator.isStoppingSpeechSetup) { coordinator.end() }
+            }
+            if coordinator.isRunning, coordinator.speechSetupProgress == nil {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) { localTurnButtons }
                     VStack(spacing: 12) { localTurnButtons }
@@ -210,7 +238,7 @@ struct TalkView: View {
                 if coordinator.canRetryLocalReply {
                     Button("Retry reply") { coordinator.retryLocalReply() }.frame(minHeight: 44)
                 }
-            } else if coordinator.session == nil {
+            } else if !coordinator.isRunning, coordinator.session == nil {
                 Button("Prepare & start", systemImage: "play.fill") { coordinator.start() }
                     .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
@@ -220,14 +248,31 @@ struct TalkView: View {
                 Button("Transcript", systemImage: "text.bubble") { transcript = coordinator.session }
                     .frame(minHeight: 44).accessibilityIdentifier("local-conversation-transcript")
             }
+            if let error = coordinator.speechSetupError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("A little interruption", systemImage: "exclamationmark.circle").font(.subheadline.weight(.medium))
+                    Text(error).font(.footnote).accessibilityIdentifier("speech-setup-error")
+                    Button { coordinator.clearSpeechSetupError() } label: { Text("Dismiss").frame(minHeight: 44) }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                    .background(MuralColor.butter.opacity(0.4), in: RoundedRectangle(cornerRadius: 20))
+            }
             DisclosureGroup("On-device details & diagnostics") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("ASR backend: \(LocalConversationEngine.conversationASRBackend)")
+                    Text("ASR backend: \(coordinator.isStoppingSpeechSetup ? coordinator.localAudio.selectedConversationASRBackend : coordinator.localSpeechPair == .taiwanMandarinEnglish ? "Breeze PAL8 · WhisperKit / Core ML" : LocalConversationEngine.conversationASRBackend)")
                         .accessibilityIdentifier("local-asr-backend")
-                    Text("PhoWhisper CS FP16 → Apple tutor → English system voice. Tap Record only after Mural finishes speaking; tap Send when done.")
+                    Text("\(coordinator.localSpeechPair.recognizerID) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
                     Text("Microphone is off except while recording. On-device conversations do not end for inactivity; tap End when you are done.")
-                    Text("Silence can produce invented text and an unsolicited tutor reply. Recognition is accepted for MVP with this known limitation; silence detection is not implemented.")
-                    Text("Finalized turns, Vietnamese meanings, lookup, Help and typed replies stay on this iPhone. After you tap End, only your last reply is reviewed for up to two English words or phrases. Evidence is provisional; supported practice is not independent recall. Themes and search remain unavailable.")
+                    Text("Speech-presence checks cannot guarantee that recognition is accurate. Review the transcript; reported preparation speed does not qualify a recognizer's language accuracy.")
+                    Text("Finalized turns, \(coordinator.localSpeechPair.supportLanguage) meanings, lookup, Help and typed replies stay on this iPhone. Raw recognition is saved separately from display text; teaching never rewrites it. Themes and search remain unavailable.")
+                    Text(coordinator.localSpeechPair == .taiwanMandarinEnglish
+                         ? "Taiwan Mandarin–English is a user-test mode. Traditional Chinese Help is on screen; practice speech stays English. Automatic learning credit is disabled pending separate semantic qualification."
+                         : "After End, only your last reply is reviewed for up to two English words or phrases. Evidence is provisional; supported practice is not independent recall.")
+                    if coordinator.session != nil, !coordinator.localAudio.rawASRText.isEmpty {
+                        DisclosureGroup("Raw recognition · not translated") {
+                            Text(coordinator.localAudio.rawASRText).font(.footnote).textSelection(.enabled)
+                                .accessibilityIdentifier("local-raw-asr")
+                        }
+                    }
                     if let seconds = coordinator.localAudio.preparationSeconds {
                         Text("Preparation: \(seconds, specifier: "%.1f") s").font(.caption).monospacedDigit()
                     }
@@ -239,6 +284,10 @@ struct TalkView: View {
                             .accessibilityIdentifier("local-response-gap")
                     }
                     if !coordinator.localAudio.preparationDetail.isEmpty { Text(coordinator.localAudio.preparationDetail) }
+                    if let error = coordinator.speechSetupDiagnostic { Text(error).textSelection(.enabled) }
+                    if let package = coordinator.speechModels.package {
+                        Text("Managed package: \(package.id) · \(coordinator.speechModels.phase.rawValue)")
+                    }
                     if let seconds = coordinator.localAudio.finalizeSeconds {
                         Text("ASR: \(seconds, specifier: "%.2f") s")
                     }
@@ -298,6 +347,125 @@ struct TalkView: View {
     }
 }
 
+/// This is stage progress, not an estimated percentage of native preparation.
+private struct SpeechSetupCard: View {
+    let progress: SpeechSetupProgress
+    let canCancel: Bool
+    let cancel: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                if progress.stage == .cancelled {
+                    Image(systemName: "checkmark.circle").accessibilityHidden(true)
+                } else if progress.fraction == nil {
+                    ProgressView().tint(MuralColor.ink).padding(.top, 2).accessibilityHidden(true)
+                }
+                Text(progress.title).font(.system(.headline, design: .rounded))
+                    .accessibilityIdentifier("speech-setup-stage").accessibilityAddTraits(.updatesFrequently)
+            }
+            if let fraction = progress.fraction {
+                ProgressView(value: fraction).tint(MuralColor.ink)
+                    .accessibilityLabel(progress.title).accessibilityIdentifier("speech-setup-download-progress")
+                ViewThatFits(in: .horizontal) {
+                    HStack { downloadSize; Spacer(); Text(fraction, format: .percent.precision(.fractionLength(0))) }
+                    VStack(alignment: .leading) { downloadSize; Text(fraction, format: .percent.precision(.fractionLength(0))) }
+                }.font(.caption).monospacedDigit()
+            }
+            Text(progress.detail).font(.footnote).foregroundStyle(MuralColor.secondary)
+            if canCancel {
+                Button(role: .cancel, action: cancel) { Text("Cancel setup").frame(minHeight: 44) }
+                    .accessibilityIdentifier("speech-setup-cancel")
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
+            .background(MuralColor.butter.opacity(0.4), in: RoundedRectangle(cornerRadius: 22))
+    }
+    @ViewBuilder private var downloadSize: some View {
+        if let done = progress.completedBytes, let total = progress.totalBytes {
+            Text("\(ByteCountFormatter.string(fromByteCount: done, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+        } else { Text("This download") }
+    }
+}
+
+struct SpeechDownloadConfirmationView: View {
+    let offer: ConversationCoordinator.SpeechDownloadOffer
+    let confirm: () -> Void
+    let decline: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Image(systemName: "waveform").font(.largeTitle).foregroundStyle(MuralColor.ink).accessibilityHidden(true)
+                    Text("A little setup, then let’s talk.").font(.system(.title, design: .rounded, weight: .semibold))
+                    Text("Download the speech files you need for this language combination. We’ll get them ready and start your conversation automatically.")
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let bytes = offer.recognitionBytes { storageRow("Speech download", bytes: bytes) }
+                        if let storage = offer.recognitionStorageBytes { storageRow("Free space for speech setup", bytes: storage) }
+                        if offer.needsVoice { Text("Mural’s voice also needs a download. Its size isn’t available in this version.") }
+                        if offer.needsSpeechDetection { Text("Speech-detection files also need a download. Their size isn’t available in this version.") }
+                        if let bytes = offer.availableBytes { Text("\(size(bytes)) available on your iPhone").foregroundStyle(MuralColor.secondary) }
+                        if offer.needsVoice || offer.needsSpeechDetection {
+                            Text("Allow extra storage for these files and their preparation.").foregroundStyle(MuralColor.secondary)
+                        }
+                    }.font(.subheadline).padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(MuralColor.butter.opacity(0.4), in: RoundedRectangle(cornerRadius: 20))
+                    Text("Wi-Fi recommended. Uses your current connection, including mobile data. Keep Mural open during setup; you can cancel at any time.")
+                        .font(.footnote).foregroundStyle(MuralColor.secondary)
+                    Button(action: confirm) {
+                        Text("Download & continue").frame(maxWidth: .infinity, minHeight: 44)
+                    }.buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
+                        .accessibilityIdentifier("speech-download-confirm")
+                    Button(action: decline) { Text("Not now").frame(maxWidth: .infinity, minHeight: 44) }
+                        .accessibilityIdentifier("speech-download-decline")
+                }.padding(26)
+            }.background(MuralColor.cream).foregroundStyle(MuralColor.ink)
+                .navigationTitle("Get ready to talk").navigationBarTitleDisplayMode(.inline)
+        }.presentationDetents([.large]).presentationDragIndicator(.visible)
+    }
+    @ViewBuilder private func storageRow(_ title: String, bytes: Int64) -> some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                Text(size(bytes)).fontWeight(.semibold)
+            }.accessibilityElement(children: .combine)
+        } else { LabeledContent(title, value: size(bytes)) }
+    }
+}
+
+/// Optional storage action, not a prerequisite or a second download/setup flow.
+struct SpeechStorageView: View {
+    let coordinator: ConversationCoordinator
+    @State private var confirmRemoval = false
+    @State private var message: String?
+    private var pair: LocalSpeechPair { coordinator.selectedLocalSpeechPair }
+    var body: some View {
+        Form {
+            Section {
+                Text(pair.title)
+                Text("Prepare & start downloads missing speech files when you need them. You don’t need to manage them here.").font(.footnote)
+            } header: { Text("Selected language combination") }
+            Section {
+                Button("Remove downloaded recognition files", role: .destructive) { confirmRemoval = true }
+                    .disabled(!coordinator.canChangeMode).accessibilityIdentifier("speech-storage-remove")
+                if let message { Text(message).font(.footnote) }
+            } header: { Text("Free up space") } footer: {
+                Text("Removes only managed recognition downloads for this language combination, including retained versions. Conversations, learning, voice files and system caches are kept. Development-staged files are not managed here.")
+            }
+        }.navigationTitle("Downloaded speech").navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog("Remove recognition downloads for this language combination?", isPresented: $confirmRemoval, titleVisibility: .visible) {
+                Button("Remove downloads", role: .destructive) {
+                    guard coordinator.canChangeMode else { return }
+                    coordinator.localAudio.stop()
+                    do {
+                        try coordinator.speechModels.removeManagedDownloads(for: pair)
+                        message = "Managed recognition downloads removed."
+                    } catch { message = error.localizedDescription }
+                }
+            } message: { Text("You’ll need to download them again before talking. Your conversations and learning won’t be removed.") }
+    }
+}
+
 struct WordLookup: Identifiable { var id = UUID(); var word: String; var sentence: String }
 struct LookupView: View {
     let item: WordLookup
@@ -338,7 +506,7 @@ struct TypedReplyView: View {
                 }.disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                            (coordinator.isLocal && (!coordinator.canRecordLocal || text.count > 2000)))
                 if coordinator.isLocal {
-                    Text("English, Vietnamese, or both. Up to 2,000 characters. Typed replies count as supported practice.")
+                    Text("\(coordinator.localSpeechPair.inputDescription). Up to 2,000 characters. Typed replies count as supported practice.")
                         .font(.footnote).foregroundStyle(MuralColor.secondary)
                     if !coordinator.canRecordLocal { Text("Wait for Ready before sending.").font(.footnote) }
                 }
@@ -368,7 +536,10 @@ struct LocalTutorProbeView: View {
         return LocalConversationEngine.ASRModel.allCases
     }
 
-    @State private var audio = LocalConversationEngine()
+    @State private var audio: LocalConversationEngine
+    init(audio: LocalConversationEngine? = nil) {
+        _audio = State(initialValue: audio ?? LocalConversationEngine())
+    }
     @State private var speechProbe = true
     @State private var text = ""
     @State private var reply = ""
@@ -482,7 +653,7 @@ struct LocalTutorProbeView: View {
             #endif
             case .breeze:
                 Text("Breeze ASR 25 · Taiwan Mandarin and English · PAL8 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
-                Text("Development-only probe. Requires verified local assets and a manifest launch pin; no download or cloud fallback. Stop and report any memory warning, error, or unexpected result.").font(.footnote)
+                Text("Explicit Taiwan Mandarin–English test. Uses the fixed reviewed manifest pin and the same verified assets as Talk. Manage downloads from Talk; no cloud inference fallback. Stop and report warnings or unexpected results.").font(.footnote)
             case .phoWhisper:
                 Text("PhoWhisper large-v2 + VI/EN code-switch LoRA · normal Talk backend · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
                 Text("Uses the existing verified local Talk assets and speech-presence policy. No download or cloud fallback. Recognition can still lose words or invent text.").font(.footnote)

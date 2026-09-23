@@ -80,12 +80,93 @@ enum LocalSpeechVoice {
     }
 }
 
+/// Intercepts only WhisperKit's public model-loading seam. Inference, tensor shapes,
+/// tokenizer state, unload and compute choices remain owned by the original components.
+/// A subclass cannot override the base class's protocol-extension load witness.
+final class CancellableWhisperModel<Model: WhisperMLModel>: WhisperMLModel {
+    private var base: Model
+    init(_ base: Model) { self.base = base }
+    var model: MLModel? { get { base.model } set { base.model = newValue } }
+    func loadModel(at path: URL, computeUnits: MLComputeUnits, prewarmMode: Bool = false) async throws {
+        try await SpeechPreparationStep.run(model: path.deletingLastPathComponent().lastPathComponent,
+            component: path.deletingPathExtension().lastPathComponent, phase: prewarmMode ? "prewarm" : "load") {
+            try await base.loadModel(at: path, computeUnits: computeUnits, prewarmMode: prewarmMode)
+        }
+    }
+    func unloadModel() { base.unloadModel() }
+}
+
+extension CancellableWhisperModel: FeatureExtracting where Model: FeatureExtracting {
+    var melCount: Int? { base.melCount }
+    var windowSamples: Int? { base.windowSamples }
+    func logMelSpectrogram(fromAudio input: any AudioProcessorOutputType) async throws -> (any FeatureExtractorOutputType)? {
+        try await base.logMelSpectrogram(fromAudio: input)
+    }
+}
+
+extension CancellableWhisperModel: AudioEncoding where Model: AudioEncoding {
+    var embedSize: Int? { base.embedSize }
+    func encodeFeatures(_ features: any FeatureExtractorOutputType) async throws -> (any AudioEncoderOutputType)? {
+        try await base.encodeFeatures(features)
+    }
+}
+
+extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
+    var tokenizer: WhisperTokenizer? { get { base.tokenizer } set { base.tokenizer = newValue } }
+    var isModelMultilingual: Bool { get { base.isModelMultilingual } set { base.isModelMultilingual = newValue } }
+    var logitsFilters: [any LogitsFiltering]? { get { base.logitsFilters } set { base.logitsFilters = newValue } }
+    var supportsWordTimestamps: Bool { base.supportsWordTimestamps }
+    var logitsSize: Int? { base.logitsSize }
+    var kvCacheEmbedDim: Int? { base.kvCacheEmbedDim }
+    var kvCacheMaxSequenceLength: Int? { base.kvCacheMaxSequenceLength }
+    var windowSize: Int? { base.windowSize }
+    var embedSize: Int? { base.embedSize }
+    func predictLogits(_ inputs: any TextDecoderInputType) async throws -> (any TextDecoderOutputType)? {
+        try await base.predictLogits(inputs)
+    }
+    func prepareDecoderInputs(withPrompt prompt: [Int]) throws -> any DecodingInputsType {
+        try base.prepareDecoderInputs(withPrompt: prompt)
+    }
+    func prefillDecoderInputs(_ inputs: any DecodingInputsType, withOptions options: DecodingOptions?) async throws -> any DecodingInputsType {
+        try await base.prefillDecoderInputs(inputs, withOptions: options)
+    }
+    func decodeText(from encoder: any AudioEncoderOutputType, using inputs: any DecodingInputsType,
+                    sampler: any TokenSampling, options: DecodingOptions, callback: TranscriptionCallback?) async throws -> DecodingResult {
+        try await base.decodeText(from: encoder, using: inputs, sampler: sampler, options: options, callback: callback)
+    }
+    func detectLanguage(from encoder: any AudioEncoderOutputType, using inputs: any DecodingInputsType,
+                        sampler: any TokenSampling, options: DecodingOptions, temperature: FloatType) async throws -> DecodingResult {
+        try await base.detectLanguage(from: encoder, using: inputs, sampler: sampler, options: options, temperature: temperature)
+    }
+    static func updateKVCache(keyTensor: MLMultiArray, keySlice: MLMultiArray, valueTensor: MLMultiArray,
+                              valueSlice: MLMultiArray, insertAtIndex index: Int) {
+        Model.updateKVCache(keyTensor: keyTensor, keySlice: keySlice, valueTensor: valueTensor, valueSlice: valueSlice, insertAtIndex: index)
+    }
+}
+
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
     @ObservationIgnored var onPlayback: ((Double, Double?, Bool) -> Void)?
     private(set) var playbackStartSeconds: Double?
     private(set) var playbackDurationSeconds: Double?
     private(set) var voiceDescription = "English system voice"
+    private(set) var preparationProgress = SpeechSetupProgress(.checking)
+    var conversationVoiceNeedsDownload: Bool {
+        get throws {
+            guard conversationTTSBackend == .supertonic else { return false }
+            return try LocalNeuralTTS.needsDownload(voice: supertonicVoice)
+        }
+    }
+    var speechDetectionNeedsDownload: Bool {
+        get throws {
+            guard try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments) != .off else { return false }
+            // Same default root and model inventory as FluidAudio's VadManager.
+            let root = URL.applicationSupportDirectory.appending(path: "FluidAudio/Models/\(Repo.vad.folderName)")
+            return !ModelNames.VAD.requiredModels.allSatisfy {
+                FileManager.default.fileExists(atPath: root.appending(path: "\($0)/coremldata.bin").path)
+            }
+        }
+    }
     enum ASRState: String {
         case idle = "Prepare speech models", downloading = "Downloading or checking cached assets…"
         case warming = "Preparing speech…", ready = "Ready to record"
@@ -93,7 +174,7 @@ enum LocalSpeechVoice {
     }
     enum ASRModel: String, CaseIterable {
         case phoWhisper = "PhoWhisper CS", parakeet = "Parakeet VI–EN", whisper = "Whisper", nemotron = "Nemotron"
-        case breeze = "Breeze TW–EN (probe)"
+        case breeze = "Breeze TW–EN (test)"
         #if MURAL_VAD_PROBE
         case vadOnly = "Silero VAD only (no ASR)"
         #endif
@@ -123,6 +204,7 @@ enum LocalSpeechVoice {
     private(set) var preparationDetail = ""
     private(set) var asrState: ASRState = .idle
     private(set) var asrText = ""
+    private(set) var rawASRText = ""
     private(set) var lastRecordingHadNoSpeech = false
     private(set) var asrError: String?
     private(set) var asrNotice: String?
@@ -147,6 +229,7 @@ enum LocalSpeechVoice {
     private var ownsAudio = false
     private var audioRelease: Task<Void, Never>?
     var asrBusy: Bool { asrTask != nil }
+    var modelWorkDraining: Bool { stagedDecoderWarmupActive && (asrState == .ended || asrState == .failed) }
     private var speechAdmission = LocalSpeechAdmission()
     private var speechTask: Task<Void, Error>?
     private var speechStopRequestedAt: Double?
@@ -167,6 +250,8 @@ enum LocalSpeechVoice {
     private(set) var thermalStopped = false
     #if DEBUG && targetEnvironment(simulator)
     var testThermalState: ProcessInfo.ThermalState?
+    @ObservationIgnored var testTTSSafetySampler: (@MainActor @Sendable () async -> [String: UInt64])?
+    var testTTSConversationMonitorTask: Task<Void, Never>? { ttsConversationMonitor }
     #endif
     var ttsThermalState: ProcessInfo.ThermalState {
         #if DEBUG && targetEnvironment(simulator)
@@ -248,7 +333,10 @@ enum LocalSpeechVoice {
         try await performSpeech { id in
             try self.ttsBackend.checkAvailable()
             if self.ttsBackend == .supertonic {
-                try await self.neuralTTS.prepare(voice: self.supertonicVoice) { [self] message in
+                try await self.neuralTTS.prepare(voice: self.supertonicVoice, setup: { [self] update in
+                    guard speechAdmission.accepts(id) else { return }
+                    preparationProgress = update
+                }) { [self] message in
                     guard speechAdmission.accepts(id) else { return }
                     progress(message)
                 }
@@ -313,16 +401,36 @@ enum LocalSpeechVoice {
         logger.notice("tts_finished backend=pcm uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public)")
     }
 
-    private func startTTSConversationMonitor() {
+    #if DEBUG && targetEnvironment(simulator)
+    func startTTSConversationMonitorForTesting() { startTTSConversationMonitor() }
+    #endif
+
+    private func startTTSConversationMonitor(model: String = "supertonic3-ane-int4") {
         guard ttsConversationMonitor == nil else { return }
         ttsConversationMonitor = Task { [weak self] in
             var maximum: UInt64 = 0
             while !Task.isCancelled, let self {
-                let sample = VietnameseEnglishRecognizer.logMemory(stage: "tts-talk-sampled-100ms", model: "supertonic3-ane-int4")
+                // task_info and unified logging are synchronous. Keep them off MainActor so
+                // the conversation-wide Breeze safety monitor cannot hitch scrolling or animation.
+                let sample: [String: UInt64]
+                #if DEBUG && targetEnvironment(simulator)
+                if let testTTSSafetySampler {
+                    sample = await testTTSSafetySampler()
+                } else {
+                    sample = await Task.detached(priority: .utility) {
+                        VietnameseEnglishRecognizer.logMemory(stage: "tts-talk-sampled-1s", model: model)
+                    }.value
+                }
+                #else
+                sample = await Task.detached(priority: .utility) {
+                    VietnameseEnglishRecognizer.logMemory(stage: "tts-talk-sampled-1s", model: model)
+                }.value
+                #endif
+                guard !Task.isCancelled else { return }
                 maximum = max(maximum, sample["footprintBytes"] ?? 0)
                 self.stopForTTSSafety(footprint: maximum, thermal: self.ttsThermalState)
                 if Task.isCancelled { return }
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
     }
@@ -640,9 +748,41 @@ enum LocalSpeechVoice {
         audioRelease = Task { _ = try? await AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) }
     }
 
+    var selectedConversationASRBackend: String {
+        asrModel == .breeze ? "Breeze PAL8 · WhisperKit / Core ML" : Self.conversationASRBackend
+    }
+
+    func hasConversationAssets(for pair: LocalSpeechPair) throws -> Bool {
+        let manager = FileManager.default
+        if pair == .taiwanMandarinEnglish {
+            guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
+                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
+            let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") ??
+                URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(BreezeEnglishRecognizer.identity)")
+            return manager.fileExists(atPath: folder.appending(path: "manifest.json").path)
+        }
+        if let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") {
+            return manager.fileExists(atPath: folder.appending(path: "manifest.json").path)
+        }
+        #if canImport(CoreAI)
+        if PhoWhisperStagedEncoder.enabled {
+            // Only an existence preflight. Full verification and specialization still precede Ready.
+            return manager.fileExists(atPath: URL.applicationSupportDirectory.appending(path:
+                "PhoWhisperCS/phowhisper-cs-pal8-g16-v1/manifest.json").path) &&
+                manager.fileExists(atPath: URL.documentsDirectory.appending(path:
+                    "CoreAI/W8FullV3/packed/encoder-fp8/manifest.json").path)
+        }
+        #endif
+        return manager.fileExists(atPath: URL.applicationSupportDirectory.appending(path:
+            "PhoWhisperCS/phowhisper-cs-fp16-v1/manifest.json").path)
+    }
+
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
-    func prepareConversation() async throws {
+    func prepareConversation(model: ASRModel = .phoWhisper) async throws {
         try Task.checkCancellation()
+        guard model == .phoWhisper || model == .breeze else { throw SpeechError.busy }
+        rawASRText = ""
+        preparationProgress = .init(.checking)
         if let warmup = stagedDecoderWarmup {
             warmup.cancel()
             _ = await warmup.result
@@ -655,7 +795,16 @@ enum LocalSpeechVoice {
         await ttsCleanup?.value
         try Task.checkCancellation()
         guard canPrepare else { throw SpeechError.busy }
-        selectASR(.phoWhisper)
+        selectASR(model)
+        guard asrModel == model else { throw SpeechError.busy }
+        logger.notice("local_talk_model_selected pair=\(model == .breeze ? "zh-TW-en" : "vi-en", privacy: .public) model=\(self.asrModel.rawValue, privacy: .public) backend=\(self.selectedConversationASRBackend, privacy: .public)")
+        if model == .breeze {
+            stopForTTSSafety(footprint: 0, thermal: ttsThermalState)
+            try Task.checkCancellation()
+            guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
+            // The same 3 GB/thermal guard also applies when Breeze uses the Apple voice.
+            startTTSConversationMonitor(model: BreezeEnglishRecognizer.identity)
+        }
         submittedAt = nil; sendToPlaybackSeconds = nil
         await ttsCleanup?.value
         try Task.checkCancellation()
@@ -670,13 +819,15 @@ enum LocalSpeechVoice {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                try Task.checkCancellation() // A cancelled SDK error is not permission to start a fallback.
                 let failure = error as NSError
                 logger.error("tts_fallback backend=supertonic reason=preparation domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
-                ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil
+                if model != .breeze { ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil }
                 await ttsCleanup?.value
                 ttsBackend = .apple
             }
         }
+        try Task.checkCancellation()
         prepareASR()
         await asrTask?.value
         try Task.checkCancellation()
@@ -702,7 +853,7 @@ enum LocalSpeechVoice {
     }
 
     func selectASR(_ model: ASRModel) {
-        guard !asrBusy, !speechBusy, model != asrModel else { return }
+        guard !asrBusy, !speechBusy, !modelWorkDraining, model != asrModel else { return }
         stop() // Release weights, never delete either model's cached assets.
         asrModel = model; asrState = .idle
         asrText = ""; asrError = nil; asrNotice = nil
@@ -722,6 +873,7 @@ enum LocalSpeechVoice {
         let token = UUID(); generation = token
         let selected = asrModel
         asrError = nil; asrNotice = nil; preparationSeconds = nil; preparationDetail = ""; asrState = .downloading
+        preparationProgress = .init(.checkingSpeech)
         let repairDirectory = repairDownload ? variantDirectory : nil
         asrTask = Task { [weak self] in
             guard let self else { return }
@@ -784,6 +936,7 @@ enum LocalSpeechVoice {
                 self.preparationDetail = String(format: selected == .phoWhisper ? "Local asset verification: %.2f s" : "Asset/model preparation: %.2f s", assetsSeconds)
                 self.logger.notice("asr_assets_ready model=\(selected.rawValue, privacy: .public) seconds=\(assetsSeconds, privacy: .public)")
                 self.asrState = .warming
+                self.preparationProgress = .init(.preparingSpeech)
                 let loadingStarted = ProcessInfo.processInfo.systemUptime
                 switch selected {
                 #if MURAL_VAD_PROBE
@@ -813,13 +966,16 @@ enum LocalSpeechVoice {
                     self.parakeet = recognizer
                 case .whisper, .phoWhisper:
                     let recognizer = WhisperRecognizer(phoWhisper: selected == .phoWhisper)
-                    let timing = try await recognizer.prepare(directory: directory)
+                    let timing = try await recognizer.prepare(directory: directory) { [weak self] message in
+                        guard let self, self.generation == token else { return }
+                        self.preparationDetail = message
+                    }
                     try Task.checkCancellation()
                     guard self.generation == token else { return }
                     self.whisper = recognizer
                     #if canImport(CoreAI)
                     if selected == .phoWhisper, PhoWhisperStagedEncoder.enabled {
-                        self.preparationDetail += " · Experimental Core AI GPU: encoder after Send; decoder prewarm reused when available; release after each turn."
+                        self.preparationDetail += " · Core AI FP8 encoder / Core ML PAL8 decoder; verified before Ready; decoder released after each turn."
                     } else {
                         self.preparationDetail += String(format: " · Prewarm: %.2f s · Load/tokenizer: %.2f s", timing.prewarm, timing.load)
                     }
@@ -847,9 +1003,9 @@ enum LocalSpeechVoice {
             } catch {
                 guard self.generation == token, !Task.isCancelled else { return }
                 self.asrError = selected == .phoWhisper
-                    ? "PhoWhisper CS could not be prepared. Report this error rather than retrying repeatedly. Its development-only assets must be installed from this Mac; there is no download source. (\(error.localizedDescription))"
+                    ? "PhoWhisper speech preparation failed. Try Prepare & start again or check available iPhone storage. No backend was changed. (\(error.localizedDescription))"
                     : "Speech models could not be prepared. Connect to Wi-Fi and try Prepare again. If cached assets are incomplete, use Repair download. (\(error.localizedDescription))"
-                if selected == .breeze { self.asrError = "Breeze probe preparation failed. Stage its verified local assets and manifest pin; Repair download does not apply. (\(error.localizedDescription))" }
+                if selected == .breeze { self.asrError = "Breeze speech preparation failed. Try Prepare & start again or check available iPhone storage. No cloud fallback was used. (\(error.localizedDescription))" }
                 #if MURAL_FIRERED_FILE_PROBE
                 if selected == .fireRed { self.asrError = "FireRed v2 AED preparation failed. Stop and report this error; no download or fallback. (\(error.localizedDescription))" }
                 #endif
@@ -869,6 +1025,7 @@ enum LocalSpeechVoice {
         let limit = recordingLimitSeconds
         let model = asrModel.rawValue
         let token = UUID(); generation = token
+        rawASRText = ""
         asrText = ""; asrError = nil; asrNotice = nil; finalizeSeconds = nil; submittedAt = nil; capturedSeconds = 0
         lastRecordingHadNoSpeech = false
         sendToPlaybackSeconds = nil
@@ -923,6 +1080,7 @@ enum LocalSpeechVoice {
                 guard self.generation == token else { return }
                 self.stopCapture(); self.capture = nil
                 self.releaseAudio()
+                self.rawASRText = result.text
                 self.asrText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.lastRecordingHadNoSpeech = self.asrText.isEmpty
                 self.capturedSeconds = result.seconds
@@ -1279,14 +1437,16 @@ enum LocalSpeechVoice {
             }
             var identity = "phowhisper-cs-fp16-v1"
             var manifestHash = "7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52"
+            var selectedSupport: URL?
             #if canImport(CoreAI)
             if PhoWhisperStagedEncoder.enabled {
                 let selection = try PhoWhisperStagedEncoder.resolveSelection()
                 identity = selection.supportIdentity
                 manifestHash = selection.supportManifest
+                selectedSupport = selection.supportURL
             }
             #endif
-            var folder = URL.applicationSupportDirectory.appending(path: "PhoWhisperCS/\(identity)", directoryHint: .isDirectory)
+            var folder = selectedSupport ?? URL.applicationSupportDirectory.appending(path: "PhoWhisperCS/\(identity)", directoryHint: .isDirectory)
             let manifest = try Data(contentsOf: folder.appending(path: "manifest.json"))
             guard SHA256.hash(data: manifest).map({ String(format: "%02x", $0) }).joined() == manifestHash else { throw CocoaError(.fileReadCorruptFile) }
             let files = try JSONDecoder().decode(LocalManifest.self, from: manifest).files
@@ -1332,12 +1492,17 @@ enum LocalSpeechVoice {
             return folder
         }
 
-        func prepare(directory: URL) async throws -> (prewarm: Double, load: Double) {
+        func prepare(directory: URL, progress: @escaping @MainActor @Sendable (String) -> Void = { _ in }) async throws -> (prewarm: Double, load: Double) {
             try await prepareVAD()
             #if canImport(CoreAI)
             if usesStagedEncoder {
                 let started = ProcessInfo.processInfo.systemUptime
                 let selection = try await PhoWhisperStagedEncoder.verifiedSelection()
+                if try Self.preparationMode(ProcessInfo.processInfo.arguments) == .automatic {
+                    await progress("Preparing the verified encoder on this iPhone… Keep Mural open. End cancels safely.")
+                    try await PhoWhisperStagedEncoder.prepareForConversation(selection)
+                    try Task.checkCancellation()
+                }
                 struct Generation: Decodable { let suppress_tokens: [Int] }
                 suppressedTokens = try JSONDecoder().decode(Generation.self,
                     from: Data(contentsOf: directory.appending(path: "generation_config.json"))).suppress_tokens
@@ -1352,6 +1517,11 @@ enum LocalSpeechVoice {
                     scope: .stagedDecoder, computeUnits: ["decoder": Self.stagedDecoderCompute.rawValue])
                 stagedDirectory = directory; stagedSelection = selection; stagedTokenizer = tokenizer
                 stagedDecoderPrewarmedAt = nil
+                if try Self.preparationMode(ProcessInfo.processInfo.arguments) == .automatic {
+                    await progress("Preparing and validating speech on this iPhone…")
+                    try await validateStagedDecoderForConversation()
+                    try Task.checkCancellation()
+                }
                 inferenceCount = 0
                 Logger(subsystem: "no.william.mural", category: "LocalAudio")
                     .notice("asr_staged_prepared backend=coreai-gpu encoder_deferred_until_send=true decoder_prewarm=with-greeting receipt_reuse=true encoder=\(selection.encoderURL.lastPathComponent, privacy: .public) selection=\(selection.v3?.format ?? selection.legacy?.rawValue ?? "original", privacy: .public) decoder_support=\(selection.supportIdentity, privacy: .public)")
@@ -1363,6 +1533,9 @@ enum LocalSpeechVoice {
             let config = WhisperKitConfig(modelFolder: directory.path,
                 tokenizerFolder: phoWhisper ? directory : URL.applicationSupportDirectory.appending(path: "WhisperKit"),
                 computeOptions: phoWhisper ? ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine) : nil,
+                featureExtractor: CancellableWhisperModel(FeatureExtractor()),
+                audioEncoder: CancellableWhisperModel(AudioEncoder()),
+                textDecoder: CancellableWhisperModel(TextDecoder()),
                 verbose: false, prewarm: false, load: false, download: false)
             let loaded = try await WhisperKit(config)
             let tokenizerStarted = ProcessInfo.processInfo.systemUptime
@@ -1503,6 +1676,28 @@ enum LocalSpeechVoice {
         }
 
         #if canImport(CoreAI)
+        /// Readiness means successful normal decoder/frontend loading, not just verified files.
+        /// Keep the staged residency boundary: load, validate and release before recording.
+        private func validateStagedDecoderForConversation() async throws {
+            guard let directory = stagedDirectory, let receipt = stagedPreparation else { throw SpeechError.busy }
+            let decoder = CancellableWhisperModel(TextDecoder())
+            let mel = CancellableWhisperModel(FeatureExtractor())
+            defer { decoder.unloadModel(); mel.unloadModel() }
+            _ = try await receipt.prepare(prewarm: {
+                try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"),
+                    computeUnits: Self.stagedDecoderCompute, prewarmMode: true)
+            }, loadAndValidate: {
+                try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"), computeUnits: Self.stagedDecoderCompute)
+                try Task.checkCancellation()
+                guard decoder.logitsSize == 51865 else { throw CocoaError(.fileReadCorruptFile) }
+                try await mel.loadModel(at: directory.appending(path: "MelSpectrogram.mlmodelc"), computeUnits: .cpuAndGPU)
+                try Task.checkCancellation()
+                guard mel.melCount == 80, mel.windowSamples == 480_000 else { throw CocoaError(.fileReadCorruptFile) }
+            })
+            try Task.checkCancellation()
+            stagedDecoderPrewarmedAt = directory // Also reusable when an atomic receipt write was unavailable.
+        }
+
         func prewarmStagedDecoder() async throws {
             guard usesStagedEncoder, let directory = stagedDirectory,
                   let receipt = stagedPreparation else { return }
@@ -1516,7 +1711,7 @@ enum LocalSpeechVoice {
             let started = ProcessInfo.processInfo.systemUptime
             logger.notice("asr_staged_decoder_speculative_begin uptime=\(started, privacy: .public) decoder_support=\(directory.lastPathComponent, privacy: .public)")
             VietnameseEnglishRecognizer.logMemory(stage: "speculative-decoder-begin", model: directory.lastPathComponent)
-            let decoder = TextDecoder()
+            let decoder = CancellableWhisperModel(TextDecoder())
             defer {
                 decoder.unloadModel()
                 VietnameseEnglishRecognizer.logMemory(stage: "speculative-decoder-end", model: directory.lastPathComponent)
@@ -1550,7 +1745,9 @@ enum LocalSpeechVoice {
             // Always await the scope, even when Stop cancels its outer owner.
             _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-before-encoder", model: selection.supportIdentity)
             let encoderTask = Task { try await PhoWhisperStagedEncoder.encode(samples, support: directory, selection: selection, challengeSeed: turn & 31) }
-            let encoded = try await encoderTask.value
+            let encoded = try await withTaskCancellationHandler {
+                try await encoderTask.value // Still drain native work before releasing the owner.
+            } onCancel: { encoderTask.cancel() }
             try Task.checkCancellation()
             logger.notice("asr_staged_encoder_released turn=\(turn, privacy: .public)")
             _ = VietnameseEnglishRecognizer.logMemory(stage: "trial-after-encoder-scope", model: selection.supportIdentity)
@@ -1558,7 +1755,9 @@ enum LocalSpeechVoice {
                 tokenizerFolder: directory,
                 computeOptions: ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine,
                                                     textDecoderCompute: Self.stagedDecoderCompute),
+                featureExtractor: CancellableWhisperModel(FeatureExtractor()),
                 audioEncoder: PhoWhisperStagedEncoder.Replay(encoded),
+                textDecoder: CancellableWhisperModel(TextDecoder()),
                 verbose: false, prewarm: false, load: false, download: false))
             loaded.tokenizer = tokenizer
             loaded.textDecoder.isModelMultilingual = true
@@ -1570,7 +1769,7 @@ enum LocalSpeechVoice {
                         if mode == .automatic {
                             // The staged encoder already loaded the mel frontend. Warm only
                             // the decoder here, exactly like the successful greeting path.
-                            let decoder = TextDecoder()
+                            let decoder = CancellableWhisperModel(TextDecoder())
                             defer { decoder.unloadModel() }
                             try await decoder.loadModel(at: directory.appending(path: "TextDecoder.mlmodelc"),
                                 computeUnits: Self.stagedDecoderCompute, prewarmMode: true)
@@ -1865,9 +2064,14 @@ enum PhoWhisperStagedEncoder {
         guard AIModel.deviceArchitectureName == "h18p" else {
             throw Failure("The v3 encoder requires an h18p device.")
         }
-        let supportURL = URL.applicationSupportDirectory.appending(path:
+        let production = !ProcessInfo.processInfo.arguments.contains {
+            $0.hasPrefix("--coreai-w8-v3-") || $0.hasPrefix("--coreai-product-") || $0.hasPrefix("--coreai-compressed-encoder=")
+        }
+        let managedSupport = production ? try LocalSpeechProvisioning.installedDirectory(for: .vietnameseEnglish, component: "support") : nil
+        let managedEncoder = production ? try LocalSpeechProvisioning.installedDirectory(for: .vietnameseEnglish, component: "encoder") : nil
+        let supportURL = managedSupport ?? URL.applicationSupportDirectory.appending(path:
             "PhoWhisperCS/\(supportIdentity)", directoryHint: .isDirectory)
-        let folder = URL.documentsDirectory.appending(path:
+        let folder = managedEncoder ?? URL.documentsDirectory.appending(path:
             "CoreAI/W8FullV3/packed/encoder-\(format)", directoryHint: .isDirectory)
         let manifestURL = folder.appending(path: "manifest.json")
         let manifestData = try Data(contentsOf: manifestURL)
@@ -1917,6 +2121,38 @@ enum PhoWhisperStagedEncoder {
 
     static var enabled: Bool { true }
 
+    /// Same persistent specialization API as the existing phone harness. No precision/backend fallback.
+    @concurrent static func prepareForConversation(_ selection: Selection) async throws {
+        try Task.checkCancellation()
+        guard let v3 = selection.v3, v3.format == "fp8", selection.supportIdentity == "phowhisper-cs-pal8-g16-v1" else {
+            throw Failure("This speech package is not qualified for normal Talk. Choose another speech option.")
+        }
+        let options = SpecializationOptions(preferredComputeUnitKind: .gpu)
+        let model: AIModel
+        if let cached = try AIModelCache.default.model(for: selection.encoderURL, options: options) {
+            model = cached
+        } else {
+            Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_specialization_begin")
+            model = try await AIModel.specialize(contentsOf: selection.encoderURL, options: options, cachePolicy: .persistent)
+            try Task.checkCancellation()
+            Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_specialization_end")
+        }
+        try Task.checkCancellation()
+        try v3.identity.requireModel(model)
+        guard let descriptor = model.functionDescriptor(for: v3.identity.entrypoint),
+              case .ndArray(let input) = descriptor.inputDescriptor(of: "input_features"),
+              case .ndArray(let challenge) = descriptor.inputDescriptor(of: v3.identity.challengeInput),
+              case .ndArray(let output) = descriptor.outputDescriptor(of: v3.identity.packedOutput),
+              input.scalarType == .float16, input.shape == v3.identity.inputShape,
+              challenge.scalarType == .float16, challenge.shape == v3.identity.challengeShape,
+              output.scalarType == .float16, output.shape == v3.identity.packetShape,
+              let _ = try model.loadFunction(named: v3.identity.entrypoint) else {
+            throw Failure("The speech encoder failed validation. Retry preparation or choose another speech option; no transcript was accepted.")
+        }
+        try Task.checkCancellation()
+        Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_ready")
+    }
+
     @concurrent static func verifiedURL() async throws -> URL {
         try await verifiedSelection().encoderURL
     }
@@ -1948,8 +2184,20 @@ enum PhoWhisperStagedEncoder {
         }
         let values = try readAcceptedMel(features)
         let options = SpecializationOptions(preferredComputeUnitKind: .gpu)
-        guard let model = try AIModelCache.default.model(for: selection.encoderURL, options: options) else {
-            throw Failure("The experimental speech encoder cache is unavailable. Use the default build; no automatic specialization or fallback was attempted.")
+        let model: AIModel
+        if let cached = try AIModelCache.default.model(for: selection.encoderURL, options: options) {
+            model = cached
+        } else {
+            let trial = ProcessInfo.processInfo.arguments.contains {
+                $0.hasPrefix("--coreai-w8-v3-") || $0.hasPrefix("--coreai-product-") || $0.hasPrefix("--coreai-compressed-encoder=")
+            }
+            guard !trial, selection.v3?.format == "fp8", selection.supportIdentity == "phowhisper-cs-pal8-g16-v1" else {
+                throw Failure("The qualification trial requires its prepared encoder cache. No automatic rebuild or fallback was attempted.")
+            }
+            // Handles a cache purge after Ready as well as one between launches.
+            try Task.checkCancellation()
+            model = try await AIModel.specialize(contentsOf: selection.encoderURL, options: options, cachePolicy: .persistent)
+            try Task.checkCancellation()
         }
         let hidden: [Float16]
         if let v3 = selection.v3 {

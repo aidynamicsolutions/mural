@@ -5,11 +5,16 @@ Run commands from the directory containing `Package.swift` and `Mural.xcodeproj`
 ## Run offline checks
 
 ```sh
-swift test
+export EVIDENCE="$PWD/.build/verification/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$EVIDENCE"
+set -euo pipefail
+
+swift test > "$EVIDENCE/swift-test.log" 2>&1
 xcodebuild -project Mural.xcodeproj -scheme Mural \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath .build/DerivedData \
-  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build \
+  2>&1 | tee "$EVIDENCE/simulator-build.log" | xcbeautify --is-ci
 ```
 
 Create an iPhone 17 simulator in Xcode’s **Devices and Simulators** window. If you name it `iPhone 17`, run UI tests with:
@@ -19,7 +24,11 @@ xcodebuild -project Mural.xcodeproj -scheme Mural \
   -destination 'platform=iOS Simulator,name=iPhone 17,arch=arm64' \
   -derivedDataPath .build/DerivedData \
   CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO test
+  -parallel-testing-enabled NO \
+  -resultBundlePath "$EVIDENCE/ui-tests.xcresult" \
+  test 2>&1 | tee "$EVIDENCE/ui-tests.log" | xcbeautify --is-ci
+xcrun xcresulttool get test-results summary \
+  --path "$EVIDENCE/ui-tests.xcresult" --compact
 ```
 
 The core suite covers evidence validation, transcript revisions, language isolation, recall spacing, archive validation, translation cancellation, and managed-account configuration and security parsing. Native UI tests exercise the screens with in-memory data. Neither suite needs an API key. Configured provider sign-in and account deletion need the separate device checks in [managed accounts](managed-accounts.md).

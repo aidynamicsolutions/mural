@@ -86,19 +86,39 @@ enum LocalTTSBackend: String, CaseIterable, Identifiable {
         var errorDescription: String? { message }
     }
 
-    func prepare(voice selectedVoice: Supertonic3Voice, progress: @escaping @MainActor @Sendable (String) -> Void) async throws {
+    /// Existence preflight only, using the downloader's own cache layout/inventory.
+    /// Normal acquisition and native loading remain authoritative after consent.
+    static func needsDownload(voice: Supertonic3Voice) throws -> Bool {
+        let repo = try TtsCacheDirectory.ensure().appending(path: "Models/\(Repo.supertonic3.folderName)")
+        let required = ModelNames.Supertonic3.requiredFiles(veVariant: "ane-int4").union([voice.fileName])
+        return !required.allSatisfy { FileManager.default.fileExists(atPath: repo.appending(path: $0).path) }
+    }
+
+    func prepare(voice selectedVoice: Supertonic3Voice,
+                 setup: @escaping @MainActor @Sendable (SpeechSetupProgress) -> Void = { _ in },
+                 progress: @escaping @MainActor @Sendable (String) -> Void) async throws {
+        try Task.checkCancellation()
         if style != nil { return }
         preparation = [:]
         let model = Supertonic3Manager(computeUnits: .cpuAndNeuralEngine, vectorEstimator: .aneBucketed(.int4))
         manager = model // Retain even on failure until the owned worker has drained.
         let begin = ProcessInfo.processInfo.systemUptime
-        let report: ProgressHandler = { value in
-            Task { @MainActor in progress("Acquiring int4 assets: \(Int(value.fractionCompleted * 100))%") }
+        func reporter(_ stage: SpeechSetupProgress.Stage) -> ProgressHandler {
+            { value in
+                let update: SpeechSetupProgress
+                switch value.phase {
+                case .listing: update = .init(.checkingVoice)
+                case .downloading: update = .init(stage, fraction: value.fractionCompleted)
+                case .compiling: update = .init(.preparingVoice)
+                }
+                Task { @MainActor in setup(update) }
+            }
         }
+        setup(.init(.checkingVoice))
         progress("Checking/downloading Mural Voice assets for \(selectedVoice.muralName)…")
-        let repo = try await Supertonic3ResourceDownloader.ensureModels(veVariant: "ane-int4", progressHandler: report)
+        let repo = try await Supertonic3ResourceDownloader.ensureModels(veVariant: "ane-int4", progressHandler: reporter(.downloadingVoice))
         try Task.checkCancellation()
-        let voice = try await Supertonic3ResourceDownloader.loadVoiceStyle(selectedVoice, progressHandler: report)
+        let voice = try await Supertonic3ResourceDownloader.loadVoiceStyle(selectedVoice, progressHandler: reporter(.downloadingVoiceStyle))
         let acquired = ProcessInfo.processInfo.systemUptime
         try Task.checkCancellation()
         var cache = repo
@@ -107,12 +127,18 @@ enum LocalTTSBackend: String, CaseIterable, Identifiable {
         // Refuse a changed config instead of silently relabeling its samples as 44.1 kHz.
         let config = try JSONDecoder().decode(Supertonic3Config.self, from: Data(contentsOf: repo.appending(path: "tts.json")))
         guard config.ae.sampleRate == 44_100 else { throw Failure(message: "Unexpected Mural Voice sample rate. No audio played.") }
+        setup(.init(.checkingVoice))
         progress("Recording acquired asset identity…")
         let inventory = try await Self.inventory(repo: repo, voice: selectedVoice)
         try Task.checkCancellation()
+        setup(.init(.preparingVoice))
         progress("Loading Mural Voice. First use can take longer…")
         let loadStart = ProcessInfo.processInfo.systemUptime
-        try await model.initialize()
+        // The SDK owns the individual voice models. Time this opaque boundary without
+        // pretending its synchronous native loads can be forcibly interrupted.
+        try await SpeechPreparationStep.run(model: "supertonic3-ane-int4", component: "voice-models", phase: "load") {
+            try await model.initialize()
+        }
         try Task.checkCancellation()
         style = voice; syntheses = 0
         preparation = ["acquisition_or_cache_check_ms": (acquired - begin) * 1_000,

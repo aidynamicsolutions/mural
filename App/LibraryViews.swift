@@ -294,7 +294,9 @@ struct WordsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 PageHeading(eyebrow: "Little by little · \(coordinator.language.name)", title: "Your words.", subtitle: "Familiar words, ready for another conversation.")
                 if coordinator.isLocal {
-                    Text(coordinator.localAssessmentRunning ? "Reviewing your last reply on this iPhone…" : "On-device practice reviews only your last reply after you tap End, saving up to two English words or phrases when the evidence is clear.")
+                    Text(coordinator.localSpeechPair == .taiwanMandarinEnglish
+                         ? "Taiwan Mandarin–English test conversations keep your transcript and Traditional Chinese support. Automatic learning credit is disabled until separately qualified."
+                         : coordinator.localAssessmentRunning ? "Reviewing your last reply on this iPhone…" : "On-device practice reviews only your last reply after you tap End, saving up to two English words or phrases when the evidence is clear.")
                         .font(.footnote).foregroundStyle(MuralColor.secondary)
                 }
                 if words.isEmpty {
@@ -385,8 +387,12 @@ struct TranscriptView: View {
                                 if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
                                     Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
                                 }
-                                if let translation = session.translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: meaningLanguage)] ?? session.translations[passage.revisionKey] {
+                                let supportLanguage = session.isLocalConversation ? (session.localSpeechPair ?? .vietnameseEnglish).supportLanguage : meaningLanguage
+                                if let translation = session.translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: supportLanguage)] ?? session.translations[passage.revisionKey] {
                                     Text(translation).font(.subheadline).foregroundStyle(MuralColor.secondary)
+                                }
+                                if let pair = session.localSpeechPair, let help = session.translations[pair.helpCacheKey(revisionKey: passage.revisionKey)] {
+                                    Text(help).font(.subheadline).textSelection(.enabled)
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -460,6 +466,15 @@ struct EditableTranscriptView: View {
                             if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
                                 Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
                             }
+                            if let session, session.isLocalConversation {
+                                let pair = session.localSpeechPair ?? .vietnameseEnglish
+                                if let translation = session.translations[MeaningRequest.cacheKey(revisionKey: passage.revisionKey, language: pair.supportLanguage)] {
+                                    Text(translation).font(.subheadline).foregroundStyle(MuralColor.secondary)
+                                }
+                                if let help = session.translations[pair.helpCacheKey(revisionKey: passage.revisionKey)] {
+                                    Text(help).font(.subheadline).textSelection(.enabled)
+                                }
+                            }
                         }
                     }
                     ForEach(session?.topics ?? []) { topic in Text(.init(topic.text)); SourcesView(sources: topic.sources, date: topic.retrievedAt) }
@@ -520,7 +535,7 @@ struct SettingsView: View {
                         }
                     }.disabled(!coordinator.canChangeMode)
                     Text(coordinator.isLocal
-                         ? "On-device: English with Vietnamese support. Finalized text stays on this iPhone."
+                         ? "On-device: English with \(coordinator.localSpeechPair.supportLanguage) support. Finalized text stays on this iPhone."
                          : "GPT-Live: separate OpenAI consent and your API key are required. Audio and selected text are processed by OpenAI.")
                         .font(.footnote)
                 } header: { Text("Conversation") }
@@ -588,6 +603,10 @@ struct SettingsView: View {
                     } else {
                         Text("Best available prefers Premium, then Enhanced, then Standard. Within the highest available quality, it prefers a voice matching your iPhone region. You can also pin any installed English accent manually.")
                     }
+                }
+                Section {
+                    NavigationLink("Downloaded speech") { SpeechStorageView(coordinator: coordinator) }
+                        .accessibilityIdentifier("speech-storage-open")
                 }
                 #if MURAL_TTS_EXPERIMENT
                 Section("Experiments") {

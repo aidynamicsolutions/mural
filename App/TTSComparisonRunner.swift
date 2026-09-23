@@ -6,6 +6,46 @@ import MuralCore
 import Observation
 import UIKit
 
+#if DEBUG && targetEnvironment(simulator)
+@MainActor private final class DelayedTTSSafetySample {
+    private var calls = 0
+    private var staleSample: CheckedContinuation<[String: UInt64], Never>?
+    private var staleStarted: CheckedContinuation<Void, Never>?
+    private var currentStarted: CheckedContinuation<Void, Never>?
+
+    func next() async -> [String: UInt64] {
+        calls += 1
+        switch calls {
+        case 1:
+            return await withCheckedContinuation { continuation in
+                staleSample = continuation
+                staleStarted?.resume(); staleStarted = nil
+            }
+        case 2:
+            currentStarted?.resume(); currentStarted = nil
+            return ["footprintBytes": 0]
+        default:
+            return ["footprintBytes": 0]
+        }
+    }
+
+    func waitForStaleSample() async {
+        if staleSample != nil { return }
+        await withCheckedContinuation { staleStarted = $0 }
+    }
+
+    func waitForCurrentSample() async {
+        if calls >= 2 { return }
+        await withCheckedContinuation { currentStarted = $0 }
+    }
+
+    func releaseStaleSample() {
+        staleSample?.resume(returning: ["footprintBytes": 3_000_000_000])
+        staleSample = nil
+    }
+}
+#endif
+
 @MainActor @Observable final class TTSComparisonRunner {
     let audio: LocalConversationEngine
     private(set) var phrases: [TTSComparisonPhrase] = []
@@ -132,6 +172,49 @@ import UIKit
                 if !value { throw SafetyStop(message: "Lifecycle check failed. Stop and inspect the implementation.") }
             }
             #if DEBUG && targetEnvironment(simulator)
+            let delayedAudio = LocalConversationEngine()
+            let delayedSample = DelayedTTSSafetySample()
+            delayedAudio.testTTSSafetySampler = { await delayedSample.next() }
+            delayedAudio.startTTSConversationMonitorForTesting()
+            await delayedSample.waitForStaleSample()
+            guard let staleMonitor = delayedAudio.testTTSConversationMonitorTask else {
+                throw SafetyStop(message: "Safety monitor did not start.")
+            }
+            delayedAudio.stop()
+            delayedAudio.startTTSConversationMonitorForTesting()
+            await delayedSample.waitForCurrentSample()
+            guard let currentMonitor = delayedAudio.testTTSConversationMonitorTask else {
+                throw SafetyStop(message: "Replacement safety monitor did not start.")
+            }
+            delayedSample.releaseStaleSample()
+            await staleMonitor.value
+            try require(delayedAudio.canPrepare && !delayedAudio.thermalStopped)
+            delayedAudio.stop()
+            await currentMonitor.value
+
+            let sampledMemoryAudio = LocalConversationEngine()
+            var sampledMemoryStopped = false
+            sampledMemoryAudio.onTTSSafetyStop = { _ in sampledMemoryStopped = true }
+            sampledMemoryAudio.testTTSSafetySampler = { ["footprintBytes": 3_000_000_000] }
+            sampledMemoryAudio.startTTSConversationMonitorForTesting()
+            guard let sampledMemoryMonitor = sampledMemoryAudio.testTTSConversationMonitorTask else {
+                throw SafetyStop(message: "Memory safety monitor did not start.")
+            }
+            await sampledMemoryMonitor.value
+            try require(sampledMemoryStopped && !sampledMemoryAudio.canPrepare)
+
+            let sampledThermalAudio = LocalConversationEngine()
+            sampledThermalAudio.testThermalState = .serious
+            var sampledThermalStopped = false
+            sampledThermalAudio.onTTSSafetyStop = { _ in sampledThermalStopped = true }
+            sampledThermalAudio.testTTSSafetySampler = { ["footprintBytes": 0] }
+            sampledThermalAudio.startTTSConversationMonitorForTesting()
+            guard let sampledThermalMonitor = sampledThermalAudio.testTTSConversationMonitorTask else {
+                throw SafetyStop(message: "Thermal safety monitor did not start.")
+            }
+            await sampledThermalMonitor.value
+            try require(sampledThermalStopped && sampledThermalAudio.thermalStopped)
+
             let thermalAudio = LocalConversationEngine()
             thermalAudio.testThermalState = .serious
             thermalAudio.stopForTTSSafety(footprint: 80_000_000, thermal: .serious)

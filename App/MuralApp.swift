@@ -10,12 +10,22 @@ import Observation
 import OSLog
 import SwiftUI
 import WhisperKit
+#if MURAL_LOCAL_QA
+import MuralCore
+import UIKit
+#endif
 
 @main struct MuralApp: App {
     @State private var store: LearningStore?
     @State private var startupError: String?
+    #if MURAL_LOCAL_QA
+    @State private var qaStatus = "Running local speech checks. Microphone and tutor are off."
+    #endif
 
     init() {
+        #if MURAL_LOCAL_QA
+        if LocalSpeechQAVerification.requested { return }
+        #endif
         #if MURAL_TTS_EXPERIMENT
         if ProcessInfo.processInfo.arguments.contains("--tts-comparison") { return }
         #endif
@@ -37,6 +47,21 @@ import WhisperKit
     }
 
     @ViewBuilder private var mainContent: some View {
+        #if MURAL_LOCAL_QA
+        if LocalSpeechQAVerification.requested {
+            Text(qaStatus).padding()
+                .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+                .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+                .task { qaStatus = await LocalSpeechQAVerification.run() }
+        } else {
+            regularContent
+        }
+        #else
+        regularContent
+        #endif
+    }
+
+    @ViewBuilder private var regularContent: some View {
         #if MURAL_TTS_EXPERIMENT
         if ProcessInfo.processInfo.arguments.contains("--tts-comparison") {
             NavigationStack { TTSComparisonView() }
@@ -2660,4 +2685,197 @@ extension CoreAIPhoWhisper {
     }
 }
 
+#endif
+
+#if MURAL_LOCAL_QA
+/// Explicit QA build only. Drives the real Talk audio owner with no microphone,
+/// tutor, transcript fixtures, learning store, cache deletion or receipt-policy override.
+@MainActor enum LocalSpeechQAVerification {
+    static var requested: Bool {
+        Bundle.main.bundleIdentifier == "com.kevintruong.mural.qa" &&
+            ProcessInfo.processInfo.arguments.contains("--local-speech-qa")
+    }
+    private struct Storage: Codable, Sendable {
+        let uptime: Double
+        let logicalBytes: [String: Int64]
+        let allocatedBytes: [String: Int64]
+        let availableBytes: Int64
+    }
+    private struct Event: Codable {
+        let name: String
+        let uptime: Double
+        let state: String
+        let busy: Bool
+        let canPrepare: Bool
+        let canRecord: Bool
+        let detail: String
+    }
+    private struct Report: Encodable {
+        let runID = UUID()
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        let model: String
+        let action: String
+        var status = "running"
+        var error: String?
+        var events: [Event] = []
+        var steps: [SpeechPreparationStep.Event] = []
+        var storage: [Storage] = []
+    }
+    private static func require(_ condition: Bool, _ message: String) throws {
+        if !condition { throw NSError(domain: "LocalSpeechQA", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    }
+    @concurrent private static func storage() async throws -> Storage { try sampleStorage() }
+    private nonisolated static func sampleStorage() throws -> Storage {
+        var logical: [String: Int64] = [:], allocated: [String: Int64] = [:]
+        for (name, root) in [("support", URL.applicationSupportDirectory), ("caches", URL.cachesDirectory),
+                             ("documents", URL.documentsDirectory), ("temporary", URL.temporaryDirectory)] {
+            logical[name] = 0; allocated[name] = 0
+            if !FileManager.default.fileExists(atPath: root.path) { continue }
+            guard let files = FileManager.default.enumerator(at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .totalFileAllocatedSizeKey]) else {
+                throw CocoaError(.fileReadUnknown)
+            }
+            for case let file as URL in files {
+                // Native caches can change while enumerating; take a sample, not a transactional peak.
+                guard let value = try? file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .totalFileAllocatedSizeKey]),
+                      value.isRegularFile == true, value.isSymbolicLink != true else { continue }
+                logical[name, default: 0] += Int64(value.fileSize ?? 0)
+                allocated[name, default: 0] += Int64(value.totalFileAllocatedSize ?? 0)
+            }
+        }
+        return Storage(uptime: ProcessInfo.processInfo.systemUptime, logicalBytes: logical,
+            allocatedBytes: allocated, availableBytes: try LocalSpeechProvisioning.freeBytes())
+    }
+
+    static func run() async -> String {
+        guard requested else { return "QA is unavailable in this app." }
+        let args = ProcessInfo.processInfo.arguments
+        let model = args.contains("--qa-model=breeze") ? LocalConversationEngine.ASRModel.breeze : .phoWhisper
+        let action = args.contains("--qa-action=cancel") ? "cancel" : args.contains("--qa-action=missing") ? "missing"
+            : args.contains("--qa-action=memory") ? "memory" : "prepare"
+        let audio = LocalConversationEngine()
+        defer { audio.stop() }
+        var report = Report(model: model.rawValue, action: action)
+        var activeStep: SpeechPreparationStep.Event?
+        let cancelComponent = args.first(where: { $0.hasPrefix("--qa-cancel-component=") })
+            .map { String($0.dropFirst("--qa-cancel-component=".count)) } ?? "TextDecoder"
+        let output = URL.documentsDirectory.appending(path: "local-speech-qa.json")
+        let logger = Logger(subsystem: "no.william.mural", category: "LocalSpeechQA")
+        func save() throws {
+            try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(report).write(to: output, options: .atomic)
+        }
+        func event(_ name: String) throws {
+            report.events.append(Event(name: name, uptime: ProcessInfo.processInfo.systemUptime,
+                state: audio.asrState.rawValue, busy: audio.asrBusy, canPrepare: audio.canPrepare,
+                canRecord: audio.canRecord, detail: audio.preparationDetail))
+            logger.notice("local_speech_qa event=\(name, privacy: .public) model=\(model.rawValue, privacy: .public)")
+            try save()
+        }
+        do {
+            try require(["MelSpectrogram", "TextDecoder", "AudioEncoder"].contains(cancelComponent), "Unknown cancellation component")
+            // Existing supported Apple-voice option isolates ASR storage/lifecycle from neural TTS acquisition.
+            try audio.selectConversationTTS(.apple)
+            try event("begin-apple-voice-asr-only")
+            let pair: LocalSpeechPair = model == .breeze ? .taiwanMandarinEnglish : .vietnameseEnglish
+            if action == "missing" {
+                try require(try !audio.hasConversationAssets(for: pair), "Missing-assets check requires absent staged and managed assets")
+            }
+            report.storage.append(try await storage())
+            for iteration in 1...(action == "missing" ? 1 : 2) {
+                try event("prepare-\(iteration)-begin")
+                let started = ProcessInfo.processInfo.systemUptime
+                let preparation = Task {
+                    try await SpeechPreparationStep.$observe.withValue({ step in
+                        activeStep = step.outcome == "begin" ? step : nil
+                        report.steps.append(step)
+                        try? save()
+                    }) { try await audio.prepareConversation(model: model) }
+                }
+                var cancellationRequested = false
+                var timedOut = false
+                var nextStorageSample = started
+                let monitor = Task {
+                    while !Task.isCancelled {
+                        let atCancellationPhase = activeStep?.component == cancelComponent
+                        if action == "cancel", iteration == 1, atCancellationPhase, !cancellationRequested {
+                            // A scoped event identifies the individual native component, not
+                            // just the outer warming state. Save both endpoints and correlate logs.
+                            cancellationRequested = true
+                            preparation.cancel(); audio.stop()
+                            try event("cancel-requested")
+                            try require(!audio.canRecord && !audio.canPrepare, "Stop reopened admission before preparation drained")
+                        }
+                        if !timedOut, ProcessInfo.processInfo.systemUptime - started > 600 {
+                            timedOut = true
+                            preparation.cancel(); audio.stop()
+                            try event("timeout-cancel-requested")
+                        }
+                        if ProcessInfo.processInfo.systemUptime >= nextStorageSample {
+                            report.storage.append(try await storage())
+                            try save()
+                            nextStorageSample = ProcessInfo.processInfo.systemUptime + 2
+                        }
+                        try await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+                let outcome = await withTaskCancellationHandler {
+                    await preparation.result
+                } onCancel: {
+                    preparation.cancel()
+                    Task { @MainActor in audio.stop() }
+                }
+                monitor.cancel()
+                let monitorOutcome = await monitor.result
+                if case .failure(let failure) = monitorOutcome, !(failure is CancellationError) { throw failure }
+                try Task.checkCancellation()
+                try require(!timedOut, "Preparation exceeded the ten-minute QA budget")
+                if action == "missing" {
+                    if case .success = outcome { throw NSError(domain: "LocalSpeechQA", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing assets unexpectedly reached Ready"]) }
+                    try require(audio.asrState == .failed && !audio.canRecord, "Missing assets did not fail closed")
+                    try event("missing-assets-rejected")
+                } else if action == "cancel", iteration == 1 {
+                    try require(cancellationRequested, "Preparation finished before cancellation could be exercised")
+                    if case .failure(let failure) = outcome { try require(failure is CancellationError, "Cancelled preparation returned a different failure") }
+                    else { throw CancellationError() }
+                    try require(!audio.asrBusy && !audio.canRecord, "Cancellation published Ready or retained the worker")
+                    guard let cancelledAt = report.events.last(where: { $0.name == "cancel-requested" })?.uptime else {
+                        throw CancellationError()
+                    }
+                    try require(!report.steps.contains(where: { $0.outcome == "begin" && $0.uptime > cancelledAt }),
+                                "Cancelled preparation started another native component")
+                    try event("cancel-drained")
+                } else {
+                    try outcome.get()
+                    try require(audio.asrState == .ready && audio.canRecord, "Preparation did not reach Ready")
+                    try event("prepare-\(iteration)-ready")
+                    if action == "memory" {
+                        // Exercise the real guard without allocating 3 GB or stressing the user's phone.
+                        audio.stopForTTSSafety(footprint: 3_000_000_000, thermal: .nominal)
+                        try require(!audio.canPrepare && !audio.canRecord, "Memory guard did not close admission")
+                        do {
+                            try await audio.prepareConversation(model: model)
+                            throw NSError(domain: "LocalSpeechQA", code: 3, userInfo: [NSLocalizedDescriptionKey: "Memory guard allowed a new preparation"])
+                        } catch let error as NSError where error.domain == "LocalSpeechQA" { throw error }
+                        catch { /* Expected: the real owner's memory-warning latch refuses preparation. */ }
+                        try event("simulated-memory-guard-rejected-restart")
+                        break
+                    }
+                }
+                audio.stop()
+                await audio.waitForTTSCleanup()
+                try require(!audio.asrBusy && !audio.canRecord && audio.canPrepare, "Stop did not restore idle admission")
+                try event("prepare-\(iteration)-stopped")
+                report.storage.append(try await storage())
+            }
+            report.status = "passed"
+            try event("finished")
+        } catch {
+            report.status = "failed"; report.error = error.localizedDescription
+            try? event("failed")
+            logger.error("local_speech_qa failed=\(error.localizedDescription, privacy: .public)")
+        }
+        return "Local speech QA: \(report.status). Report: Documents/local-speech-qa.json. No microphone or tutor used."
+    }
+}
 #endif

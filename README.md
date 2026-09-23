@@ -90,17 +90,7 @@ The [Mural website](https://mural.chat) lives in the separate [Chuloo/mural-webs
 
 ## Build and test
 
-From the directory containing `Package.swift`:
-
-```sh
-swift test
-xcodebuild -project Mural.xcodeproj -scheme Mural \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath .build/DerivedData \
-  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
-```
-
-For UI tests, create or select an iPhone 17 simulator in Xcode, then run **Product → Test**. The tests use in-memory fixtures and do not require an API key. More commands and preview options are in [the build guide](docs/build-and-test.md).
+For core tests, simulator builds, and native UI tests, follow [the build and test guide](docs/build-and-test.md). It keeps raw logs in local evidence, formats Xcode output with `xcbeautify`, and summarizes test results with `xcresulttool`. UI tests use in-memory fixtures and do not require an API key.
 
 On 12 September 2026, the English, French, onboarding and AI-consent build passed **41 core tests and 11 native UI tests**. This covers language-specific progress, the two welcome screens, consent for existing users, secure key entry and the conversation controls. Earlier iPhone checks verified Spanish speech, Meaning during and after a conversation, reset, retained history and audio cleanup; those live results apply to the earlier tested builds. [Verification record](verification/validation.md)
 

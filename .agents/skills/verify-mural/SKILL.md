@@ -28,6 +28,30 @@ The current environment does not have an OpenAI API key. Prove the missing-key a
 
 Run commands from the repository root. The app bundle identifier is `no.william.mural`. The project has no checked-in simulator launcher; use the commands below.
 
+## Concise Xcode output and test results
+
+`xcbeautify` is installed on PATH. Initialize one fresh evidence directory before build and test actions:
+
+```sh
+export EVIDENCE="$PWD/.build/verification/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$EVIDENCE"
+set -o pipefail
+```
+
+For every `xcodebuild` command in this skill and its feature guides, preserve the raw log locally while showing only formatted output:
+
+```sh
+xcodebuild <existing arguments> 2>&1 | tee "$EVIDENCE/<action>.log" | xcbeautify --is-ci
+```
+
+For each `test` action, add a unique `-resultBundlePath "$EVIDENCE/<action>.xcresult"` and print the compact structured summary:
+
+```sh
+xcrun xcresulttool get test-results summary --path "$EVIDENCE/<action>.xcresult" --compact
+```
+
+Check the summary first. Inspect only failed-test details or attachments needed as evidence. Never print entire `.log` files or dump whole result bundles into agent context.
+
 ## Preconditions
 
 - Apple Silicon macOS with Xcode 26 or newer, an installed iOS 26.1 or newer simulator runtime, and Swift 6 tooling.
@@ -74,7 +98,7 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   ARCHS=arm64 \
   ONLY_ACTIVE_ARCH=YES \
-  build
+  build 2>&1 | tee "$EVIDENCE/simulator-build.log" | xcbeautify --is-ci
 
 export SIM_APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/Mural.app"
 test -d "$SIM_APP"
@@ -94,7 +118,8 @@ xcodebuild \
   ARCHS=arm64 \
   ONLY_ACTIVE_ARCH=YES \
   -parallel-testing-enabled NO \
-  test
+  -resultBundlePath "$EVIDENCE/simulator-tests.xcresult" test 2>&1 | tee "$EVIDENCE/simulator-tests.log" | xcbeautify --is-ci
+xcrun xcresulttool get test-results summary --path "$EVIDENCE/simulator-tests.xcresult" --compact
 ```
 
 For a focused native UI check, append one of the test names in the feature map:
@@ -110,7 +135,8 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=YES \
   -parallel-testing-enabled NO \
   -only-testing:MuralUITests/MuralUITests/testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount \
-  test
+  -resultBundlePath "$EVIDENCE/focused-ui.xcresult" test 2>&1 | tee "$EVIDENCE/focused-ui.log" | xcbeautify --is-ci
+xcrun xcresulttool get test-results summary --path "$EVIDENCE/focused-ui.xcresult" --compact
 ```
 
 ## Launch the simulator app
@@ -207,7 +233,7 @@ xcodebuild \
   -scheme Mural \
   -destination "platform=iOS,id=$DEVICE_UDID" \
   -derivedDataPath "$DEVICE_DERIVED_DATA" \
-  build
+  build 2>&1 | tee "$EVIDENCE/device-build.log" | xcbeautify --is-ci
 
 export DEVICE_APP="$DEVICE_DERIVED_DATA/Build/Products/Debug-iphoneos/Mural.app"
 test -d "$DEVICE_APP"
@@ -274,12 +300,9 @@ These helpers incur API usage and are not substitutes for listening or checking 
 
 ## Evidence
 
-Keep fresh, local, uncommitted evidence under `.build/verification/`:
+Keep fresh, local, uncommitted evidence under `.build/verification/`. Use the `$EVIDENCE` directory initialized before build and test commands:
 
 ```sh
-export EVIDENCE="$PWD/.build/verification/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$EVIDENCE"
-
 xcodebuild -version > "$EVIDENCE/toolchain.txt"
 git status --short --branch > "$EVIDENCE/git-status.txt"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -390,8 +413,9 @@ xcodebuild \
   ONLY_ACTIVE_ARCH=YES \
   -parallel-testing-enabled NO \
   -only-testing:MuralUITests/MuralUITests/testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount \
-  test > "$EVIDENCE/onboarding-test.log" 2>&1 || TEST_STATUS=$?
+  -resultBundlePath "$EVIDENCE/onboarding-test.xcresult" test 2>&1 | tee "$EVIDENCE/onboarding-test.log" | xcbeautify --is-ci || TEST_STATUS=$?
 printf 'test status: %s\\n' "$TEST_STATUS" > "$EVIDENCE/onboarding-test-status.txt"
+xcrun xcresulttool get test-results summary --path "$EVIDENCE/onboarding-test.xcresult" --compact | tee "$EVIDENCE/onboarding-test-summary.json"
 if [ "$TEST_STATUS" -ne 0 ]; then exit "$TEST_STATUS"; fi
 
 xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=greeting

@@ -15,9 +15,12 @@ public struct MeaningRequest: Equatable, Sendable {
     public var cacheKey: String { Self.cacheKey(revisionKey: revisionKey, language: meaningLanguage) }
     public static func cacheKey(revisionKey: String, language: String) -> String { language + "::" + revisionKey }
     var builtInMeaning: String? {
-        guard learningLanguageID == "en", meaningLanguage == "Vietnamese",
-              text == "Hi! What did you do today?" else { return nil }
-        return "Chào bạn! Hôm nay bạn đã làm gì?"
+        guard learningLanguageID == "en", text == "Hi! What did you do today?" else { return nil }
+        switch meaningLanguage {
+        case "Vietnamese": return "Chào bạn! Hôm nay bạn đã làm gì?"
+        case "Traditional Chinese": return "你好！你今天做了什麼？"
+        default: return nil
+        }
     }
     func sharesContext(with other: Self) -> Bool {
         sessionID == other.sessionID && passageID == other.passageID &&
