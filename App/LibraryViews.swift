@@ -535,7 +535,7 @@ struct SettingsView: View {
                         }
                     }.disabled(!coordinator.canChangeMode)
                     Text(coordinator.isLocal
-                         ? "On-device: English with \(coordinator.localSpeechPair.supportLanguage) support. Finalized text stays on this iPhone."
+                         ? "On-device: \(coordinator.language.name) learning with \(store.preferences.meaningLanguage) meanings. Finalized text stays on this iPhone."
                          : "GPT-Live: separate OpenAI consent and your API key are required. Audio and selected text are processed by OpenAI.")
                         .font(.footnote)
                 } header: { Text("Conversation") }
@@ -628,7 +628,7 @@ struct SettingsView: View {
                             ForEach(MeaningLanguages.all, id: \.self) { Text($0) }
                         }
                     }
-                    .disabled(coordinator.isLocal && (coordinator.isRunning || coordinator.localResourcesBusy))
+                    .disabled(coordinator.isLocal && !coordinator.canSelectMeaningLanguage)
                     LabeledContent("Corrections", value: "Gently, as we talk")
                     TextField("A few things you enjoy", text: Binding(get: { store.preferences.interests }, set: { value in store.updatePreferences { $0.interests = String(value.prefix(500)) } }), axis: .vertical)
                 } header: { Text("Just your pace") } footer: { Text(coordinator.isRunning ? "End this conversation to switch languages. Each language keeps its own words and progress." : "Each language keeps its own words and progress. Mural finds your pace through conversation.") }

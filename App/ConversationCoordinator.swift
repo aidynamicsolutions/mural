@@ -46,7 +46,11 @@ import MuralCore
         }
         return preparingNativeSpeech ? localAudio.preparationProgress : .init(.checking)
     }
-    var selectedLocalSpeechPair: LocalSpeechPair { store.preferences.localSpeechPair ?? .vietnameseEnglish }
+    var selectedLocalSpeechPair: LocalSpeechPair {
+        LocalSpeechPair.forSupportLanguage(store.preferences.meaningLanguage)
+            ?? store.preferences.localSpeechPair
+            ?? .vietnameseEnglish
+    }
     var localSpeechPair: LocalSpeechPair {
         if let session, session.isLocalConversation { return session.localSpeechPair ?? .vietnameseEnglish }
         return selectedLocalSpeechPair
@@ -62,7 +66,9 @@ import MuralCore
     private var localLookupTask: Task<String, Error>?
     var localAssessmentRunning: Bool { session.map { localFinalAssessments.isPending($0.id) } ?? false }
     private var localSupportUsed = false
-    var localPairSupported: Bool { language.id == "en" && store.preferences.meaningLanguage == localSpeechPair.supportLanguage }
+    var localPairSupported: Bool {
+        language.id == "en" && LocalSpeechPair.forSupportLanguage(store.preferences.meaningLanguage) != nil
+    }
     var canUseLocalSupport: Bool {
         isLocal && localPairSupported && !localResourcesBusy && assistantPassage != nil &&
         ((state == .active && localPhase == .ready) || state == .ended)
@@ -78,8 +84,8 @@ import MuralCore
         localLookupTask != nil || localPostTask != nil || localAssessmentRunning || localAudio.modelWorkDraining || speechModels.isBusy
     }
     var canChangeMode: Bool { !isRunning && !localResourcesBusy }
-    // Choosing a future pair does not acquire models or mutate the draining audio owner.
-    var canSelectLocalSpeechPair: Bool { canChangeMode || (isStoppingSpeechSetup && !isRunning && session == nil) }
+    // During setup cancellation, Settings may change only the next-start language preference.
+    var canSelectMeaningLanguage: Bool { canChangeMode || (isStoppingSpeechSetup && !isRunning && session == nil) }
     var canRecordLocal: Bool { isLocal && state == .active && localPhase == .ready && !localResourcesBusy && localAudio.canRecord }
     var canRetryLocalReply: Bool { canRecordLocal && session?.fragments.last?.speaker == .user }
     private let localLogger = Logger(subsystem: "no.william.mural", category: "LocalConversation")
@@ -306,20 +312,9 @@ import MuralCore
         UserDefaults.standard.set(value.rawValue, forKey: "mural.conversationMode")
     }
 
-    func selectLocalSpeechPair(_ value: LocalSpeechPair) {
-        guard canSelectLocalSpeechPair, value != selectedLocalSpeechPair else { return }
-        if canChangeMode {
-            if value == .taiwanMandarinEnglish { selectLanguage("en") }
-            resetConversation()
-        }
-        // During empty-draft cancellation, only next-start preferences change. Keep
-        // the old task, generation, asset paths and admission gates intact until drain.
-        store.updatePreferences { $0.localSpeechPair = value; $0.meaningLanguage = value.supportLanguage }
-    }
-
     private func startLocal() {
         guard localPairSupported else {
-            error = "Choose English learning and \(selectedLocalSpeechPair.supportLanguage) support in Settings for this speech mode. Existing learning history stays unchanged."
+            error = "On-device Talk supports English learning with Vietnamese or Traditional Chinese meanings. Set those languages in Settings; your learning history stays unchanged."
             return
         }
         #if DEBUG && targetEnvironment(simulator)
@@ -592,7 +587,7 @@ import MuralCore
         isMuted = true; inputLevel = 0; outputLevel = 0; working = false
         state = eligible ? .ended : .idle
         localPhase = eligible ? .ended : .idle
-        notice = eligible ? reason : nil
+        notice = eligible && reason != "Ended by you" ? reason : nil
         localLogger.notice("local_ended")
         guard eligible else { return }
         // End stays immediate; the existing final queue runs only after canceled workers drain.
@@ -649,11 +644,20 @@ import MuralCore
         store.selectLanguage(id)
     }
     func selectMeaningLanguage(_ value: String) {
-        guard !(isLocal && (isRunning || localResourcesBusy)) else { return }
-        guard MeaningLanguages.all.contains(value) else { return }
-        meanings.reset(); cancelLocalSupporting()
-        store.updatePreferences { $0.meaningLanguage = value }
-        scheduleTranslation()
+        guard MeaningLanguages.all.contains(value), value != store.preferences.meaningLanguage else { return }
+        guard !isLocal || canSelectMeaningLanguage else { return }
+        let wasLocal = isLocal
+        if wasLocal {
+            if canChangeMode { resetConversation() }
+            // If setup is draining, do not cancel or release its old speech owner.
+        } else {
+            meanings.reset(); cancelLocalSupporting()
+        }
+        store.updatePreferences {
+            $0.meaningLanguage = value
+            if let pair = LocalSpeechPair.forSupportLanguage(value) { $0.localSpeechPair = pair }
+        }
+        if !wasLocal { scheduleTranslation() }
     }
     func chooseTheme(_ theme: ConversationTheme?) {
         guard !isLocal else { return }

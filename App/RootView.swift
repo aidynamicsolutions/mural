@@ -100,24 +100,10 @@ struct TalkView: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 0) {
-                    if coordinator.isLocal {
-                        Menu {
-                            Picker("On-device speech pair", selection: Binding(get: { coordinator.selectedLocalSpeechPair }, set: { coordinator.selectLocalSpeechPair($0) })) {
-                                ForEach(LocalSpeechPair.allCases, id: \.self) { Text($0.title).tag($0) }
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(coordinator.selectedLocalSpeechPair.title).multilineTextAlignment(.center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Image(systemName: "chevron.up.chevron.down").font(.caption2).accessibilityHidden(true)
-                            }.frame(minHeight: 44)
-                        }.disabled(!coordinator.canSelectLocalSpeechPair).accessibilityLabel("On-device speech pair")
-                            .accessibilityValue(coordinator.selectedLocalSpeechPair.title)
-                            .accessibilityIdentifier("local-speech-pair")
-                    }
-                    Text(coordinator.isLocal ? "English · \(coordinator.localSpeechPair.supportLanguage) support" : coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
+                    Text(coordinator.isLocal ? "\(coordinator.language.name) · \(coordinator.store.preferences.meaningLanguage)" : coordinator.selectedTheme?.title ?? coordinator.language.talkTitle)
                         .font(.system(.caption, design: .rounded, weight: .medium)).foregroundStyle(MuralColor.secondary)
                         .padding(.horizontal, 14).padding(.vertical, 9).background(MuralColor.butter.opacity(0.58), in: Capsule()).padding(.top, 12)
+                        .accessibilityIdentifier("conversation-language-pair")
                     Spacer(minLength: 8)
                     MuralOrb(energy: max(coordinator.outputLevel, coordinator.inputLevel * 0.45), listening: coordinator.isLocal ? coordinator.localAudio.asrState == .recording : coordinator.state == .active && !coordinator.isMuted, active: coordinator.isLocal ? coordinator.isRunning : coordinator.state != .closing)
                         .frame(width: compactOrb ? 170 : 220, height: compactOrb ? 180 : 222).padding(.vertical, 8)
@@ -261,6 +247,7 @@ struct TalkView: View {
                     Text("ASR backend: \(coordinator.isStoppingSpeechSetup ? coordinator.localAudio.selectedConversationASRBackend : coordinator.localSpeechPair == .taiwanMandarinEnglish ? "Breeze PAL8 · WhisperKit / Core ML" : LocalConversationEngine.conversationASRBackend)")
                         .accessibilityIdentifier("local-asr-backend")
                     Text("\(coordinator.localSpeechPair.recognizerID) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
+                        .accessibilityIdentifier("local-recognizer")
                     Text("Microphone is off except while recording. On-device conversations do not end for inactivity; tap End when you are done.")
                     Text("Speech-presence checks cannot guarantee that recognition is accurate. Review the transcript; reported preparation speed does not qualify a recognizer's language accuracy.")
                     Text("Finalized turns, \(coordinator.localSpeechPair.supportLanguage) meanings, lookup, Help and typed replies stay on this iPhone. Raw recognition is saved separately from display text; teaching never rewrites it. Themes and search remain unavailable.")
