@@ -51,7 +51,7 @@ import MuralCore
     private func shouldShowDetailedSpeechSetup(for pair: LocalSpeechPair) -> Bool {
         guard speechPreparationSucceeded(for: pair) else { return true }
         #if DEBUG && targetEnvironment(simulator)
-        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" { return false }
+        if speechSetupPreview == "resume" { return false }
         #endif
         do {
             if try !localAudio.hasConversationAssets(for: pair) { return true }
@@ -103,7 +103,6 @@ import MuralCore
         ((state == .active && localPhase == .ready) || state == .ended)
     }
     private(set) var localPhase: LocalPhase = .idle
-    private var memoryPressurePaused = false
     private var localTask: Task<Void, Never>?
     private var localResumeTask: Task<Void, Never>?
     private var localTimeout: Task<Void, Never>?
@@ -224,22 +223,15 @@ import MuralCore
                 self.session = nil
             }
         }
-        localAudio.onSafetyStop = { [weak self] reason in
+        localAudio.onTTSSafetyStop = { [weak self] message in
             guard let self, self.isLocal, self.isRunning else { return }
-            switch reason {
-            case .memoryPressure:
-                self.error = nil
-                self.speechModels.cancel()
-                if self.localPhase == .preparing, self.session?.hasUserMessage != true {
-                    self.endLocal(reason: "Speech setup paused after memory pressure")
-                } else {
-                    self.memoryPressurePaused = true
-                    self.pauseLocal()
-                }
-            case .thermal:
-                self.error = LocalTTSError.phoneTooWarm.localizedDescription
+            if self.localAudio.thermalStopped, message == LocalTTSError.phoneTooWarm.localizedDescription {
                 self.pauseLocal()
+            } else {
+                self.endLocal(reason: message)
+                self.cancelLocalSupporting()
             }
+            self.error = message
         }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
@@ -290,7 +282,6 @@ import MuralCore
         if isLocal {
             if isStoppingSpeechSetup { return "Setup cancelled" }
             if needsThermalResume { return "Speech paused · Let your iPhone cool, then tap Resume" }
-            if needsMemoryPressureResume { return "Speech paused · Tap Resume to continue" }
             switch localPhase {
             case .idle: return "Prepare to talk on this iPhone"
             case .preparing: return isCompactSpeechPreparation ? "Getting your speech ready again…" : "Preparing on this iPhone…"
@@ -382,7 +373,6 @@ import MuralCore
         api.cancelRequests(); languageGeneration = UUID()
         startAfterConsent = false; showAIConsent = false
         sessionMode = .local
-        memoryPressurePaused = false
         selectedTheme = nil; pendingTopic = nil
         var record = SessionRecord(languageID: "en", title: pair == .vietnameseEnglish ? "On-device conversation" : "Taiwan Mandarin–English practice")
         record.localSpeechPair = pair
@@ -399,7 +389,7 @@ import MuralCore
         try Task.checkCancellation()
         #if DEBUG && targetEnvironment(simulator)
         if let preview = speechSetupPreview, preview != "unavailable" {
-            needsSpeechDownload = preview != "cached" && preview != "resume" && preview != "memory-warning" && preview != "memory-warning-drain"
+            needsSpeechDownload = preview != "cached" && preview != "resume"
             return needsSpeechDownload ? SpeechDownloadOffer(recognitionBytes: 64_000_000,
                 recognitionStorageBytes: 128_000_000, availableBytes: 1_000_000_000, needsVoice: preview == "voice", needsSpeechDetection: false) : nil
         }
@@ -621,7 +611,6 @@ import MuralCore
         let eligible = session?.hasUserMessage == true
         localTimeout?.cancel(); localTimeout = nil
         stoppedDuringPreparation = localPhase == .preparing
-        memoryPressurePaused = false
         awaitingSpeechDownload = false; speechDownloadOffer = nil
         localTask?.cancel(); localResumeTask?.cancel(); localResumeTask = nil
         speechModels.cancel()
@@ -969,7 +958,6 @@ import MuralCore
         localResumeTask?.cancel(); localResumeTask = nil
         if isLocal { localAudio.stop() }
         localPhase = .idle; localReplySeconds = nil; localModelSeconds = nil
-        memoryPressurePaused = false
         speechSetupError = nil; speechSetupDiagnostic = nil; stoppedDuringPreparation = false
         awaitingSpeechDownload = false; speechDownloadOffer = nil
         sessionMode = nil
@@ -980,9 +968,9 @@ import MuralCore
         inputLevel = 0; outputLevel = 0; state = .idle
     }
     func refreshLocalMeaning() { if isLocal, !localAudio.lastRecordingHadNoSpeech { scheduleTranslation() } }
-    private func resumeLocal(allowingMemoryPressureResume: Bool = false) {
+    private func resumeLocal() {
         guard isLocal, state == .active, localPhase == .paused, localResumeTask == nil,
-              (!memoryPressurePaused || allowingMemoryPressureResume), let id = session?.id else { return }
+              let id = session?.id else { return }
         let finishing = localTask
         let pair = localSpeechPair
         detailedSpeechSetup = shouldShowDetailedSpeechSetup(for: pair)
@@ -995,12 +983,11 @@ import MuralCore
                   self.localPhase == .preparing, self.session?.id == id else { return }
             do {
                 #if DEBUG && targetEnvironment(simulator)
-                if self.speechSetupPreview == "resume" || self.speechSetupPreview == "memory-warning" || self.speechSetupPreview == "memory-warning-drain" {
+                if self.speechSetupPreview == "resume" {
                     self.previewSetupProgress = .init(.preparingSpeech)
                     try await Task.sleep(for: .seconds(2))
                     try self.checkLocal(id)
                     self.markSpeechPreparationSucceeded(for: pair)
-                    self.memoryPressurePaused = false
                     self.session?.localPausedAt = nil
                     self.saveIfEligible()
                     self.lastActivity = .now
@@ -1012,7 +999,6 @@ import MuralCore
                 try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
                 try self.checkLocal(id)
                 self.markSpeechPreparationSucceeded(for: pair)
-                self.memoryPressurePaused = false
                 self.session?.localPausedAt = nil
                 self.saveIfEligible()
                 self.lastActivity = .now
@@ -1034,21 +1020,15 @@ import MuralCore
         }
     }
     var needsThermalResume: Bool { isLocal && localAudio.thermalStopped }
-    var needsMemoryPressureResume: Bool { isLocal && memoryPressurePaused }
     var thermalAlertPresented: Bool { needsThermalResume && error == LocalTTSError.phoneTooWarm.localizedDescription }
     func resumeAfterCooling() {
         guard !localResourcesBusy else { return }
         do {
             try localAudio.resumeAfterCooling()
             error = nil; notice = nil
-            if localPhase == .paused { resumeLocal(allowingMemoryPressureResume: true) }
+            if localPhase == .paused { resumeLocal() }
             else { start() }
         } catch { self.error = error.localizedDescription }
-    }
-    func resumeAfterMemoryPressure() {
-        guard needsMemoryPressureResume, !needsThermalResume, !localResourcesBusy else { return }
-        error = nil; notice = nil
-        resumeLocal(allowingMemoryPressureResume: true)
     }
     #if DEBUG && targetEnvironment(simulator)
     // UI-only fixture: no catalog override, native model, network, microphone or personal data.
@@ -1082,15 +1062,9 @@ import MuralCore
         state = .active; localPhase = .ready
         previewSetupProgress = nil
         _ = try appendLocal("Hi! What did you do today?", speaker: .assistant, sessionID: sessionID)
-        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
+        if speechSetupPreview == "resume" {
             _ = try appendLocal("I went for a walk by the river.", speaker: .user, sessionID: sessionID)
             _ = try appendLocal("That sounds peaceful. What did you enjoy most?", speaker: .assistant, sessionID: sessionID)
-        }
-        if speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
-            NotificationCenter.default.post(name: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"), object: nil)
-            if speechSetupPreview == "memory-warning-drain" {
-                await Task.detached { try? await Task.sleep(for: .seconds(4)) }.value
-            }
         }
     }
     func prepareThermalStopPreview() {
@@ -1103,7 +1077,7 @@ import MuralCore
     #endif
 
     func resume() {
-        if needsThermalResume || memoryPressurePaused { return } // Safety pauses require an explicit Resume.
+        if needsThermalResume { return } // Cooling/foregrounding must never restart speech by itself.
         if isLocal { resumeLocal() }
         refreshLocalMeaning()
     }

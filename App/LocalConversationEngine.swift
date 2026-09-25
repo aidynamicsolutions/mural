@@ -146,7 +146,6 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
-    enum SafetyStopReason: Equatable { case memoryPressure, thermal }
     @ObservationIgnored var onPlayback: ((Double, Double?, Bool) -> Void)?
     private(set) var playbackStartSeconds: Double?
     private(set) var playbackDurationSeconds: Double?
@@ -262,6 +261,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     }
 
     func resumeAfterCooling() throws {
+        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
         guard ttsThermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { throw LocalTTSError.phoneTooWarm }
         thermalStopped = false
         asrError = nil
@@ -270,12 +270,15 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     func stopForTTSSafety(footprint: UInt64, thermal: ProcessInfo.ThermalState) {
         let memoryStop = footprint >= 3_000_000_000
         guard memoryStop || thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue else { return }
-        let reason: SafetyStopReason
-        if memoryStop { reason = .memoryPressure }
-        else { thermalStopped = true; reason = .thermal }
+        let message = memoryStop
+            ? "On-device speech stopped at the 3.0 GB sampled memory guard. Close Mural before trying again."
+            : LocalTTSError.phoneTooWarm.localizedDescription
+        if memoryStop { stagedMemoryWarning = true }
+        else { thermalStopped = true }
         stop()
+        asrState = .failed; asrError = message
         logger.fault("tts_safety_stop max_sampled_footprint_bytes=\(footprint, privacy: .public) thermal_state=\(thermal.rawValue, privacy: .public)")
-        onSafetyStop?(reason)
+        onTTSSafetyStop?(message)
     }
     private static let conversationTTSPreferenceKey = "localConversationTTSBackend"
     private(set) var conversationTTSBackend = LocalTTSBackend(
@@ -299,7 +302,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         UserDefaults.standard.set(speed.rawValue, forKey: "supertonicSpeed")
     }
 
-    var onSafetyStop: (@MainActor (SafetyStopReason) -> Void)?
+    var onTTSSafetyStop: (@MainActor (String) -> Void)?
     struct TTSSynthesisMetrics {
         let milliseconds: Double
         let audioMilliseconds: Double
@@ -441,7 +444,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         if ttsBackend == .supertonic, !neuralTTS.isReady { return false }
         return fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && !speechBusy
     }
-    var canPrepare: Bool { asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
+    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
     private var fireRedDiagnosticAllowsPrepare: Bool {
         #if MURAL_FIRERED_FILE_PROBE
         if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && !fireRedDiagnosticStarted }
@@ -494,6 +497,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         }
     }
     #endif
+    private var stagedMemoryWarning = false
+    private static let memoryWarningMessage = "Speech stopped after a memory warning. End this session, close Mural from the app switcher, then reopen it."
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
     private let synthesizer = AVSpeechSynthesizer()
     private var utterance: AVSpeechUtterance?
@@ -522,18 +527,25 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         logger.notice("local_talk_asr_backend backend=\(Self.conversationASRBackend, privacy: .public)")
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
-        memoryWarningObserver = NotificationCenter.default.addObserver(
-            forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
-            object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let previousState = self.asrState.rawValue
-                    self.stop()
-                    VietnameseEnglishRecognizer.logMemory(stage: "memory-warning", model: self.asrModel.rawValue)
-                    self.logger.warning("asr_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
-                    self.onSafetyStop?(.memoryPressure)
+        #if canImport(CoreAI)
+        if PhoWhisperStagedEncoder.enabled || FireRedEnglishRecognizer.available {
+            memoryWarningObserver = NotificationCenter.default.addObserver(
+                forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
+                object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        let previousState = self.asrState.rawValue
+                        VietnameseEnglishRecognizer.logMemory(stage: "staged-memory-warning", model: self.asrModel.rawValue)
+                        self.stagedMemoryWarning = true
+                        self.stop()
+                        self.asrState = .failed
+                        self.asrError = Self.memoryWarningMessage
+                        self.onTTSSafetyStop?(Self.memoryWarningMessage)
+                        self.logger.fault("asr_staged_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
+                    }
                 }
-            }
+        }
+        #endif
     }
 
     isolated deinit {
@@ -549,6 +561,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         try Task.checkCancellation()
         guard asrTask == nil else { throw SpeechError.busy }
         guard !speechBusy else { throw LocalTTSError.busy }
+        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
         guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
         lastSynthesis = nil
         let id = try speechAdmission.begin()
@@ -775,6 +788,9 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
             _ = await warmup.result
             stagedDecoderWarmup = nil
             try Task.checkCancellation()
+        }
+        guard !stagedMemoryWarning else {
+            throw CaptureError.operation(asrError ?? Self.memoryWarningMessage)
         }
         await ttsCleanup?.value
         try Task.checkCancellation()

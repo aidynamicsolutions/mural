@@ -2850,15 +2850,15 @@ extension CoreAIPhoWhisper {
                     try require(audio.asrState == .ready && audio.canRecord, "Preparation did not reach Ready")
                     try event("prepare-\(iteration)-ready")
                     if action == "memory" {
-                        // Exercise the real release path without allocating 3 GB or stressing the phone.
+                        // Exercise the real guard without allocating 3 GB or stressing the user's phone.
                         audio.stopForTTSSafety(footprint: 3_000_000_000, thermal: .nominal)
-                        try require(!audio.canRecord && audio.asrState == .ended, "Memory pressure did not stop speech")
-                        while audio.asrBusy || audio.speechBusy || audio.modelWorkDraining {
-                            try Task.checkCancellation()
-                            try await Task.sleep(for: .milliseconds(50))
-                        }
-                        try require(audio.canPrepare, "Released speech resources did not restore explicit preparation")
-                        try event("simulated-memory-pressure-released-model")
+                        try require(!audio.canPrepare && !audio.canRecord, "Memory guard did not close admission")
+                        do {
+                            try await audio.prepareConversation(model: model)
+                            throw NSError(domain: "LocalSpeechQA", code: 3, userInfo: [NSLocalizedDescriptionKey: "Memory guard allowed a new preparation"])
+                        } catch let error as NSError where error.domain == "LocalSpeechQA" { throw error }
+                        catch { /* Expected: the real owner's memory-warning latch refuses preparation. */ }
+                        try event("simulated-memory-guard-rejected-restart")
                         break
                     }
                 }

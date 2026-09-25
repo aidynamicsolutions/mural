@@ -238,42 +238,6 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
         app.buttons["speech-download-decline"].tap()
     }
-    func testMemoryPressurePausesSpeechUntilExplicitResumeAndPreservesTurns() {
-        let app = setupPreview("memory-warning-drain")
-        defer { restorePremium(app) }
-
-        let status = app.staticTexts["conversation-status"]
-        let resume = app.buttons["local-memory-pressure-resume"]
-        XCTAssertTrue(resume.waitForExistence(timeout: 8))
-        XCTAssertEqual(status.label, "Speech paused · Tap Resume to continue")
-        XCTAssertFalse(resume.isEnabled)
-        XCTAssertFalse(app.staticTexts["conversation-notice"].exists)
-        XCTAssertFalse(app.alerts["A little interruption"].exists)
-        keepScreenshot("Speech paused quietly while the conversation stays visible", app: app)
-
-        XCUIDevice.shared.press(.home)
-        app.activate()
-        XCTAssertEqual(status.label, "Speech paused · Tap Resume to continue")
-        app.tabBars.buttons["Words"].tap()
-        app.tabBars.buttons["Talk"].tap()
-        XCTAssertEqual(status.label, "Speech paused · Tap Resume to continue")
-
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: resume)
-        waitForExpectations(timeout: 8)
-        resume.tap()
-        expectation(for: NSPredicate(format: "label CONTAINS %@", "Ready"), evaluatedWith: status)
-        waitForExpectations(timeout: 8)
-        XCTAssertTrue(app.staticTexts["That sounds peaceful. What did you enjoy most?"].exists)
-        XCTAssertTrue(app.staticTexts["I went for a walk by the river."].exists)
-        keepScreenshot("Conversation after explicit speech resume", app: app)
-
-        app.buttons["local-conversation-end"].tap()
-        app.buttons["local-conversation-transcript"].tap()
-        XCTAssertTrue(app.staticTexts["I went for a walk by the river."].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["That sounds peaceful. What did you enjoy most?"].exists)
-        app.buttons["Done"].tap()
-    }
-
     func testSuccessfulSpeechPreparationResumesCompactlyWithoutHidingConversation() {
         let app = setupPreview("resume", clearSpeechPreparation: true)
 
