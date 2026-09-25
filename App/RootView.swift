@@ -212,6 +212,11 @@ struct TalkView: View {
                     .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-thermal-resume")
+            } else if coordinator.needsMemoryPressureResume {
+                Button("Resume", systemImage: "play.fill") { coordinator.resumeAfterMemoryPressure() }
+                    .buttonStyle(.bordered).controlSize(.regular).disabled(coordinator.localResourcesBusy)
+                    .accessibilityHint("Resume is available after interrupted speech work has finished.")
+                    .accessibilityIdentifier("local-memory-pressure-resume")
             }
             if let progress = coordinator.speechSetupProgress, !coordinator.isCompactSpeechPreparation {
                 SpeechSetupCard(progress: progress, canCancel: !coordinator.isStoppingSpeechSetup) { coordinator.end() }
