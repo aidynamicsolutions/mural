@@ -9,6 +9,8 @@
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>LSRequiresIPhoneOS</key><true/>
+<key>BGTaskSchedulerPermittedIdentifiers</key><array><string>$(PRODUCT_BUNDLE_IDENTIFIER).speech-setup.*</string></array>
+<key>UIBackgroundModes</key><array><string>processing</string></array>
 <key>NSMicrophoneUsageDescription</key><string>Mural listens while you practise speaking. On-device speech recognition stays on this iPhone. GPT-Live sends your voice to OpenAI after separate consent.</string>
 <key>UIUserInterfaceStyle</key><string>Light</string>
 <key>UILaunchScreen</key><dict/>

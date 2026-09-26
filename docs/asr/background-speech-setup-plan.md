@@ -1,611 +1,164 @@
-# Background First-Time Speech Setup Plan
+# Resumable first-time speech setup
 
-**Status:** Owner-reviewed revised direction; implementation not started.
+Updated: 2026-09-24
 
-**Updated:** 2026-09-24
+Review base: `c67e3d302428fe79b2ecbe6664bc2cafe9c45ae0` on `mvp`.
 
-This plan covers the expensive first-time on-device speech setup. It is separate from the warm conversation-resume delay tracked in ../../todo.md.
+Status: independently reviewed implementation direction. A source patch and automated evidence are not physical-device qualification. Do not enable optional native background compute until the qualification below passes.
 
-## Product decision
+## Product contract
 
-The guarantee is **resumability**, not unconditional background execution.
+**Mural preserves verified, reusable work. Background execution is best effort.**
 
-A learner who starts first-time speech setup should not lose useful completed work merely because they lock the iPhone, switch apps, iOS ends a background task, the network drops, or the process is later relaunched.
+Starting setup creates a durable job independently of the empty conversation draft. Ordinary foreground return reconnects to the same live job without a second tap. Relaunch after process loss offers **Resume setup**; it never silently starts expensive native work. Explicit cancellation never auto-resumes. Ready always requires the current process's normal native loading and contract validation.
 
-Background continuation is an optimization layered on top of that guarantee:
+“Preserved work” means actual surviving partial downloads, atomically published verified packages, and valid native caches/receipts. It does not mean model residency, an instruction-level native checkpoint, immunity to storage failure/OS cache eviction, or successful subcalls below an existing component's durable success boundary. A corrupt/missing cache is revalidated and rebuilt under existing rules, not trusted because a checklist says complete.
 
-- Continue a stage in the background only when the real operation, current device, signed entitlements, and iOS resource policy permit it.
-- When a stage cannot legally or reliably continue in the background, stop at the nearest real safe boundary and resume it when Mural returns to the foreground.
-- Never claim to resume inside an opaque Core ML, Core AI, or upstream SDK call. If that call was interrupted before its success boundary, rerun that component.
-- Never repeat a completed download, verified package publication, valid Core AI specialization/cache, or valid Core ML preparation step unnecessarily.
-- Never declare speech Ready from a persisted flag alone. The current process must still load and validate the resources required to record safely.
+This feature does not change the Vietnamese staged Core AI encoder, Core ML decoder, precision, tokenizer, decoding policy, Taiwan backend, TTS policy, microphone policy, package security, or automatic-cloud-fallback prohibition. Warm conversation resume remains separate in `../../todo.md`.
 
-For the learner, the intended behavior is simple:
+## Independent review and material changes
 
-> Start setup once. Mural keeps completed work. If iOS lets setup continue while you are away, it does. If a step needs Mural open, Mural says so. Returning to the same live setup resumes automatically; after process termination or an explicit stop, Mural offers Resume setup.
+The original plan gets the central decision right: resumability before background privileges; one existing native owner; durable sources authoritative; no fake native percentages; conversation audio foreground-only. The managed installer and preparation receipts already implement recovery, so neither needs replacement.
 
-## Current behavior and existing strengths
+Simplifications:
 
-Today, when first-time setup is in progress and Mural backgrounds, ConversationCoordinator.background() cancels speech setup and ends the empty draft. Tapping **Prepare & start** starts orchestration again.
+* Keep one small job record and the existing `localTask`. Do not add a second native/download executor, durable work queue, generic workflow framework, custom Live Activity, background URLSession, or per-model shadow receipt database.
+* An ordinary interruption does not need to cancel the orchestration task itself. Signal cancellation to the current child owner, await its actual drain, then park the same orchestration task until foreground. Explicit Cancel/system interruption can cancel the outer owner, but admission remains closed until it returns.
+* Re-run preflight on **every** attempt, including an already-approved resume. Approval is permission for the compatible job, not evidence that downloads remain installed. Reuse existing verified package/cache/receipt paths rather than using the last saved stage as a program counter.
+* Keep all upstream acquisition and native stages foreground-only in the MVP. Qualifying managed transfers does not qualify voice, VAD, model loading, or specialization.
 
-Several underlying components already have the right recovery properties:
+Corrected Apple assumptions:
 
-- Core/LocalSpeechProvisioning.swift keeps partial managed ASR package files, resumes from actual surviving file lengths with strict HTTP ranges, rehashes completed files, and publishes verified packages atomically.
-- Valid downloaded assets remain reusable after cancellation or process loss.
-- Core/CoreMLPreparationReceipt.swift records only successful preparation for an exact model/path/device/OS/compute contract. A matching receipt can skip explicit Core ML prewarming, but normal model loading and contract validation remain authoritative.
-- The current Vietnamese path uses a persistent Core AI specialization/cache for the staged encoder plus a Core ML decoder preparation receipt/cache. A successful first setup is therefore designed to make later starts much cheaper.
-- Existing cancellation and admission rules keep one model owner active until native work drains; stale late results do not become Ready or start a second owner.
+* Background Inference is for background **Neural Engine** access, including access outside a continued-processing task. It is not a blanket requirement for CPU-only Core ML. It is currently documented as beta and requires signed-device verification.
+* `BGTaskScheduler.supportedResources` is a class property. GPU access needs both runtime support and the signed Background GPU Access entitlement. Do not invent CPU/ANE resource flags or infer signed capabilities from an entitlements source file.
+* Submission success is not receipt of an active execution grant. The UI says it can continue away only after the handler has delivered the matching task and the current stage is eligible.
+* Expiration has no reliable user-cancel-versus-resource-expiration reason parameter. Use one conservative `systemInterrupted` reason and explicit Resume for either. Never auto-resume after the system UI's Cancel.
+* A task can disappear without any callback. Persist before work, at real boundaries, and before acknowledging a pause/cancel. A continuation's completion is not application Ready.
+* Completed task UI is transient. “Open Mural to finish” must also be represented in the app's durable job/UI; do not promise that a completed system activity remains visible.
+* Apple's current initializer documentation describes a permitted wildcard family, while WWDC25 also demonstrates a static identifier. Use one bundle-prefixed permitted family with an exact, unique submitted/registered suffix per lease. This isolates delayed deliveries from newer attempts without a second job queue. Verify configuration in the selected SDK and signed app.
 
-The missing layer is durable setup orchestration: today the coordinator treats backgrounding as the end of first-time setup rather than as an interruption to a resumable job.
+Missing lifecycle cases now included: foreground return before native drain, background before task delivery, delivery after cancellation, expiration during publication, consent sheet dismissal during lifecycle changes, incompatible pair/voice changes, storage/protected-data failure, double completion, cancellation after native success but before receipt commit, and inactive foreground transitions before greeting/audio activation.
 
-Relevant existing documentation is in speech-setup-ux.md. Relevant code is primarily App/ConversationCoordinator.swift, App/LocalConversationEngine.swift, App/LocalNeuralTTS.swift, Core/LocalSpeechProvisioning.swift, Core/CoreMLPreparationReceipt.swift, Core/SpeechPreparationStep.swift, and Core/SpeechSetupProgress.swift.
+## Actual production resources at the review base
 
-## 1. First principle: model setup as a resumable pipeline
+| Component | Source/configuration | MVP away policy |
+| --- | --- | --- |
+| Managed recognition installer | Existing bounded HTTP ranges, SHA-256, atomic publication | Eligible only with a delivered continued-processing lease |
+| Vietnamese encoder | `PhoWhisperStagedEncoder.prepareForConversation`: `SpecializationOptions(preferredComputeUnitKind: .gpu)`; `AIModelCache.default`; persistent specialization | Foreground only |
+| Vietnamese decoder | `stagedDecoderCompute = .cpuAndNeuralEngine`; existing staged decoder receipt | Foreground only |
+| Vietnamese Mel validation/frontend | Explicit `.cpuAndGPU`, including final decoder/frontend validation | Foreground only; the encoder is not the only GPU-dependent component |
+| Speech detection | `VadConfig(... computeUnits: .cpuAndNeuralEngine)` in both production recognizers | Foreground only; existing unavailable-detector policy unchanged |
+| Mural Voice | `Supertonic3Manager(computeUnits: .cpuAndNeuralEngine, vectorEstimator: .aneBucketed(.int4))` | Acquisition and initialization foreground only until independently qualified |
+| Taiwan recognition | Breeze's explicit CPU/Neural Engine encoder and decoder; Mel uses the pinned SDK's default | Foreground only; inspect the locked SDK default during physical qualification |
+| Greeting/tutor/microphone/playback | Existing conversation/audio owners | Foreground only, never a setup background stage |
 
-Treat first-time setup as a sequence of stages with different durability and resource requirements, not as one monolithic background operation.
+The repository entitlements contain Sign in with Apple, not proof of either native background capability. No signed binary or provisioning profile was inspected by this review. Add neither native entitlement speculatively.
 
-The logical pipeline is:
+## Durable state
 
-1. Restore/check previous setup state.
-2. Validate selected speech pair and tutor availability.
-3. Inspect installed recognition, voice, and speech-detection assets.
-4. Ask for download consent when required.
-5. Download managed recognition assets.
-6. Verify and atomically publish recognition assets.
-7. Acquire any upstream-owned voice/style or speech-detection assets.
-8. Prepare the selected voice.
-9. Prepare speech detection.
-10. Prepare/validate the selected ASR backend:
-   - Vietnamese: staged Core AI encoder work plus Core ML decoder work under the current production path.
-   - Taiwan: Breeze/WhisperKit Core ML work under the current production path.
-11. Perform final in-process readiness checks.
-12. If foregrounded, start the greeting/conversation. If backgrounded, wait for foreground.
+Persist a bounded, versioned Codable `SpeechSetupJob` atomically in Application Support, outside learning/session records. The record contains job UUID, pair, preparation/consent compatibility identity, timestamps, status, current stage, last safe orchestration boundary, download approval, and a closed-set interruption reason. It contains no audio, transcript, arbitrary exception description, native pointer, model-resident flag, or cross-process Ready claim.
 
-Not every pair executes every stage. Build the planned stage list from the selected pair and actual missing work.
+The compatibility identity includes the selected pair, qualified backend contract, selected voice/style, and reviewed package/catalog identity. A relevant contract or consent-scope change invalidates approval. It does not delete packages or caches. Native cache/receipt validation still detects device/OS/path/runtime changes.
 
-Each stage must declare:
+Restore decodes a small envelope first. Unknown future schemas, malformed/oversized records, impossible dates, and incompatible identities cannot start work. Preserve assets and offer a new explicit setup; never silently reinterpret future fields. No age-only expiry should force model downloads: inventory, not elapsed time, determines missing work.
 
-- whether its result is durable across process death;
-- how its success is revalidated;
-- what resources it requires;
-- whether it may continue under BGContinuedProcessingTask on this signed device;
-- whether it has real measurable progress;
-- what the learner should see.
+A successfully written cancelled record is not resumable automatically. A previously running, waiting, or prepared record is an interrupted job on cold launch; offer Resume, then revalidate. A `complete` job never bypasses current-process loading. Clear the job only when safely transitioning into the ordinary foreground conversation, or replace it after a new explicit setup decision.
 
-## 2. Persist one minimal SpeechSetupJob
+Creation/approval writes must succeed before expensive work starts. Later checkpoint failure stops admission to new work and surfaces a recoverable storage error. Completed asset publication remains reusable even if the job record write failed. Do not swallow persistence failures while telling the learner everything was saved. Lock-screen data protection must be tested; do not weaken existing asset protection to manufacture background support.
 
-Add a small versioned, Codable setup record, persisted atomically outside the conversation draft.
+## Single-owner control flow
 
-Suggested fields:
+The existing `runLocalPreparation` remains the only orchestrator. Its live loop is:
 
-- schema version;
-- setup job UUID;
-- LocalSpeechPair;
-- selected ASR/model identity needed to detect an incompatible resume;
-- createdAt / updatedAt;
-- status: running, waitingForForeground, needsResume, cancelled, failed, complete;
-- last fully completed orchestration boundary;
-- current learner-facing stage for restoration/diagnostics;
-- whether the user explicitly approved downloads;
-- optional interruption reason suitable for non-sensitive diagnostics.
+1. Wait for foreground when required, honour explicit cancellation, and await the existing child owners' drain.
+2. Recheck pair/tutor availability and actual managed, voice, and detection inventory.
+3. Obtain consent if the compatible job has not approved the required acquisition. Consent never authorizes unrelated future packages.
+4. Download/verify/publish managed recognition files through the unchanged installer. Persist publication only after it succeeds.
+5. End the managed-work continuation lease before entering unqualified work. If away, save `waitingForForeground` and park the same owner.
+6. Run existing voice/detection/recognizer preparation, with real stage reporting. Existing cache/receipt lookups decide whether costly preparation can be skipped.
+7. Perform authoritative in-process readiness checks. If inactive, wait; do not append a greeting, activate audio, record, or invoke tutor generation.
+8. Enter the ordinary foreground greeting/conversation path, then clear setup orchestration state.
 
-Do **not** persist claims such as modelResident = true or nativePrepared = true as cross-process readiness.
+For ordinary backgrounding during a foreground-only operation, set the pause intent and checkpoint **before** requesting child cancellation. Do not discard the draft/job. Do not begin another component until the child returns and all cleanup drains. A quick foreground return only wakes the owner; it never opens admission early. A late result from an interrupted generation cannot become Ready.
 
-The persisted record is an orchestration hint. Durable underlying state remains authoritative:
+For system interruption, explicit Cancel, pair/mode mutation, network failure, or process loss, preserve underlying work and follow the appropriate explicit-resume/cancel policy. App Cancel and system interruption are different durable reasons. Existing post-conversation assessment and warm-resume behavior remain separate.
 
-- managed package files and active package pointer;
-- upstream voice/VAD cache inventory;
-- Core AI cache lookup/identity validation;
-- Core ML preparation receipt;
-- normal native load and ABI/shape validation.
+The foreground waiter must be cancellation-safe and single-shot. Cancellation-before-wait, cancellation-during-wait, repeated scene notifications, and wake-before-drain all need tests. Clearing a system-task handle is never authority to clear the native owner.
 
-On restore, recompute the remaining work from those real sources rather than blindly trusting the saved stage number.
+## Continued processing
 
-Prefer a small atomic Application Support record rather than coupling setup lifetime to an empty SessionRecord. A greeting-only/empty conversation draft should not own whether expensive model setup survives.
+`App/SpeechSetupContinuation.swift` owns only BackgroundTasks registration/submission, lease identity, system progress/title, interruption forwarding, and exactly-once completion. It has no package/model business logic.
 
-## 3. Resume semantics
+Register and submit a concrete identifier under one bundle-prefixed permitted family after explicit start/approval, while foregrounded. Use `.fail`; do not build an additional queue or wait indefinitely for permission. Request no optional native resources for the managed segment. A failed/unavailable submission leaves foreground setup usable and the keep-open message visible.
 
-### Same process, ordinary lock/app switch
+Deliveries and expiration handlers capture immutable lease identity. A late delivery for an ended lease is completed unsuccessfully and cannot attach to a new job. Completion detaches the lease before invoking callbacks. A lease ends at verified package publication or interruption; native admission remains independently owned until drain.
 
-If the learner merely backgrounds or locks the iPhone and later returns to the same live process:
+System progress must represent observed work, not time. Download bytes are range-validated received bytes; only the completed hash/publication boundary establishes a verified package. Verification remains indeterminate in the app unless its implementation reports real totals. Do not emit fake progress heartbeats to avoid expiration. A stalled task may be expired; resume handles that outcome.
 
-- if the existing setup owner is still running, reconnect the UI to that same owner;
-- if setup paused because the next stage required the foreground, automatically continue the same user-initiated job when Mural becomes active;
-- do not require another **Prepare & start** tap;
-- never create a second model/download owner.
+`UIApplication.beginBackgroundTask` is optional bounded cleanup grace only. Balance it on every path and expire it promptly; never hold it open as a multi-minute native-compute mechanism. The guarantee must work even when no grace is granted.
 
-### Process termination / task loss
+## Learner UI
 
-If Mural launches and finds a persisted setup job that was running or waiting when the previous process disappeared:
+Keep the real Talk setup card, with completed/current/pending major work. Build its plan from relevant work, rather than presenting irrelevant download rows for every pair. Current-process completions are observations, not persisted readiness. On cold restore, label retained work as subject to checking; do not show verified checkmarks from the record alone.
 
-- treat it as interrupted, not still running;
-- revalidate all durable state;
-- show **Resume setup** with a concise summary of what was kept;
-- do not silently restart expensive native work.
+Major stages: Checking setup; Downloading speech; Checking downloads; Preparing voice; Preparing speech recognition; Final checks; Ready.
 
-### Explicit cancellation or force quit
+Useful actual substages: Checking speech detection; Preparing speech detection; Preparing encoder; Preparing decoder; Loading speech models; Validating speech. Reuse `SpeechPreparationStep` and existing voice progress surfaces; add only missing boundary events. Normal learner text never includes framework names, precision names, ABI details, hashes, or native exception strings.
 
-An explicit Cancel should persist cancelled state and never auto-resume.
+Only managed byte progress and SDK-provided voice download fractions are determinate. Native specialization/prewarm/load/validation is indeterminate. No countdowns, elapsed-time-derived fractions, or stage-count-as-time estimates.
 
-A force quit may not provide a reliable callback. On the next launch, a previously running job should therefore be presented as **Resume setup**, not silently restarted.
-
-### Native operation interrupted in flight
-
-If iOS ends the task during an opaque native operation:
-
-- retain all earlier completed stages;
-- return to the previous safe boundary;
-- rerun only the interrupted native component when setup resumes;
-- do not claim instruction-level continuation inside Core ML/Core AI/FluidAudio/WhisperKit.
-
-## 4. Background continuation policy
-
-Use BGContinuedProcessingTask only as a continuation wrapper around the existing single setup owner. Do not create a second background copy of runLocalPreparation().
-
-Create a small App/SpeechSetupContinuation.swift whose responsibilities are limited to:
-
-- register the permitted task identifier;
-- submit a user-initiated continued-processing request;
-- request only resources that the upcoming stage actually requires;
-- expose the active system task to the existing setup owner;
-- update system title/subtitle/progress;
-- forward expiration/cancellation to the same setup owner;
-- complete the system task exactly once.
-
-The continuation wrapper must not own download/model business logic.
-
-### Submission strategy
-
-For the MVP, prefer immediate/fail behavior rather than building another queued setup state.
-
-If iOS cannot grant continued processing immediately:
-
-- continue the existing setup while Mural is foregrounded;
-- clearly tell the learner that Mural must remain open for the current setup;
-- preserve resumability if they leave anyway.
-
-Do not block setup waiting indefinitely for a background-task slot.
-
-### Per-stage eligibility
-
-Evaluate eligibility per stage, not with one global backgroundSupported Boolean.
-
-Examples:
-
-- Managed recognition download: network/CPU; continue under the task when available.
-- Package verification: CPU/file I/O; continue when permitted.
-- Voice/VAD acquisition or preparation: use actual SDK/resource requirements; do not promise background behavior before qualification.
-- Core ML CPU/Neural Engine work: background only when the signed build has the required Background Inference capability and physical-device testing confirms the actual operation.
-- Vietnamese staged Core AI GPU work: treat as foreground-only on iPhone unless BGTaskScheduler.supportedResources and the actually signed entitlement prove that this device/build may request the required GPU resource.
-- Greeting, microphone capture, recording, and conversation audio: always foreground-only.
-
-Do not infer requirements from the model name. Inspect the actual compute configuration used by each current Release path.
-
-### Foreground-only boundary while already backgrounded
-
-If a background-capable stage completes and the next required stage is foreground-only:
-
-1. commit/verify the completed durable work;
-2. persist waitingForForeground;
-3. update system/user messaging to say that Mural needs to be opened to finish;
-4. complete the continued-processing task;
-5. do not start the foreground-only native call.
-
-On foreground return, automatically continue the same job after revalidation.
-
-### Backgrounding during a foreground-only native call
-
-Request cancellation through the existing owner immediately.
-
-UIApplication.beginBackgroundTask may be used only as a short grace period to drain/persist safely. It is not the multi-minute setup mechanism.
-
-If the opaque native call does not return before iOS suspends/terminates the process, recovery starts from the previous safe boundary on Resume.
-
-## 5. Keep the existing managed downloader for this MVP
-
-Do not rewrite LocalSpeechProvisioning to a background URLSession merely to support this feature.
-
-The current downloader already provides the important correctness properties:
-
-- independent reviewed/pinned package metadata;
-- allowed-host policy;
-- strict Content-Range validation;
-- bounded response buffering;
-- resume from surviving file length;
-- full SHA-256 verification;
-- immutable/atomic publication.
-
-Running that existing installer under continued processing preserves those properties and gives resumability even if the system ends the task.
-
-A background URLSession migration can be evaluated separately if later needed. It should not be mixed into this patch because it changes networking/lifecycle behavior and deserves an independent security/recovery review.
-
-## 6. Granular learner-facing progress
-
-The learner should always be able to answer three questions:
-
-1. What is Mural doing now?
-2. What has already finished?
-3. Can I safely leave the app during this step?
-
-Extend SpeechSetupProgress so native preparation is no longer presented as one generic **Getting speech ready…** stage.
-
-Prefer a checklist of real work rather than a fake overall percentage.
-
-Example:
-
-- ✓ Speech files downloaded
-- ✓ Downloads verified
-- ✓ Mural Voice ready
-- ● Preparing speech recognition
-  - Preparing encoder…
-- ○ Final checks
-
-Then, when the subphase changes:
-
-- ✓ Speech files downloaded
-- ✓ Downloads verified
-- ✓ Mural Voice ready
-- ● Preparing speech recognition
-  - Preparing decoder…
-- ○ Final checks
-
-The UI may collapse steps that do not apply to the selected pair.
-
-### Proposed major user stages
-
-Keep the UI understandable while allowing internal subphases:
-
-1. **Checking setup**
-2. **Downloading speech**
-3. **Checking downloads**
-4. **Preparing voice**
-5. **Preparing speech recognition**
-6. **Final checks**
-7. **Ready**
-
-Useful recognition subphases include:
-
-- Checking speech files
-- Preparing speech detection
-- Preparing encoder
-- Preparing decoder
-- Loading speech models
-- Validating speech models
-
-Do not expose internal framework names such as Core AI, Core ML, WhisperKit, PAL8, FP8, or model hashes in the normal learner UI. Keep those in diagnostics.
-
-### Progress rules
-
-- Managed recognition downloads: show verified received bytes and a real percentage.
-- Upstream voice/style downloads: show an SDK fraction only when the SDK provides a real fraction.
-- File verification: indeterminate unless there is a trustworthy file/byte total that the implementation can report.
-- Native prewarm/load/specialization/validation: use named stage/substage plus indeterminate progress unless the underlying API provides real progress.
-- Never invent a countdown.
-- Never turn stage count into an estimated time percentage.
-- The system continued-task progress may use completed work units/stages, but messaging must make clear it represents work completed, not a time estimate.
-
-### Background-safety message
-
-Show stage-specific guidance directly in the setup card.
-
-When the current stage is background-capable on this device/build:
+Delivered lease + eligible current stage:
 
 > You can lock your iPhone or switch apps. Mural will keep working when iOS allows. Completed work is saved.
 
-When the current/next stage requires foreground:
+Foreground-required stage or no delivered lease:
 
 > Keep Mural open for this step. Everything already completed is saved if you leave.
 
-When setup reaches a foreground-only boundary while the app is away:
+Waiting away:
 
 > Speech setup is partly complete. Open Mural to finish preparing speech.
 
-When iOS interrupts the job:
+Known OS interruption may say “Setup paused by iOS. Your completed work is saved.” When system cancellation cause is ambiguous, use “Setup paused. Your completed work is saved.” Both offer **Resume setup** and never silently restart.
 
-> Setup paused by iOS. Your completed work is saved.
+Cold restore:
 
-CTA: **Resume setup**
+> Mural will check your retained speech files and completed setup work before continuing.
 
-On cold relaunch with retained progress:
+CTA: **Resume setup**. Do not promise a specific retained artifact until inventory verifies it. Cancellation has an immediate acknowledgment plus a truthful draining state, with Start/Resume disabled until real admission reopens. Large text and VoiceOver must distinguish complete/current/pending without colour alone.
 
-> Your speech files and completed setup work were kept. Mural will check them before continuing.
+## Implementation and acceptance sequence
 
-CTA: **Resume setup**
+1. Durable record/store, same-owner foreground waiting and safe cold restore. Test serialization, future/corrupt/incompatible records, consent recomputation, storage failure, cancellation and drain races. This is the primary feature, independent of background privileges.
+2. Granular progress on the real Talk surface. Test actual download→verify, voice→recognition, encoder→decoder, final checks, waiting, Resume, cancellation/drain, large text and accessibility transitions.
+3. Managed-work continued processing, using the existing installer and owner. Test delayed delivery, failed submission, lock/app switch, expiration/system cancellation, package publication boundary and exactly-once completion.
+4. Optional native qualification, separately for each stage and pair. Inspect the signed app/profile, supported resources, locked SDK and physical device. Enable only a stage that independently passes. Unsupported GPU on the owner's iPhone is an accepted architecture outcome, not permission to redesign ASR.
 
-Do not say **Setup paused** merely because the app entered the background if work is still genuinely progressing.
+Acceptance requires no duplicate owner, no false Ready, no unnecessary download or valid preparation rebuild, safe rerun of interrupted opaque components, explicit cold Resume, same-process automatic continuation, truthful stage/background guidance, and no background/late microphone, greeting, tutor or audio. Native cache/receipt reuse never removes normal model loading and ABI/shape validation.
 
-## 7. System progress / Live Activity behavior
+Existing HTTP/installer tests remain authoritative for hosts, pins, strict ranges, surviving file lengths, corrupt partial recovery, full hashes, immutable publication, interrupted pointer publication and low storage. Existing receipt tests remain authoritative for cancelled/failed preparation and hit-plus-normal-load behavior. Do not weaken these tests to make setup appear resumable.
 
-Use the system UI supplied by BGContinuedProcessingTask rather than introducing a second custom Live Activity for the MVP.
+## Physical proof and stop conditions
 
-Keep title/subtitle aligned with the same learner-facing stage:
+Use the existing installed app container; do not uninstall, clear models, remove receipts, delete caches, or reset learning data. First qualify the current Vietnamese path on the owner's signed iPhone; then Taiwan separately. Simulator tests cannot qualify native compute or background execution.
 
-- Preparing speech for Mural
-- Downloading speech — 412 MB of 1.2 GB
-- Checking downloaded speech
-- Preparing your voice
-- Preparing speech recognition — encoder
-- Preparing speech recognition — decoder
-- Open Mural to finish setup
+Cover lock and app switch during managed download; foreground return before/after drain; background at encoder boundary and during native preparation; termination at each real durable boundary then explicit Resume; lease failure/late delivery/expiration/system cancellation; publication while backgrounded; no late greeting/microphone; retained bytes; encoder cache hit/miss; decoder receipt hit/miss; stage timing, memory and thermal warnings.
 
-System cancellation must cancel the same setup owner.
+Log only job/attempt/lease IDs and closed-set states: job created/restored/incompatible; stage enter/complete/interrupted; checkpoint saved/failed; selected away policy; continuation submitted/started/rejected/completed/system-interrupted/stale-delivery; native drain begin/end; current-process validation and Ready. Reuse existing `speech_preparation_step`, `coreml_preparation`, encoder specialization and asset-verification logs; add an explicit cache lookup hit/miss event where currently absent. Never log audio/transcripts or raw user-facing exception payloads.
 
-If cancellation occurs:
+Stop and report on overlapping owners, early admission release, unvalidated Ready, new automatic backend fallback, security-check weakening, a requested qualified-model/precision/backend change, memory warnings/crashes/Jetsam, late audio, corrupted resume state, or unavailable signing/capability proof. A failure to gain optional background execution is not itself a reason to change the backend.
 
-- stop admitting new setup/model work;
-- let existing native drain rules remain authoritative;
-- preserve durable completed work;
-- mark the job cancelled or needsResume according to the cancellation source;
-- never append a late greeting or start the microphone.
+## Apple references checked for this review
 
-## 8. Conversation boundary
+* [BGContinuedProcessingTask](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtask)
+* [BGContinuedProcessingTaskRequest](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtaskrequest)
+* [Request initializer and identifier family](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtaskrequest/init(identifier:title:subtitle:))
+* [Performing long-running tasks](https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados)
+* [WWDC25: Finish tasks in the background](https://developer.apple.com/videos/play/wwdc2025/227/)
+* [Supported resources](https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/supportedresources)
+* [Required resources](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtaskrequest/requiredresources)
+* [Background GPU Access](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.background-tasks.continued-processing.gpu)
+* [Background Inference](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.background-tasks.continued-processing.inference)
+* [beginBackgroundTask](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:))
 
-Speech setup and conversation start are separate responsibilities.
-
-Background setup must never:
-
-- activate the microphone;
-- start recording;
-- play the greeting;
-- append a greeting that implies a live conversation has started;
-- start tutor generation.
-
-If all required resource preparation completes while Mural is backgrounded:
-
-- mark the setup job complete/prepared for this process as appropriate;
-- finish the system background task;
-- wait for Mural to become active;
-- then enter the existing foreground greeting/conversation path.
-
-If the process was terminated after setup completion, normal restore rules still require authoritative load/validation before Ready.
-
-## 9. Exact implementation boundaries
-
-### App/ConversationCoordinator.swift
-
-Change background/lifecycle orchestration:
-
-- remove unconditional first-setup cancellation merely because the app backgrounds;
-- keep one localTask/setup owner;
-- attach/reconnect SpeechSetupContinuation to that owner;
-- persist SpeechSetupJob boundaries;
-- automatically continue waitingForForeground work on ordinary foreground return in the same process;
-- on cold restore, show Resume instead of auto-starting heavy work;
-- prevent greeting/microphone start while inactive;
-- retain generation/session identity and late-result protections.
-
-Do not duplicate runLocalPreparation().
-
-Refactor it only enough to expose real stage boundaries and to allow resume to recompute remaining work.
-
-### Core/SpeechSetupProgress.swift
-
-Expand learner-facing stages/substages.
-
-Keep the current invariant that only real downloadable progress can advertise a fraction/bytes.
-
-Add enough information for the UI to show:
-
-- completed major stages;
-- current major stage;
-- current substage;
-- whether the current stage is safe to continue away from Mural;
-- whether foreground is required.
-
-Keep diagnostic/native strings separate.
-
-### New minimal SpeechSetupJob persistence
-
-Place the small versioned record where it fits the current Core/App persistence architecture.
-
-Requirements:
-
-- atomic writes;
-- no audio/transcript content;
-- safe decode/migration for future schema changes;
-- stale/incompatible job invalidation;
-- explicit clear on successful transition into normal conversation or user cancellation as appropriate.
-
-### New App/SpeechSetupContinuation.swift
-
-Own only BackgroundTasks integration and system progress/cancellation.
-
-### Core/LocalSpeechProvisioning.swift
-
-For the first implementation, preserve installer architecture and security rules.
-
-Only add narrowly scoped progress/restoration surfaces if the coordinator cannot derive them today.
-
-### App/LocalConversationEngine.swift / LocalNeuralTTS.swift
-
-Do not change model weights, precision, decoder policy, ASR quality, or compute placement merely for background support.
-
-Expose/propagate more precise setup stage information where needed:
-
-- voice acquisition versus initialization;
-- speech-detection preparation;
-- encoder preparation;
-- decoder prewarm/load;
-- validation.
-
-Current native ownership/cancellation boundaries remain in force.
-
-### App/Info.plist and entitlements
-
-Add the permitted continued-processing task identifier.
-
-Do not claim or add Background GPU / Background Inference capabilities as available until the actual signing path is approved and verified.
-
-Runtime capability checks and signed-entitlement checks must drive the final per-stage background policy.
-
-## 10. Implementation sequence
-
-### Phase 1 — Resume-first state machine
-
-Implement before relying on any background compute capability.
-
-- Add SpeechSetupJob persistence.
-- Separate setup lifetime from the empty draft.
-- Recompute remaining work from durable state.
-- Automatically resume on ordinary same-process foreground return.
-- Show Resume setup after process loss/cold launch.
-- Preserve explicit Cancel semantics.
-- Add focused unit/coordinator tests.
-
-Success means backgrounding can no longer reset useful setup work even if every native stage still has to run in the foreground.
-
-### Phase 2 — Granular progress UX
-
-- Extend SpeechSetupProgress.
-- Add checklist/completed-stage presentation.
-- Add encoder/decoder/voice/detection/final-check substages.
-- Add clear safe-to-leave versus keep-Mural-open copy.
-- Add interruption and Resume copy.
-- Keep percentages truthful.
-- Add accessibility/large-text simulator coverage.
-
-### Phase 3 — Continued processing for background-capable work
-
-- Add SpeechSetupContinuation.
-- Register one permitted identifier.
-- Start it only after the user explicitly starts/approves setup.
-- Use the same existing setup owner.
-- Continue managed downloads/verification where permitted.
-- Stop at foreground-only boundaries.
-- Reconnect on foreground return.
-- Exercise system cancellation and expiration.
-
-### Phase 4 — Qualify optional native background resources
-
-On the actual physical target device and signed build:
-
-- inspect BGTaskScheduler.supportedResources;
-- verify the signed entitlements/provisioning profile;
-- independently test CPU-only, Neural Engine, and GPU-requiring stages;
-- enable background native execution only for stages that pass.
-
-If the Vietnamese Core AI GPU stage is unsupported on the target iPhone, that is an accepted architecture outcome: preserve the completed prior work, wait for foreground, then finish the GPU stage.
-
-Do not change the qualified speech backend merely to make that one stage background-capable.
-
-## 11. Test matrix
-
-### Resume and persistence
-
-1. Background during preflight.
-2. Background halfway through managed ASR download.
-3. Background after download but before publication.
-4. Background after package publication.
-5. Background during voice acquisition.
-6. Background during native encoder preparation.
-7. Background during decoder preparation.
-8. Relaunch after process termination at each durable boundary.
-9. Relaunch with an old/incompatible persisted job.
-10. Explicit Cancel followed by relaunch.
-
-For every case, verify:
-
-- no false Ready;
-- no duplicate setup owner;
-- no unnecessary redownload;
-- no unnecessary rerun of successfully durable native preparation;
-- interrupted opaque calls rerun safely;
-- the correct Resume/auto-resume behavior occurs.
-
-### Continued-processing behavior
-
-1. Lock the screen during a supported stage.
-2. Switch to another app during a supported stage.
-3. Return while the task is still active.
-4. Return after a supported stage finishes.
-5. Reach a foreground-only stage while away.
-6. Trigger/observe task expiration.
-7. Cancel through the system task UI.
-8. Exercise submission failure/unavailable background capability.
-
-### UX/progress behavior
-
-Verify the setup card changes through the actual phases, not only settled screenshots:
-
-- checklist completion;
-- byte progress;
-- download -> verification transition;
-- voice download -> voice preparation;
-- encoder -> decoder transition;
-- waiting for foreground;
-- interrupted/Resume;
-- cancelling/draining;
-- Ready.
-
-At every phase confirm that the safe-to-leave message matches the real execution policy.
-
-### Safety
-
-- No greeting while backgrounded.
-- No microphone activation while backgrounded.
-- No late greeting after cancellation/expiration.
-- No mode/pair mutation starts a second owner while the old one drains.
-- No receipt written after cancelled/failed native preparation.
-- Full package/model validation still gates Ready.
-- Thermal/memory safety behavior remains intact.
-
-## 12. Physical-device proof and telemetry
-
-Use content-free structured logging for setup boundaries:
-
-- setup job id/generation, but no user content;
-- stage enter/complete/interrupted;
-- background policy selected;
-- continued task submitted/started/completed/expired;
-- durable resume source: package partial, package installed, Core AI cache hit/miss, Core ML receipt hit/miss;
-- native component timing;
-- Ready.
-
-Do not log audio or transcript content.
-
-Measure stages separately. Do not infer a fixed completion estimate from one phone or from download percentage.
-
-The first physical qualification should use the current production Vietnamese path on the owner's iPhone, because it has the most complicated resource mix. Then qualify the Taiwan path separately.
-
-## 13. Acceptance criteria
-
-The feature is accepted when all of the following are true:
-
-1. A learner starts first-time setup once.
-2. Locking the iPhone or switching apps never resets already completed useful work.
-3. Background-capable work continues when iOS permits it.
-4. When the next stage requires Mural in the foreground, the app says so clearly and waits without discarding prior progress.
-5. Returning to the same live process automatically continues the existing user-initiated setup job where appropriate.
-6. After process termination/task loss, Mural shows **Resume setup**, revalidates durable state, and reruns only missing/interrupted work.
-7. Managed ASR downloads resume from verified surviving bytes rather than starting over.
-8. Valid Core AI/Core ML preparation caches/receipts are reused under their existing correctness rules.
-9. No second setup/model owner can overlap the first.
-10. No microphone, greeting, or conversation audio starts while backgrounded.
-11. Native work without a real progress callback never displays a fake percentage/countdown.
-12. The UI exposes enough stage granularity that the learner can tell what has finished, what is happening now, and whether it is safe to leave Mural.
-13. Speech becomes Ready only after the current process completes the authoritative native load/validation required for recording.
-
-A process eviction after successful setup can still require normal model reloading before recording is safe. The separate warm-return optimization in todo.md owns that latency; this plan does not promise permanent model residency.
-
-## Non-goals
-
-This work does not:
-
-- change Vietnamese or Taiwan ASR weights/precision/decoding quality;
-- replace the Core AI production path merely to obtain background GPU access;
-- guarantee iOS will always finish setup while the screen is locked;
-- checkpoint inside an opaque native SDK call;
-- introduce a second custom Live Activity;
-- migrate the managed installer to background URLSession;
-- solve App Store model hosting/provisioning;
-- solve warm conversation resume after process eviction.
-
-## Apple references
-
-- BGContinuedProcessingTask: https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtask
-- BGContinuedProcessingTaskRequest: https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtaskrequest
-- Performing long-running tasks on iOS and iPadOS: https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados
-- BGTaskScheduler supportedResources: https://developer.apple.com/documentation/backgroundtasks/bgtaskscheduler/supportedresources
-- Background GPU Access entitlement: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.background-tasks.continued-processing.gpu
-- Background Inference entitlement: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.background-tasks.continued-processing.inference
-- UIApplication.beginBackgroundTask: https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(expirationhandler:)
+Related source history: validated Core ML preparation `3a2734c45929caff9c62bc9222d1534eac8d022d`; managed speech/pair setup `ca2364f9e28bc2b7c61acb5ede5b8d038b522e04`; warm conversation visibility `ebf9bc04e3b77fd1c8c1e38bb0199d4ce6c8a2b8`. See `speech-setup-ux.md`, `local-speech-findings-handoff.md`, and `app-store-model-provisioning-release-blocker.md`; model hosting and distribution remain separate release gates.

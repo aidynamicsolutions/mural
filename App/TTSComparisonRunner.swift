@@ -162,7 +162,7 @@ import UIKit
     func memoryWarning() {
         safetyStopped = true
         stop()
-        error = "Experiment stopped after a memory warning. Close Mural before another test."
+        error = "Speech experiment stopped after an iPhone memory warning."
     }
 
     /// Exercises the actual app admission/cancellation seam with suspended work, not native inference.
@@ -194,19 +194,19 @@ import UIKit
 
             let sampledMemoryAudio = LocalConversationEngine()
             var sampledMemoryStopped = false
-            sampledMemoryAudio.onTTSSafetyStop = { _ in sampledMemoryStopped = true }
+            sampledMemoryAudio.onSafetyStop = { reason in sampledMemoryStopped = reason == .memoryPressure }
             sampledMemoryAudio.testTTSSafetySampler = { ["footprintBytes": 3_000_000_000] }
             sampledMemoryAudio.startTTSConversationMonitorForTesting()
             guard let sampledMemoryMonitor = sampledMemoryAudio.testTTSConversationMonitorTask else {
                 throw SafetyStop(message: "Memory safety monitor did not start.")
             }
             await sampledMemoryMonitor.value
-            try require(sampledMemoryStopped && !sampledMemoryAudio.canPrepare)
+            try require(sampledMemoryStopped && sampledMemoryAudio.canPrepare)
 
             let sampledThermalAudio = LocalConversationEngine()
             sampledThermalAudio.testThermalState = .serious
             var sampledThermalStopped = false
-            sampledThermalAudio.onTTSSafetyStop = { _ in sampledThermalStopped = true }
+            sampledThermalAudio.onSafetyStop = { reason in sampledThermalStopped = reason == .thermal }
             sampledThermalAudio.testTTSSafetySampler = { ["footprintBytes": 0] }
             sampledThermalAudio.startTTSConversationMonitorForTesting()
             guard let sampledThermalMonitor = sampledThermalAudio.testTTSConversationMonitorTask else {
@@ -225,11 +225,9 @@ import UIKit
             do { try await thermalAudio.speak("No automatic restart"); try require(false) } catch LocalTTSError.phoneTooWarm { }
             try thermalAudio.resumeAfterCooling()
             try require(!thermalAudio.thermalStopped && !thermalAudio.speechBusy)
-            // Memory lockout must survive cooling and explicit Resume.
+            // Memory pressure stops current work but does not latch the engine after drain.
             thermalAudio.stopForTTSSafety(footprint: 3_000_000_000, thermal: .nominal)
-            var memoryBlocked = false
-            do { try thermalAudio.resumeAfterCooling() } catch { memoryBlocked = true }
-            try require(memoryBlocked && !thermalAudio.canPrepare)
+            try require(thermalAudio.canPrepare && !thermalAudio.thermalStopped)
             #endif
             try self.audio.selectTTS(.apple)
             for text in ["", " \n\t", String(repeating: "a", count: 1_001)] {

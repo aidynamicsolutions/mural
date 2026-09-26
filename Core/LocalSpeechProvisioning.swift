@@ -8,9 +8,19 @@ import Observation
 /// instance resumes from actual file lengths and rehashes every file before publication.
 @MainActor @Observable public final class LocalSpeechProvisioning {
     public enum Phase: String, Sendable { case idle, checking, offered, downloading, verifying, installed, cancelling, paused, failed }
-    public private(set) var phase: Phase = .idle
+    public private(set) var phase: Phase = .idle { didSet { reportSetupProgress() } }
     public private(set) var package: SpeechPackage?
-    public private(set) var completedBytes: Int64 = 0
+    public private(set) var completedBytes: Int64 = 0 { didSet { reportSetupProgress() } }
+    /// Observation only; publication, range validation, pins and hashing remain unchanged.
+    public var onSetupProgress: (@MainActor (SpeechSetupProgress) -> Void)?
+    private func reportSetupProgress() {
+        switch phase {
+        case .checking: onSetupProgress?(.init(.checking))
+        case .downloading: onSetupProgress?(.init(.downloadingSpeech, completedBytes: completedBytes, totalBytes: package?.downloadBytes))
+        case .verifying: onSetupProgress?(.init(.checkingDownload))
+        default: break
+        }
+    }
     public private(set) var availableBytes: Int64 = 0
     public private(set) var error: String?
     private var worker: Task<Void, Never>?

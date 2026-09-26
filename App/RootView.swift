@@ -212,7 +212,18 @@ struct TalkView: View {
                     .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-thermal-resume")
+            } else if coordinator.needsMemoryPressureResume {
+                Button("Resume", systemImage: "play.fill") { coordinator.resumeAfterMemoryPressure() }
+                    .buttonStyle(.bordered).controlSize(.regular).disabled(coordinator.localResourcesBusy)
+                    .accessibilityHint("Resume is available after interrupted speech work has finished.")
+                    .accessibilityIdentifier("local-memory-pressure-resume")
             }
+            #if DEBUG && targetEnvironment(simulator)
+            if coordinator.holdingSetupPreviewDrain {
+                Button("Finish simulated interruption") { coordinator.finishSetupPreviewDrain() }
+                    .accessibilityIdentifier("preview-finish-setup-drain")
+            }
+            #endif
             if let progress = coordinator.speechSetupProgress, !coordinator.isCompactSpeechPreparation {
                 SpeechSetupCard(progress: progress, canCancel: !coordinator.isStoppingSpeechSetup) { coordinator.end() }
             }
@@ -224,8 +235,8 @@ struct TalkView: View {
                 if coordinator.canRetryLocalReply {
                     Button("Retry reply") { coordinator.retryLocalReply() }.frame(minHeight: 44)
                 }
-            } else if !coordinator.isRunning, coordinator.session == nil {
-                Button("Prepare & start", systemImage: "play.fill") { coordinator.start() }
+            } else if !coordinator.isRunning, coordinator.session == nil, !coordinator.needsThermalResume {
+                Button(coordinator.offersSpeechSetupResume ? "Resume setup" : "Prepare & start", systemImage: "play.fill") { coordinator.start() }
                     .buttonStyle(.borderedProminent).tint(MuralColor.orange).foregroundStyle(MuralColor.ink)
                     .controlSize(.large).disabled(coordinator.localResourcesBusy)
                     .accessibilityIdentifier("local-conversation-start")
@@ -344,6 +355,8 @@ private struct SpeechSetupCard: View {
             HStack(alignment: .top, spacing: 10) {
                 if progress.stage == .cancelled {
                     Image(systemName: "checkmark.circle").accessibilityHidden(true)
+                } else if progress.stage == .needsResume || progress.stage == .waitingForForeground {
+                    Image(systemName: "pause.circle").accessibilityHidden(true)
                 } else if progress.fraction == nil {
                     ProgressView().tint(MuralColor.ink).padding(.top, 2).accessibilityHidden(true)
                 }
@@ -358,8 +371,28 @@ private struct SpeechSetupCard: View {
                     VStack(alignment: .leading) { downloadSize; Text(fraction, format: .percent.precision(.fractionLength(0))) }
                 }.font(.caption).monospacedDigit()
             }
+            if progress.stage != .cancelled && progress.stage != .needsResume {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(progress.plannedStages, id: \.rawValue) { stage in
+                        let complete = progress.completedStages.contains(stage)
+                        let current = progress.stage.major == stage && !complete
+                        let state = complete ? "Complete" : current ? "Current" : "Pending"
+                        let label = complete ? stage.completedTitle : stage.title
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: complete ? "checkmark.circle.fill" : current ? "circle.inset.filled" : "circle")
+                                .accessibilityHidden(true)
+                            Text(label).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(label).accessibilityValue(state)
+                        .accessibilityIdentifier("speech-setup-step-\(stage.rawValue)")
+                    }
+                }
+            }
             Text(progress.detail).font(.footnote).foregroundStyle(MuralColor.secondary)
-            if canCancel {
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("speech-setup-away-policy")
+            if canCancel && progress.stage != .needsResume {
                 Button(role: .cancel, action: cancel) { Text("Cancel setup").frame(minHeight: 44) }
                     .accessibilityIdentifier("speech-setup-cancel")
             }

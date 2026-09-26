@@ -126,10 +126,14 @@ actor BreezeEnglishRecognizer {
         loaded.textDecoder.isModelMultilingual = true
         do {
             // Same existing VAD implementation/policy, no new detector or cropped audio.
+            await SpeechSetupReporting.emit(.stage(.checkingDetection))
+            try await SpeechSetupReporting.checkAdmission()
             vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)
             var detector: VadManager?
             if vadMode != .off {
                 do {
+                    await SpeechSetupReporting.emit(.stage(.preparingDetection))
+                    try await SpeechSetupReporting.checkAdmission()
                     detector = try await VadManager(config: VadConfig(
                         defaultThreshold: SpeechPresencePolicy.threshold, computeUnits: .cpuAndNeuralEngine))
                 } catch is CancellationError {
@@ -152,7 +156,8 @@ actor BreezeEnglishRecognizer {
                 VietnameseEnglishRecognizer.logMemory(stage: "load-begin", model: Self.identity)
                 defer { VietnameseEnglishRecognizer.logMemory(stage: "load-end", model: Self.identity) }
                 try await loaded.loadModels()
-                try Task.checkCancellation()
+                await SpeechSetupReporting.emit(.stage(.validatingSpeech))
+                try await SpeechSetupReporting.checkAdmission()
                 guard loaded.textDecoder.logitsSize == 51865, loaded.audioEncoder.embedSize == 1280,
                       loaded.featureExtractor.melCount == 80, loaded.featureExtractor.windowSamples == 480_000 else {
                     throw Failure("Breeze compiled frontend/encoder/decoder shapes do not match.")

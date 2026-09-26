@@ -15,6 +15,36 @@ import MuralCore
     var isLocal: Bool { (sessionMode ?? mode) == .local }
     let localAudio = LocalConversationEngine()
     let speechModels = LocalSpeechProvisioning()
+    private static let setupStorageURL = setupRecordURL()
+    private let setup = SpeechSetupControl(store: .init(file: ConversationCoordinator.setupStorageURL))
+    private let setupContinuation = SpeechSetupContinuation()
+    private var setupConsentOffer: SpeechDownloadOffer?
+    private var setupCheckpointFailed = false
+    private static func setupRecordURL() -> URL {
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--preview") {
+            // Stable only for an explicit, unique UI-test run; never the real setup record.
+            let prefix = "--preview-setup-run="
+            let supplied = ProcessInfo.processInfo.arguments.first { $0.hasPrefix(prefix) }
+                .flatMap { UUID(uuidString: String($0.dropFirst(prefix.count))) }
+            return URL.applicationSupportDirectory.appending(path:
+                "Mural/SetupUITests/\((supplied ?? UUID()).uuidString)/job.json")
+        }
+        #endif
+        return URL.applicationSupportDirectory.appending(path: "Mural/SpeechSetup/job.json")
+    }
+    private var setupIdentity: SpeechSetupJob.Identity {
+        let pair = selectedLocalSpeechPair
+        let package = SpeechPackageCatalog.entries.filter { $0.pair == pair }
+            .map { "\($0.id):\($0.manifestSHA256)" }.sorted().joined(separator: ";")
+        return .init(pair: pair,
+            preparationContract: pair == .vietnameseEnglish
+                ? "vi-staged-coreai-fp8-pal8-g16-v1:validated-decoder-v1"
+                : "breeze-asr25-pal8-v1:validated-eager-v1",
+            voice: "\(localAudio.conversationTTSBackend.rawValue):\(localAudio.supertonicVoice.rawValue):supertonic3-ane-int4-v1",
+            downloadContract: package.isEmpty ? "reviewed-catalog-empty-v1" : package)
+    }
+    var offersSpeechSetupResume: Bool { setup.offersResume(for: setupIdentity) }
     struct SpeechDownloadOffer: Identifiable {
         let id = UUID()
         let recognitionBytes: Int64?
@@ -51,7 +81,7 @@ import MuralCore
     private func shouldShowDetailedSpeechSetup(for pair: LocalSpeechPair) -> Bool {
         guard speechPreparationSucceeded(for: pair) else { return true }
         #if DEBUG && targetEnvironment(simulator)
-        if speechSetupPreview == "resume" { return false }
+        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" { return false }
         #endif
         do {
             if try !localAudio.hasConversationAssets(for: pair) { return true }
@@ -61,7 +91,14 @@ import MuralCore
         } catch { return true }
     }
     var speechSetupProgress: SpeechSetupProgress? {
-        if isStoppingSpeechSetup { return .init(.cancelled) }
+        if isStoppingSpeechSetup { return .init(setup.job?.status == .needsResume ? .draining : .cancelled) }
+        if offersSpeechSetupResume, session == nil { return .init(.needsResume) }
+        if setup.isLive {
+            let current = setup.progress
+            return current.presenting(planned: setup.planned, completed: setup.completed,
+                away: setupContinuation.isGranted && current.stage.permitsManagedContinuation
+                    ? .backgroundGranted : .foregroundRequired)
+        }
         guard localPhase == .preparing else { return nil }
         #if DEBUG && targetEnvironment(simulator)
         if let previewSetupProgress { return previewSetupProgress }
@@ -103,6 +140,7 @@ import MuralCore
         ((state == .active && localPhase == .ready) || state == .ended)
     }
     private(set) var localPhase: LocalPhase = .idle
+    private var memoryPressurePaused = false
     private var localTask: Task<Void, Never>?
     private var localResumeTask: Task<Void, Never>?
     private var localTimeout: Task<Void, Never>?
@@ -115,7 +153,7 @@ import MuralCore
     var canChangeMode: Bool { !isRunning && !localResourcesBusy }
     // During setup cancellation, Settings may change only the next-start language preference.
     var canSelectMeaningLanguage: Bool { canChangeMode || (isStoppingSpeechSetup && !isRunning && session == nil) }
-    var canRecordLocal: Bool { isLocal && state == .active && localPhase == .ready && !localResourcesBusy && localAudio.canRecord }
+    var canRecordLocal: Bool { isLocal && state == .active && localPhase == .ready && !localResourcesBusy && localAudio.canRecord && UIApplication.shared.applicationState == .active }
     var canRetryLocalReply: Bool { canRecordLocal && session?.fragments.last?.speaker == .user }
     private let localLogger = Logger(subsystem: "no.william.mural", category: "LocalConversation")
     let store: LearningStore
@@ -223,28 +261,39 @@ import MuralCore
                 self.session = nil
             }
         }
-        localAudio.onTTSSafetyStop = { [weak self] message in
+        localAudio.onSafetyStop = { [weak self] reason in
             guard let self, self.isLocal, self.isRunning else { return }
-            if self.localAudio.thermalStopped, message == LocalTTSError.phoneTooWarm.localizedDescription {
-                self.pauseLocal()
-            } else {
-                self.endLocal(reason: message)
-                self.cancelLocalSupporting()
+            switch reason {
+            case .memoryPressure:
+                self.error = nil
+                self.speechModels.cancel()
+                if self.localPhase == .preparing, self.session?.hasUserMessage != true {
+                    self.endLocal(reason: "Speech setup paused after memory pressure", setupInterruption: .systemInterrupted)
+                } else {
+                    self.memoryPressurePaused = true
+                    self.pauseLocal()
+                }
+            case .thermal:
+                self.error = LocalTTSError.phoneTooWarm.localizedDescription
+                if self.setup.isLive {
+                    self.endLocal(reason: "Speech setup paused while iPhone cools down", setupInterruption: .systemInterrupted)
+                } else {
+                    self.pauseLocal()
+                }
             }
-            self.error = message
         }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
             Task { @MainActor in
                 guard let self, self.isLocal else { return }
-                self.end(reason: "Conversation interrupted. Start again when ready.")
+                self.end(reason: "Conversation interrupted. Start again when ready.", setupInterruption: .systemInterrupted)
             }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.isLocal, self.localAudio.asrState == .recording else { return }
-                self.end(reason: "Conversation interrupted. Start again when ready.")
+                self.end(reason: "Conversation interrupted. Start again when ready.", setupInterruption: .systemInterrupted)
             }
         })
         transport.onEvent = { [weak self] in self?.handle($0) }
@@ -258,7 +307,7 @@ import MuralCore
         }
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] notification in
             guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, raw == AVAudioSession.InterruptionType.began.rawValue else { return }
-            Task { @MainActor in self?.end(reason: "Conversation interrupted. Start again when ready.") }
+            Task { @MainActor in self?.end(reason: "Conversation interrupted. Start again when ready.", setupInterruption: .systemInterrupted) }
         })
         if mode == .local, localPairSupported,
            let paused = store.sessions.first(where: { $0.canResumeLocalConversation && $0.languageID == language.id &&
@@ -282,6 +331,7 @@ import MuralCore
         if isLocal {
             if isStoppingSpeechSetup { return "Setup cancelled" }
             if needsThermalResume { return "Speech paused · Let your iPhone cool, then tap Resume" }
+            if needsMemoryPressureResume { return "Speech paused · Tap Resume to continue" }
             switch localPhase {
             case .idle: return "Prepare to talk on this iPhone"
             case .preparing: return isCompactSpeechPreparation ? "Getting your speech ready again…" : "Preparing on this iPhone…"
@@ -350,6 +400,7 @@ import MuralCore
     }
 
     private func startLocal() {
+        guard !needsThermalResume else { resumeAfterCooling(); return }
         let pair = selectedLocalSpeechPair
         guard localPairSupported else {
             error = "On-device Talk supports English learning with Vietnamese or Traditional Chinese meanings. Set those languages in Settings; your learning history stays unchanged."
@@ -362,7 +413,16 @@ import MuralCore
         let isSetupPreview = false
         #endif
         if !isSetupPreview, let message = LocalTutorModel.availabilityMessage(for: pair) { error = message; return }
-        detailedSpeechSetup = !speechPreparationSucceeded(for: pair)
+        guard UIApplication.shared.applicationState == .active else { return }
+        do { _ = try setup.start(identity: setupIdentity) }
+        catch {
+            speechSetupError = "Mural couldn’t save setup progress. Check available storage, then try again. No new speech work was started."
+            speechSetupDiagnostic = error.localizedDescription
+            return
+        }
+        installSetupCallbacks()
+        setupCheckpointFailed = false
+        detailedSpeechSetup = true
         speechSetupError = nil; speechSetupDiagnostic = nil
         stoppedDuringPreparation = false; needsSpeechDownload = false; preparingNativeSpeech = false
         meanings.reset(); cancelLocalSupporting()
@@ -373,6 +433,7 @@ import MuralCore
         api.cancelRequests(); languageGeneration = UUID()
         startAfterConsent = false; showAIConsent = false
         sessionMode = .local
+        memoryPressurePaused = false
         selectedTheme = nil; pendingTopic = nil
         var record = SessionRecord(languageID: "en", title: pair == .vietnameseEnglish ? "On-device conversation" : "Taiwan Mandarin–English practice")
         record.localSpeechPair = pair
@@ -382,7 +443,7 @@ import MuralCore
         inputLevel = 0; outputLevel = 0
         localReplySeconds = nil; localModelSeconds = nil; localSupportUsed = false
         state = .connecting; localPhase = .preparing
-        runLocalPreparation(sessionID: record.id, downloadsApproved: false)
+        runLocalPreparation(sessionID: record.id)
     }
 
     private func speechDownloadNeeded(for pair: LocalSpeechPair) async throws -> SpeechDownloadOffer? {
@@ -390,6 +451,8 @@ import MuralCore
         #if DEBUG && targetEnvironment(simulator)
         if let preview = speechSetupPreview, preview != "unavailable" {
             needsSpeechDownload = preview != "cached" && preview != "resume"
+                && preview != "memory-warning" && preview != "memory-warning-drain"
+                && !previewDownloadPublished
             return needsSpeechDownload ? SpeechDownloadOffer(recognitionBytes: 64_000_000,
                 recognitionStorageBytes: 128_000_000, availableBytes: 1_000_000_000, needsVoice: preview == "voice", needsSpeechDetection: false) : nil
         }
@@ -402,6 +465,7 @@ import MuralCore
         #endif
         if needsSpeechDownload {
             speechModels.check(pair)
+            if setup.pauseRequested || !setup.isLive { speechModels.cancel() }
             try await speechModels.waitForCompletion()
         }
         try Task.checkCancellation()
@@ -416,69 +480,253 @@ import MuralCore
     }
 
     func confirmSpeechDownload() {
-        guard awaitingSpeechDownload, isRunning, localPhase == .preparing, localTask == nil, let id = session?.id else { return }
-        awaitingSpeechDownload = false; speechDownloadOffer = nil
-        runLocalPreparation(sessionID: id, downloadsApproved: true)
+        guard awaitingSpeechDownload, isRunning, localPhase == .preparing, localTask == nil,
+              UIApplication.shared.applicationState == .active, let id = session?.id else { return }
+        do { try setup.approveDownloads() }
+        catch { setupPersistenceFailed(error); return }
+        awaitingSpeechDownload = false; speechDownloadOffer = nil; setupConsentOffer = nil
+        runLocalPreparation(sessionID: id)
     }
     func dismissSpeechDownload() {
-        guard awaitingSpeechDownload else { return }
-        endLocal(reason: "Speech download declined")
+        guard awaitingSpeechDownload, UIApplication.shared.applicationState == .active else { return }
+        endLocal(reason: "Speech download declined", setupInterruption: .userCancelled)
     }
     func clearSpeechSetupError() { speechSetupError = nil }
 
-    private func runLocalPreparation(sessionID id: UUID, downloadsApproved: Bool) {
-        guard localTask == nil else { return }
-        let pair = localSpeechPair // Immutable identity for this preparation, even after Cancel.
+    private func runLocalPreparation(sessionID id: UUID) {
+        guard localTask == nil, setup.isLive else { return }
+        let pair = localSpeechPair // Remains immutable while the existing owner drains.
+        let jobID = setup.job?.id
         localTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.localTask = nil; self.scheduleTranslation() }
+            defer {
+                self.setupContinuation.finish(success: false)
+                self.localTask = nil
+                self.scheduleTranslation()
+            }
             do {
-                if !downloadsApproved, let offer = try await self.speechDownloadNeeded(for: pair) {
-                    try self.checkLocal(id)
-                    self.detailedSpeechSetup = true
-                    self.awaitingSpeechDownload = true; self.speechDownloadOffer = offer
-                    return // No weights are downloaded until the user confirms.
+                while self.setup.isLive {
+                    do {
+                        try await self.waitForSetupForeground(sessionID: id)
+                        if self.setup.pauseRequested { try self.saveSetup { try self.setup.continueAfterDrain() } }
+                        try self.checkSetupAdmission(sessionID: id)
+                        // Approval is permission, never evidence that assets still exist.
+                        let offer = try await self.speechDownloadNeeded(for: pair)
+                        try self.checkSetupAdmission(sessionID: id)
+                        self.setup.setPlan(needsRecognitionDownload: self.needsSpeechDownload)
+                        try self.saveSetup { try self.setup.complete(.checking, boundary: .preflight) }
+                        if let offer, self.setup.job?.downloadsApproved != true {
+                            self.awaitingSpeechDownload = true
+                            self.setupConsentOffer = offer; self.speechDownloadOffer = offer
+                            return // Preflight is drained; no model/download owner exists here.
+                        }
+                        #if DEBUG && targetEnvironment(simulator)
+                        if self.speechSetupPreview != nil {
+                            try await self.runSpeechSetupPreview(sessionID: id, pair: pair)
+                            return
+                        }
+                        #endif
+                        if self.needsSpeechDownload {
+                            await self.setupContinuation.start()
+                            self.reportSetupProgress(.init(.downloadingSpeech), jobID: jobID)
+                            guard self.setup.isLive, !self.setup.pauseRequested else { throw CancellationError() }
+                            self.speechModels.download()
+                            // Progress can request a pause before download() installs its child handle.
+                            if self.setup.pauseRequested || !self.setup.isLive { self.speechModels.cancel() }
+                            try await self.speechModels.waitForCompletion()
+                            try self.checkLocal(id)
+                            guard self.setup.isLive, !self.setup.pauseRequested else { throw CancellationError() }
+                            guard self.speechModels.phase == .installed else { throw SpeechPackageError.integrity }
+                            self.needsSpeechDownload = false
+                            try self.saveSetup {
+                                try self.setup.complete(.download)
+                                try self.setup.complete(.verification, boundary: .recognitionPublished)
+                            }
+                            self.setupContinuation.finish(success: true,
+                                needsForeground: UIApplication.shared.applicationState != .active)
+                        }
+                        // No native operation is admitted while away, even with a system grant.
+                        try await self.waitForSetupForeground(sessionID: id)
+                        if self.setup.pauseRequested { throw CancellationError() }
+                        self.preparingNativeSpeech = true
+                        let priorObserver = SpeechPreparationStep.observe
+                        try await SpeechSetupReporting.$admission.withValue({ [weak self] in
+                            guard let self else { throw CancellationError() }
+                            try self.checkSetupAdmission(sessionID: id)
+                        }) {
+                            try await SpeechSetupReporting.$observe.withValue({ [weak self] event in
+                                guard let self, self.setup.job?.id == jobID, self.setup.isLive,
+                                      !self.setup.pauseRequested else { return }
+                                switch event {
+                                case .stage(let stage): self.reportSetupProgress(.init(stage), jobID: jobID)
+                                case .completed(let major):
+                                    do { try self.saveSetup { try self.setup.complete(major,
+                                        boundary: major == .voice ? .voicePrepared : nil) } }
+                                    catch { self.setupPersistenceFailed(error) }
+                                }
+                            }) {
+                                try await SpeechPreparationStep.$observe.withValue({ [weak self] event in
+                                    priorObserver?(event)
+                                    guard event.outcome == "begin", let self else { return }
+                                    let stage: SpeechSetupProgress.Stage
+                                    switch event.component {
+                                    case "TextDecoder": stage = .preparingDecoder
+                                    case "AudioEncoder": stage = .preparingEncoder
+                                    case "voice-models": stage = .preparingVoice
+                                    default: stage = .loadingSpeechModels
+                                    }
+                                    self.reportSetupProgress(.init(stage), jobID: jobID)
+                                }) {
+                                    try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
+                                }
+                            }
+                        }
+                        try self.checkSetupAdmission(sessionID: id)
+                        guard self.localAudio.canRecord, self.localAudio.asrState == .ready else {
+                            throw SpeechPackageError.integrity
+                        }
+                        try self.saveSetup {
+                            try self.setup.complete(.recognition, boundary: .recognitionPrepared)
+                            try self.setup.enter(.init(.finalChecks))
+                            try self.setup.complete(.finalChecks)
+                            try self.setup.validatedInThisProcess()
+                        }
+                        // No suspension between the active/native checks and foreground entry.
+                        try self.checkSetupAdmission(sessionID: id)
+                        try self.saveSetup { try self.setup.enteredConversation() }
+                        self.markSpeechPreparationSucceeded(for: pair)
+                        self.state = .active; self.lastActivity = .now
+                        self.localLogger.notice("speech_setup event=ready job=\(jobID?.uuidString ?? "none", privacy: .public)")
+                        let greeting = "Hi! What did you do today?"
+                        let fragmentID = try self.appendLocal(greeting, speaker: .assistant, sessionID: id)
+                        try await self.speakLocal(greeting, sessionID: id, fragmentID: fragmentID)
+                        break
+                    } catch {
+                        if !Task.isCancelled, self.setup.isLive, self.setup.pauseRequested,
+                           self.session?.id == id, !self.setupCheckpointFailed {
+                            self.setupContinuation.finish(success: false)
+                            // A quick foreground return never skips this drain.
+                            await self.drainSetupChildren()
+                            try await self.waitForSetupForeground(sessionID: id)
+                            try self.saveSetup { try self.setup.continueAfterDrain() }
+                            continue // SAME localTask; actual inventories are checked again.
+                        }
+                        throw error
+                    }
                 }
-                try self.checkLocal(id)
-                #if DEBUG && targetEnvironment(simulator)
-                if self.speechSetupPreview != nil {
-                    try await self.runSpeechSetupPreview(sessionID: id, pair: pair)
-                    try self.checkLocal(id)
-                    return
-                }
-                #endif
-                if self.needsSpeechDownload {
-                    self.speechModels.download()
-                    try await self.speechModels.waitForCompletion()
-                    try self.checkLocal(id)
-                    guard self.speechModels.phase == .installed else { throw SpeechPackageError.integrity }
-                    self.needsSpeechDownload = false
-                }
-                self.preparingNativeSpeech = true
-                try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
-                try self.checkLocal(id)
-                self.markSpeechPreparationSucceeded(for: pair)
-                self.state = .active; self.lastActivity = .now
-                let greeting = "Hi! What did you do today?"
-                let fragmentID = try self.appendLocal(greeting, speaker: .assistant, sessionID: id)
-                try await self.speakLocal(greeting, sessionID: id, fragmentID: fragmentID)
             } catch {
-                guard !Task.isCancelled, self.session?.id == id, self.isRunning else { return }
-                self.speechSetupDiagnostic = error.localizedDescription
-                self.endLocal(reason: "Local preparation or greeting failed")
-                switch error {
-                case SpeechPackageError.notPublished:
-                    self.speechSetupError = "Speech isn’t available to download in this version yet. Check for an app update, or try another language combination."
-                case SpeechPackageError.storage(let required, let available):
-                    let size: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
-                    self.speechSetupError = "Speech setup needs \(size(required)) of free space; \(size(available)) is available. Free space in iPhone Settings, then try again."
-                case is URLError:
-                    self.speechSetupError = "The download was interrupted. Check your connection, then try again. Downloaded files are kept."
-                default:
-                    self.speechSetupError = "Couldn’t get speech ready. Try again. Your conversations and existing downloads are unchanged. More information is in diagnostics."
+                if !Task.isCancelled, self.session?.id == id, self.isRunning {
+                    self.speechSetupDiagnostic = error.localizedDescription
+                    self.endLocal(reason: "Local preparation or greeting failed")
+                    if self.setupCheckpointFailed {
+                        self.speechSetupError = "Mural couldn’t save setup progress. Check available storage, then try again. Existing speech files were not removed."
+                    } else {
+                        switch error {
+                        case SpeechPackageError.notPublished:
+                            self.speechSetupError = "Speech isn’t available to download in this version yet. Check for an app update, or try another language combination."
+                        case SpeechPackageError.storage(let required, let available):
+                            let size: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+                            self.speechSetupError = "Speech setup needs \(size(required)) of free space; \(size(available)) is available. Free space in iPhone Settings, then resume setup."
+                        case is URLError:
+                            self.speechSetupError = "The download was interrupted. Check your connection, then resume setup. Completed downloads are kept."
+                        default:
+                            self.speechSetupError = "Couldn’t finish speech setup. Completed work is kept. Resume setup to check it and continue. More information is in diagnostics."
+                        }
+                    }
                 }
             }
+            // Explicit Cancel/system interruption also retains admission until real drain.
+            await self.drainSetupChildren()
         }
+    }
+
+    private func saveSetup(_ operation: () throws -> Void) throws {
+        do { try operation() }
+        catch { setupCheckpointFailed = true; throw error }
+    }
+
+    private func installSetupCallbacks() {
+        setupContinuation.logCapabilities()
+        let jobID = setup.job?.id
+        speechModels.onSetupProgress = { [weak self] in self?.reportSetupProgress($0, jobID: jobID) }
+        localAudio.onSetupProgress = { [weak self] in self?.reportSetupProgress($0, jobID: jobID) }
+        setupContinuation.onSystemInterruption = { [weak self] in
+            guard let self, self.setup.isLive, self.setup.job?.id == jobID else { return }
+            do { try self.setup.interrupt(.systemInterrupted) }
+            catch { self.setupPersistenceFailed(error); return }
+            self.endLocal(reason: "Speech setup interrupted by the system")
+            self.notice = "Setup paused. Your completed work is saved. Resume setup when you’re ready."
+        }
+    }
+
+    private func reportSetupProgress(_ progress: SpeechSetupProgress, jobID: UUID?) {
+        guard setup.isLive, setup.job?.id == jobID, !setup.pauseRequested else { return }
+        do {
+            if UIApplication.shared.applicationState != .active,
+               !(progress.stage.permitsManagedContinuation && setupContinuation.isGranted) {
+                try pauseSetupForForeground()
+                return
+            }
+            let changed = setup.progress.stage != progress.stage
+            var accepted = false
+            try saveSetup {
+                accepted = try setup.enter(progress)
+                if accepted && progress.stage == .checkingDownload { try setup.complete(.download) }
+            }
+            guard accepted else { return }
+            setupContinuation.update(setup.progress)
+            if changed {
+                let policy = progress.stage.permitsManagedContinuation && setupContinuation.isGranted
+                    ? "managed_granted" : "foreground_required"
+                localLogger.notice("speech_setup event=background_policy policy=\(policy, privacy: .public)")
+            }
+        } catch { setupPersistenceFailed(error) }
+    }
+
+    private func checkSetupAdmission(sessionID: UUID) throws {
+        try checkLocal(sessionID)
+        guard setup.isLive, !setup.pauseRequested, setup.job?.identity == setupIdentity else { throw CancellationError() }
+        if UIApplication.shared.applicationState != .active {
+            try pauseSetupForForeground()
+            throw CancellationError()
+        }
+    }
+
+    private func pauseSetupForForeground() throws {
+        guard setup.isLive, !setup.pauseRequested, !awaitingSpeechDownload else { return }
+        try saveSetup { try setup.pauseForForeground() }
+        setupContinuation.finish(success: false, needsForeground: true)
+        speechModels.cancel()
+        localAudio.stop() // Child cancellation only. Do NOT cancel localTask here.
+        localLogger.notice("speech_setup event=stage_interrupted reason=foreground_required")
+    }
+
+    private func waitForSetupForeground(sessionID: UUID) async throws {
+        while UIApplication.shared.applicationState != .active {
+            try checkLocal(sessionID)
+            guard setup.isLive else { throw CancellationError() }
+            let revision = setup.wakeup.revision
+            try pauseSetupForForeground()
+            try await setup.wakeup.wait(after: revision)
+        }
+        try checkLocal(sessionID)
+    }
+
+    private func drainSetupChildren() async {
+        localLogger.notice("speech_setup event=native_drain_begin")
+        // Even a cancelled waiter awaits the same transfer before checking cancellation.
+        try? await speechModels.waitForCompletion()
+        await localAudio.waitForSetupDrain()
+        localLogger.notice("speech_setup event=native_drain_end")
+    }
+
+    private func setupPersistenceFailed(_ failure: Error) {
+        setupCheckpointFailed = true
+        speechSetupDiagnostic = failure.localizedDescription
+        do { try setup.interrupt(.failed) } catch { /* In-memory intent is already revoked. */ }
+        setupContinuation.finish(success: false)
+        endLocal(reason: "Could not save speech setup")
+        speechSetupError = "Mural couldn’t save setup progress. Check available storage, then try again. Existing speech files were not removed."
     }
 
     func recordLocal() {
@@ -562,6 +810,7 @@ import MuralCore
 
     private func speakLocal(_ text: String, sessionID: UUID, fragmentID: String) async throws {
         try checkLocal(sessionID)
+        guard UIApplication.shared.applicationState == .active else { throw CancellationError() }
         let origin = localStartedAt
         localAudio.onPlayback = { [weak self] start, end, completed in
             guard let self, self.session?.id == sessionID, self.state == .active,
@@ -575,12 +824,14 @@ import MuralCore
         defer { localAudio.onPlayback = nil }
         try await localAudio.speak(text)
         try checkLocal(sessionID)
+        guard UIApplication.shared.applicationState == .active else { throw CancellationError() }
         localPhase = .ready; lastActivity = .now
     }
 
     @discardableResult private func appendLocal(_ text: String, speaker: Speaker, sessionID: UUID, typed: Bool = false,
                                                 rawASRText: String? = nil) throws -> String {
         try checkLocal(sessionID)
+        if speaker == .assistant, UIApplication.shared.applicationState != .active { throw CancellationError() }
         let offset = max(0, Int((ProcessInfo.processInfo.systemUptime - localStartedAt) * 1000))
         var fragment = Fragment(speaker: speaker, text: text, startMS: offset, endMS: offset,
                                 meaningVisible: store.preferences.meaningVisible || localSupportUsed, typed: typed, turnID: UUID())
@@ -603,14 +854,26 @@ import MuralCore
         guard isLocal, isRunning, session?.id == id else { throw CancellationError() }
     }
 
-    private func endLocal(reason: String, assess: Bool = false) {
+    private func endLocal(reason: String, assess: Bool = false,
+                          setupInterruption: SpeechSetupJob.Interruption = .failed) {
         guard isRunning else { return }
+        if setup.isLive {
+            do { try setup.interrupt(setupInterruption) }
+            catch {
+                setupCheckpointFailed = true
+                speechSetupDiagnostic = error.localizedDescription
+                speechSetupError = "Mural couldn’t save the setup checkpoint. Existing speech files were not removed."
+            }
+        }
+        setupContinuation.finish(success: false)
+        setupConsentOffer = nil
         let finishing = localTask
         let lookup = localLookupTask
         let id = session?.id
         let eligible = session?.hasUserMessage == true
         localTimeout?.cancel(); localTimeout = nil
         stoppedDuringPreparation = localPhase == .preparing
+        memoryPressurePaused = false
         awaitingSpeechDownload = false; speechDownloadOffer = nil
         localTask?.cancel(); localResumeTask?.cancel(); localResumeTask = nil
         speechModels.cancel()
@@ -784,10 +1047,11 @@ import MuralCore
         }
     }
 
-    func end(reason: String = "Ended by you") {
+    func end(reason: String = "Ended by you", setupInterruption: SpeechSetupJob.Interruption = .userCancelled) {
         if isLocal {
             // Preserve Vietnamese evidence. New-pair scoring needs separate semantic qualification.
-            endLocal(reason: reason, assess: reason == "Ended by you" && localSpeechPair == .vietnameseEnglish)
+            endLocal(reason: reason, assess: reason == "Ended by you" && localSpeechPair == .vietnameseEnglish,
+                     setupInterruption: setupInterruption)
             return
         }
         guard state == .active || state == .connecting else { return }
@@ -818,12 +1082,17 @@ import MuralCore
         localLogger.notice("local_paused")
     }
     func background() {
+        if setup.isLive {
+            // Consent is not execution; keep its presentation/approval separate from suspension.
+            if awaitingSpeechDownload { return }
+            if setup.progress.stage.permitsManagedContinuation, setupContinuation.isGranted { return }
+            do { try pauseSetupForForeground() }
+            catch { setupPersistenceFailed(error) }
+            return
+        }
         speechModels.cancel()
         if isLocal {
-            if localPhase == .preparing, session?.hasUserMessage != true {
-                endLocal(reason: "Speech setup paused in background")
-                notice = "Setup paused. Tap Prepare & start to continue. Downloaded files are kept."
-            } else { pauseLocal() }
+            pauseLocal()
             return
         }
         guard isRunning else { return }
@@ -958,6 +1227,7 @@ import MuralCore
         localResumeTask?.cancel(); localResumeTask = nil
         if isLocal { localAudio.stop() }
         localPhase = .idle; localReplySeconds = nil; localModelSeconds = nil
+        memoryPressurePaused = false
         speechSetupError = nil; speechSetupDiagnostic = nil; stoppedDuringPreparation = false
         awaitingSpeechDownload = false; speechDownloadOffer = nil
         sessionMode = nil
@@ -968,9 +1238,9 @@ import MuralCore
         inputLevel = 0; outputLevel = 0; state = .idle
     }
     func refreshLocalMeaning() { if isLocal, !localAudio.lastRecordingHadNoSpeech { scheduleTranslation() } }
-    private func resumeLocal() {
+    private func resumeLocal(allowingMemoryPressureResume: Bool = false) {
         guard isLocal, state == .active, localPhase == .paused, localResumeTask == nil,
-              let id = session?.id else { return }
+              (!memoryPressurePaused || allowingMemoryPressureResume), let id = session?.id else { return }
         let finishing = localTask
         let pair = localSpeechPair
         detailedSpeechSetup = shouldShowDetailedSpeechSetup(for: pair)
@@ -983,11 +1253,12 @@ import MuralCore
                   self.localPhase == .preparing, self.session?.id == id else { return }
             do {
                 #if DEBUG && targetEnvironment(simulator)
-                if self.speechSetupPreview == "resume" {
+                if self.speechSetupPreview == "resume" || self.speechSetupPreview == "memory-warning" || self.speechSetupPreview == "memory-warning-drain" {
                     self.previewSetupProgress = .init(.preparingSpeech)
                     try await Task.sleep(for: .seconds(2))
                     try self.checkLocal(id)
                     self.markSpeechPreparationSucceeded(for: pair)
+                    self.memoryPressurePaused = false
                     self.session?.localPausedAt = nil
                     self.saveIfEligible()
                     self.lastActivity = .now
@@ -999,6 +1270,7 @@ import MuralCore
                 try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
                 try self.checkLocal(id)
                 self.markSpeechPreparationSucceeded(for: pair)
+                self.memoryPressurePaused = false
                 self.session?.localPausedAt = nil
                 self.saveIfEligible()
                 self.lastActivity = .now
@@ -1020,15 +1292,21 @@ import MuralCore
         }
     }
     var needsThermalResume: Bool { isLocal && localAudio.thermalStopped }
+    var needsMemoryPressureResume: Bool { isLocal && memoryPressurePaused }
     var thermalAlertPresented: Bool { needsThermalResume && error == LocalTTSError.phoneTooWarm.localizedDescription }
     func resumeAfterCooling() {
         guard !localResourcesBusy else { return }
         do {
             try localAudio.resumeAfterCooling()
             error = nil; notice = nil
-            if localPhase == .paused { resumeLocal() }
+            if localPhase == .paused { resumeLocal(allowingMemoryPressureResume: true) }
             else { start() }
         } catch { self.error = error.localizedDescription }
+    }
+    func resumeAfterMemoryPressure() {
+        guard needsMemoryPressureResume, !needsThermalResume, !localResourcesBusy else { return }
+        error = nil; notice = nil
+        resumeLocal(allowingMemoryPressureResume: true)
     }
     #if DEBUG && targetEnvironment(simulator)
     // UI-only fixture: no catalog override, native model, network, microphone or personal data.
@@ -1039,32 +1317,101 @@ import MuralCore
         return String(argument.dropFirst("--preview-speech-setup=".count))
     }
     private var previewSetupProgress: SpeechSetupProgress?
+    private var previewSetupInterrupted = false
+    private let previewSetupDrain = SpeechSetupForegroundGate()
+    private(set) var holdingSetupPreviewDrain = false
+    func finishSetupPreviewDrain() { previewSetupDrain.signal() }
+    private var previewPackageFile: URL {
+        Self.setupStorageURL.deletingLastPathComponent().appending(path: "preview-package-\(localSpeechPair.rawValue).ok")
+    }
+    private var previewBytesFile: URL {
+        Self.setupStorageURL.deletingLastPathComponent().appending(path: "preview-download-\(localSpeechPair.rawValue).bytes")
+    }
+    private var previewDownloadPublished: Bool {
+        (try? Data(contentsOf: previewPackageFile)) == Data("verified-preview-package-v1".utf8)
+    }
     private func runSpeechSetupPreview(sessionID: UUID, pair: LocalSpeechPair) async throws {
+        let jobID = setup.job?.id
+        let dwell = speechSetupPreview == "transitions" ? 3_000 : 650
         if needsSpeechDownload {
-            for step in 0...4 {
-                try checkLocal(sessionID)
-                previewSetupProgress = .init(.downloadingSpeech, completedBytes: Int64(step) * 16_000_000, totalBytes: 64_000_000)
-                try await Task.sleep(for: .milliseconds(350))
+            // UI fixture inventory is separate from the job, just as real assets are.
+            let retained = (try? String(contentsOf: previewBytesFile, encoding: .utf8)).flatMap(Int64.init) ?? 0
+            let first = max(0, min(64_000_000, retained)) / 16_000_000
+            for step in first...4 {
+                try checkSetupAdmission(sessionID: sessionID)
+                let bytes = step * 16_000_000
+                try Data(String(bytes).utf8).write(to: previewBytesFile, options: .atomic)
+                reportSetupProgress(.init(.downloadingSpeech, completedBytes: bytes, totalBytes: 64_000_000), jobID: jobID)
+                try await Task.sleep(for: .milliseconds(speechSetupPreview == "transitions" ? 1_000 : 350))
             }
-            previewSetupProgress = .init(.checkingDownload)
-            try await Task.sleep(for: .milliseconds(350))
+            reportSetupProgress(.init(.checkingDownload), jobID: jobID)
+            try await Task.sleep(for: .milliseconds(dwell))
+            try checkSetupAdmission(sessionID: sessionID)
+            try Data("verified-preview-package-v1".utf8).write(to: previewPackageFile, options: .atomic)
+            try saveSetup {
+                try setup.complete(.download)
+                try setup.complete(.verification, boundary: .recognitionPublished)
+            }
             needsSpeechDownload = false
         }
-        previewSetupProgress = .init(.preparingSpeech)
-        if speechSetupPreview == "drain" {
-            // Deliberately non-cooperative native-work stand-in. The parent must retain
-            // admission until it returns; a cancellation flag alone must not unlock UI.
+        reportSetupProgress(.init(.preparingVoice), jobID: jobID)
+        try await Task.sleep(for: .milliseconds(dwell))
+        try checkSetupAdmission(sessionID: sessionID)
+        try saveSetup { try setup.complete(.voice, boundary: .voicePrepared) }
+        reportSetupProgress(.init(.preparingEncoder), jobID: jobID)
+        if !previewSetupInterrupted, let scenario = speechSetupPreview,
+           ["thermal-setup", "audio-setup", "route-setup", "memory-setup"].contains(scenario) {
+            previewSetupInterrupted = true
+            holdingSetupPreviewDrain = true
+            let drainRevision = previewSetupDrain.revision
+            switch scenario {
+            case "thermal-setup":
+                localAudio.testThermalState = .serious
+                localAudio.stopForTTSSafety(footprint: 80_000_000, thermal: .serious)
+                localAudio.testThermalState = .nominal // Cooling must not clear the explicit-resume latch.
+            case "audio-setup":
+                NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+            case "route-setup":
+                NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil,
+                    userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
+            default:
+                NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+            }
+            // Test releases this non-cooperative child explicitly, independent of UI automation speed.
+            await Task { try? await previewSetupDrain.wait(after: drainRevision) }.value
+            holdingSetupPreviewDrain = false
+        } else if speechSetupPreview == "drain" {
+            // Non-cooperative stand-in: the SAME orchestration task retains admission.
             await Task.detached { try? await Task.sleep(for: .seconds(30)) }.value
-        } else { try await Task.sleep(for: .seconds(speechSetupPreview == "resume" ? 2 : 1)) }
-        try checkLocal(sessionID)
+        } else { try await Task.sleep(for: .milliseconds(speechSetupPreview == "resume" ? 2_000 : dwell)) }
+        try checkSetupAdmission(sessionID: sessionID)
+        reportSetupProgress(.init(.preparingDecoder), jobID: jobID)
+        try await Task.sleep(for: .milliseconds(dwell))
+        try checkSetupAdmission(sessionID: sessionID)
         if speechSetupPreview == "failure" { throw SpeechPackageError.integrity }
+        try saveSetup { try setup.complete(.recognition, boundary: .recognitionPrepared) }
+        reportSetupProgress(.init(.finalChecks), jobID: jobID)
+        try await Task.sleep(for: .milliseconds(250))
+        try checkSetupAdmission(sessionID: sessionID)
+        try saveSetup {
+            try setup.complete(.finalChecks)
+            try setup.validatedInThisProcess() // A fixture only, never physical/native evidence.
+            try setup.enteredConversation()
+        }
         markSpeechPreparationSucceeded(for: pair)
         state = .active; localPhase = .ready
         previewSetupProgress = nil
         _ = try appendLocal("Hi! What did you do today?", speaker: .assistant, sessionID: sessionID)
-        if speechSetupPreview == "resume" {
+        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
             _ = try appendLocal("I went for a walk by the river.", speaker: .user, sessionID: sessionID)
             _ = try appendLocal("That sounds peaceful. What did you enjoy most?", speaker: .assistant, sessionID: sessionID)
+        }
+        if speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
+            NotificationCenter.default.post(name: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"), object: nil)
+            if speechSetupPreview == "memory-warning-drain" {
+                await Task.detached { try? await Task.sleep(for: .seconds(4)) }.value
+            }
         }
     }
     func prepareThermalStopPreview() {
@@ -1077,7 +1424,18 @@ import MuralCore
     #endif
 
     func resume() {
-        if needsThermalResume { return } // Cooling/foregrounding must never restart speech by itself.
+        do { try setup.restore() }
+        catch {
+            speechSetupError = "Mural couldn’t read saved setup progress. Unlock your iPhone and check available storage before trying again."
+            speechSetupDiagnostic = error.localizedDescription
+        }
+        if needsThermalResume || memoryPressurePaused { return } // Safety pauses require an explicit Resume.
+        if setup.isLive {
+            setup.foregroundReturned() // Wake only; the existing owner must still drain.
+            if awaitingSpeechDownload, speechDownloadOffer == nil { speechDownloadOffer = setupConsentOffer }
+            return
+        }
+        // A cold restored setup has no session/model owner and is only an explicit Resume CTA.
         if isLocal { resumeLocal() }
         refreshLocalMeaning()
     }

@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import CryptoKit
 import CoreML
 import Foundation
@@ -88,6 +89,7 @@ final class CancellableWhisperModel<Model: WhisperMLModel>: WhisperMLModel {
     init(_ base: Model) { self.base = base }
     var model: MLModel? { get { base.model } set { base.model = newValue } }
     func loadModel(at path: URL, computeUnits: MLComputeUnits, prewarmMode: Bool = false) async throws {
+        try await SpeechSetupReporting.checkAdmission()
         try await SpeechPreparationStep.run(model: path.deletingLastPathComponent().lastPathComponent,
             component: path.deletingPathExtension().lastPathComponent, phase: prewarmMode ? "prewarm" : "load") {
             try await base.loadModel(at: path, computeUnits: computeUnits, prewarmMode: prewarmMode)
@@ -146,11 +148,15 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
 /// Half-duplex local audio owner. The Phase 2 probe exposes ASR without tutor inference.
 @MainActor @Observable final class LocalConversationEngine: NSObject, AVSpeechSynthesizerDelegate {
+    enum SafetyStopReason: Equatable { case memoryPressure, thermal }
     @ObservationIgnored var onPlayback: ((Double, Double?, Bool) -> Void)?
     private(set) var playbackStartSeconds: Double?
     private(set) var playbackDurationSeconds: Double?
     private(set) var voiceDescription = "English system voice"
-    private(set) var preparationProgress = SpeechSetupProgress(.checking)
+    private(set) var preparationProgress = SpeechSetupProgress(.checking) {
+        didSet { onSetupProgress?(preparationProgress) }
+    }
+    @ObservationIgnored var onSetupProgress: (@MainActor (SpeechSetupProgress) -> Void)?
     var conversationVoiceNeedsDownload: Bool {
         get throws {
             guard conversationTTSBackend == .supertonic else { return false }
@@ -261,7 +267,6 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     }
 
     func resumeAfterCooling() throws {
-        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
         guard ttsThermalState.rawValue < ProcessInfo.ThermalState.serious.rawValue else { throw LocalTTSError.phoneTooWarm }
         thermalStopped = false
         asrError = nil
@@ -270,15 +275,12 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     func stopForTTSSafety(footprint: UInt64, thermal: ProcessInfo.ThermalState) {
         let memoryStop = footprint >= 3_000_000_000
         guard memoryStop || thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue else { return }
-        let message = memoryStop
-            ? "On-device speech stopped at the 3.0 GB sampled memory guard. Close Mural before trying again."
-            : LocalTTSError.phoneTooWarm.localizedDescription
-        if memoryStop { stagedMemoryWarning = true }
-        else { thermalStopped = true }
+        let reason: SafetyStopReason
+        if memoryStop { reason = .memoryPressure }
+        else { thermalStopped = true; reason = .thermal }
         stop()
-        asrState = .failed; asrError = message
         logger.fault("tts_safety_stop max_sampled_footprint_bytes=\(footprint, privacy: .public) thermal_state=\(thermal.rawValue, privacy: .public)")
-        onTTSSafetyStop?(message)
+        onSafetyStop?(reason)
     }
     private static let conversationTTSPreferenceKey = "localConversationTTSBackend"
     private(set) var conversationTTSBackend = LocalTTSBackend(
@@ -302,7 +304,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         UserDefaults.standard.set(speed.rawValue, forKey: "supertonicSpeed")
     }
 
-    var onTTSSafetyStop: (@MainActor (String) -> Void)?
+    var onSafetyStop: (@MainActor (SafetyStopReason) -> Void)?
     struct TTSSynthesisMetrics {
         let milliseconds: Double
         let audioMilliseconds: Double
@@ -444,7 +446,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         if ttsBackend == .supertonic, !neuralTTS.isReady { return false }
         return fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && !speechBusy
     }
-    var canPrepare: Bool { !stagedMemoryWarning && asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
+    var canPrepare: Bool { asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
     private var fireRedDiagnosticAllowsPrepare: Bool {
         #if MURAL_FIRERED_FILE_PROBE
         if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && !fireRedDiagnosticStarted }
@@ -497,8 +499,6 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         }
     }
     #endif
-    private var stagedMemoryWarning = false
-    private static let memoryWarningMessage = "Speech stopped after a memory warning. End this session, close Mural from the app switcher, then reopen it."
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
     private let synthesizer = AVSpeechSynthesizer()
     private var utterance: AVSpeechUtterance?
@@ -527,25 +527,18 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         logger.notice("local_talk_asr_backend backend=\(Self.conversationASRBackend, privacy: .public)")
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
-        #if canImport(CoreAI)
-        if PhoWhisperStagedEncoder.enabled || FireRedEnglishRecognizer.available {
-            memoryWarningObserver = NotificationCenter.default.addObserver(
-                forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
-                object: nil, queue: .main) { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        let previousState = self.asrState.rawValue
-                        VietnameseEnglishRecognizer.logMemory(stage: "staged-memory-warning", model: self.asrModel.rawValue)
-                        self.stagedMemoryWarning = true
-                        self.stop()
-                        self.asrState = .failed
-                        self.asrError = Self.memoryWarningMessage
-                        self.onTTSSafetyStop?(Self.memoryWarningMessage)
-                        self.logger.fault("asr_staged_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
-                    }
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"),
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let previousState = self.asrState.rawValue
+                    self.stop()
+                    VietnameseEnglishRecognizer.logMemory(stage: "memory-warning", model: self.asrModel.rawValue)
+                    self.logger.warning("asr_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
+                    self.onSafetyStop?(.memoryPressure)
                 }
-        }
-        #endif
+            }
     }
 
     isolated deinit {
@@ -561,7 +554,6 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         try Task.checkCancellation()
         guard asrTask == nil else { throw SpeechError.busy }
         guard !speechBusy else { throw LocalTTSError.busy }
-        guard !stagedMemoryWarning else { throw CaptureError.operation(asrError ?? Self.memoryWarningMessage) }
         guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
         lastSynthesis = nil
         let id = try speechAdmission.begin()
@@ -735,11 +727,14 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     private func activateAudio(category: AVAudioSession.Category) async throws {
         await audioRelease?.value
         try Task.checkCancellation()
+        guard UIApplication.shared.applicationState == .active else { throw CancellationError() }
         let audio = AVAudioSession.sharedInstance()
         try audio.setCategory(category, mode: .default, options: category == .playAndRecord ? [.defaultToSpeaker] : [])
         guard try await audio.activate() else { throw CaptureError.audioSession }
         ownsAudio = true
-        if Task.isCancelled { releaseAudio(); throw CancellationError() }
+        if Task.isCancelled || UIApplication.shared.applicationState != .active {
+            releaseAudio(); throw CancellationError()
+        }
     }
 
     private func releaseAudio() {
@@ -777,20 +772,25 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
             "PhoWhisperCS/phowhisper-cs-fp16-v1/manifest.json").path)
     }
 
+    /// Await child owners after Stop without creating or releasing the orchestration owner.
+    func waitForSetupDrain() async {
+        await asrTask?.value
+        _ = await stagedDecoderWarmup?.result
+        _ = await speechTask?.result
+        await ttsCleanup?.value
+    }
+
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
     func prepareConversation(model: ASRModel = .phoWhisper) async throws {
-        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
         guard model == .phoWhisper || model == .breeze else { throw SpeechError.busy }
         rawASRText = ""
-        preparationProgress = .init(.checking)
+        preparationProgress = .init(.checkingVoice)
         if let warmup = stagedDecoderWarmup {
             warmup.cancel()
             _ = await warmup.result
             stagedDecoderWarmup = nil
             try Task.checkCancellation()
-        }
-        guard !stagedMemoryWarning else {
-            throw CaptureError.operation(asrError ?? Self.memoryWarningMessage)
         }
         await ttsCleanup?.value
         try Task.checkCancellation()
@@ -807,7 +807,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         }
         submittedAt = nil; sendToPlaybackSeconds = nil
         await ttsCleanup?.value
-        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
         ttsBackend = conversationTTSBackend
         if ttsBackend == .supertonic {
             stopForTTSSafety(footprint: 0, thermal: ttsThermalState)
@@ -820,6 +820,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 throw CancellationError()
             } catch {
                 try Task.checkCancellation() // A cancelled SDK error is not permission to start a fallback.
+                // The outer setup owner can remain alive while its child was interrupted.
+                try await SpeechSetupReporting.checkAdmission()
                 let failure = error as NSError
                 logger.error("tts_fallback backend=supertonic reason=preparation domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                 if model != .breeze { ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil }
@@ -827,10 +829,12 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 ttsBackend = .apple
             }
         }
-        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
+        await SpeechSetupReporting.emit(.completed(.voice))
+        try await SpeechSetupReporting.checkAdmission()
         prepareASR()
         await asrTask?.value
-        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
         guard canRecord, asrState == .ready else {
             throw CaptureError.operation(asrError ?? "Speech preparation did not finish. Start again.")
         }
@@ -883,7 +887,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                     _ = await previousWarmup.result
                     self.stagedDecoderWarmup = nil
                 }
-                try Task.checkCancellation()
+                try await SpeechSetupReporting.checkAdmission()
                 let started = ProcessInfo.processInfo.systemUptime
                 #if MURAL_VAD_PROBE
                 if selected == .vadOnly {
@@ -1500,6 +1504,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 let selection = try await PhoWhisperStagedEncoder.verifiedSelection()
                 if try Self.preparationMode(ProcessInfo.processInfo.arguments) == .automatic {
                     await progress("Preparing the verified encoder on this iPhone… Keep Mural open. End cancels safely.")
+                    await SpeechSetupReporting.emit(.stage(.preparingEncoder))
+                    try await SpeechSetupReporting.checkAdmission()
                     try await PhoWhisperStagedEncoder.prepareForConversation(selection)
                     try Task.checkCancellation()
                 }
@@ -1519,6 +1525,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 stagedDecoderPrewarmedAt = nil
                 if try Self.preparationMode(ProcessInfo.processInfo.arguments) == .automatic {
                     await progress("Preparing and validating speech on this iPhone…")
+                    await SpeechSetupReporting.emit(.stage(.preparingDecoder))
+                    try await SpeechSetupReporting.checkAdmission()
                     try await validateStagedDecoderForConversation()
                     try Task.checkCancellation()
                 }
@@ -1606,11 +1614,15 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         // Keep VAD under the existing ASR owner; explicit off/observe modes remain available.
         private func prepareVAD() async throws {
             guard phoWhisper else { return }
+            await SpeechSetupReporting.emit(.stage(.checkingDetection))
+            try await SpeechSetupReporting.checkAdmission()
             vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)
             guard vadMode != .off else { return }
             let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
             do {
                 try Task.checkCancellation()
+                await SpeechSetupReporting.emit(.stage(.preparingDetection))
+                try await SpeechSetupReporting.checkAdmission()
                 let prepared = try await VadManager(config: VadConfig(
                     defaultThreshold: SpeechPresencePolicy.threshold, computeUnits: .cpuAndNeuralEngine))
                 try Task.checkCancellation()
@@ -1691,7 +1703,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 try Task.checkCancellation()
                 guard decoder.logitsSize == 51865 else { throw CocoaError(.fileReadCorruptFile) }
                 try await mel.loadModel(at: directory.appending(path: "MelSpectrogram.mlmodelc"), computeUnits: .cpuAndGPU)
-                try Task.checkCancellation()
+                await SpeechSetupReporting.emit(.stage(.validatingSpeech))
+                try await SpeechSetupReporting.checkAdmission()
                 guard mel.melCount == 80, mel.windowSamples == 480_000 else { throw CocoaError(.fileReadCorruptFile) }
             })
             try Task.checkCancellation()
@@ -2123,21 +2136,24 @@ enum PhoWhisperStagedEncoder {
 
     /// Same persistent specialization API as the existing phone harness. No precision/backend fallback.
     @concurrent static func prepareForConversation(_ selection: Selection) async throws {
-        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
         guard let v3 = selection.v3, v3.format == "fp8", selection.supportIdentity == "phowhisper-cs-pal8-g16-v1" else {
             throw Failure("This speech package is not qualified for normal Talk. Choose another speech option.")
         }
         let options = SpecializationOptions(preferredComputeUnitKind: .gpu)
         let model: AIModel
         if let cached = try AIModelCache.default.model(for: selection.encoderURL, options: options) {
+            Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_cache result=hit")
             model = cached
         } else {
+            Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_cache result=miss")
             Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_specialization_begin")
             model = try await AIModel.specialize(contentsOf: selection.encoderURL, options: options, cachePolicy: .persistent)
             try Task.checkCancellation()
             Logger(subsystem: "no.william.mural", category: "LocalAudio").notice("speech_encoder_specialization_end")
         }
-        try Task.checkCancellation()
+        // Encoder-local checks remain part of preparingEncoder. Global validation follows decoder loading.
+        try await SpeechSetupReporting.checkAdmission()
         try v3.identity.requireModel(model)
         guard let descriptor = model.functionDescriptor(for: v3.identity.entrypoint),
               case .ndArray(let input) = descriptor.inputDescriptor(of: "input_features"),

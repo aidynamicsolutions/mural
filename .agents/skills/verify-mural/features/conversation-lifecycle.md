@@ -42,6 +42,21 @@ xcodebuild \
 
 Capture the ended state, Settings disclosure, and native test result. Success is a stable ended state, a Settings-only sentence-level meaning control, an eligible saved transcript, and an explicit manual transition to a new conversation. No API key is needed for the fixture.
 
+## Approved setup interruption regressions
+
+Run these selectors with the parent skill's arm64 simulator test command, a fresh result bundle, `-parallel-testing-enabled NO` and `-collect-test-diagnostics never`:
+
+```sh
+-only-testing:MuralUITests/MuralUITests/testThermalInterruptionDuringApprovedSetup \
+-only-testing:MuralUITests/MuralUITests/testAudioInterruptionDuringApprovedSetup \
+-only-testing:MuralUITests/MuralUITests/testRouteInterruptionDuringApprovedSetup \
+-only-testing:MuralUITests/MuralUITests/testMemoryInterruptionDuringApprovedSetup
+```
+
+These preview-only scenarios approve a download, interrupt encoder preparation via the real safety/notification routing, and hold a non-cooperative child until the test taps **Finish simulated interruption**. Before release, Resume must be disabled and no conversation controls may appear. After release, background/foreground (and simulated cooling) must not auto-restart. Explicit Resume must retain approval/inventory, clear the setup card and restore conversation controls. Thermal recovery must show only one Resume button. Each test retains interrupted and recovered screenshots in its xcresult; export attachments for inspection.
+
+Also retain the existing user-Cancel, checklist, cold-relaunch, foreground-drain and conversation-memory tests. These are injected coordinator/UI checks, not native drain or actual Core AI/continued-processing qualification. On the physical Vietnamese path, encoder-local validation must still say **Preparing encoder**, followed by **Preparing decoder**, then final **Validating speech**. Do not infer that ordering from the synthetic checklist test or induce thermal/memory stress on a phone.
+
 ## Lifecycle boundaries
 
 - A non-empty spoken or typed learner message makes the transcript eligible for history. Mural-only greetings and Help responses do not.
