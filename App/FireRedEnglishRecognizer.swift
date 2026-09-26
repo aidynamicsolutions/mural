@@ -4,8 +4,13 @@ import FluidAudio
 import MuralCore
 import OSLog
 
-/// Opt-in AED probe only. The existing audio task retains this actor until native work drains.
+/// Opt-in AED Talk candidate and probe. Not qualified for ordinary builds.
+/// The existing audio task retains this actor until native work drains.
 actor FireRedEnglishRecognizer {
+    static var developmentDirectory: URL {
+        URL.documentsDirectory.appending(path: "FireRedProbe/model", directoryHint: .isDirectory)
+    }
+
     static var available: Bool {
         #if MURAL_FIRERED_FILE_PROBE
         true
@@ -50,6 +55,7 @@ actor FireRedEnglishRecognizer {
     }
 
     @concurrent static func localDirectory() async throws -> URL {
+        try await SpeechSetupReporting.checkAdmission()
         diagnosticMemory("verification-begin")
         defer { diagnosticMemory("verification-end") }
         guard let pinURL = Bundle.main.url(forResource: "pin", withExtension: "json") else {
@@ -61,8 +67,8 @@ actor FireRedEnglishRecognizer {
               Set(pin.artifacts.keys) == Set(["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]) else {
             throw Failure("FireRed AED model/runtime identity mismatch. No fallback.")
         }
-        let root = URL.documentsDirectory.appending(path: "FireRedProbe", directoryHint: .isDirectory)
-        let folder = root.appending(path: "model", directoryHint: .isDirectory)
+        let folder = developmentDirectory
+        let root = folder.deletingLastPathComponent()
         for url in [root, folder] {
             guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
                 throw Failure("FireRed assets must not contain symbolic links.")
@@ -90,12 +96,15 @@ actor FireRedEnglishRecognizer {
         var excluded = root
         var resources = URLResourceValues(); resources.isExcludedFromBackup = true
         try excluded.setResourceValues(resources)
+        try await SpeechSetupReporting.checkAdmission()
         return folder
     }
 
     func prepare(directory: URL) async throws {
         guard !busy, recognizer == nil else { throw Failure("FireRed is busy or already prepared.") }
         busy = true; defer { busy = false }
+        await SpeechSetupReporting.emit(.stage(.checkingDetection))
+        try await SpeechSetupReporting.checkAdmission()
         try checkReadyForWork()
         vadMode = try SpeechPresencePolicy.Mode(arguments: ProcessInfo.processInfo.arguments)
         if Self.memoryDiagnostic {
@@ -107,6 +116,8 @@ actor FireRedEnglishRecognizer {
             Self.diagnosticMemory("vad-prepare-begin")
             defer { Self.diagnosticMemory("vad-prepare-end") }
             do {
+                await SpeechSetupReporting.emit(.stage(.preparingDetection))
+                try await SpeechSetupReporting.checkAdmission()
                 vad = try await VadManager(config: VadConfig(
                     defaultThreshold: SpeechPresencePolicy.threshold, computeUnits: .cpuAndNeuralEngine))
             } catch is CancellationError { throw CancellationError() }
@@ -116,6 +127,8 @@ actor FireRedEnglishRecognizer {
                 logger.warning("firered_vad_unavailable phase=prepare action=allow_asr")
             }
         }
+        await SpeechSetupReporting.emit(.stage(.loadingSpeechModels))
+        try await SpeechSetupReporting.checkAdmission()
         try checkReadyForWork()
         let started = ProcessInfo.processInfo.systemUptime
         logger.notice("firered_native_begin phase=prepare uptime=\(started, privacy: .public) cpu_threads=1")

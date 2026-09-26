@@ -26,7 +26,8 @@ private func replacing(_ value: SpeechPackage, key: String, with replacement: An
 }
 
 struct SpeechPackageTests {
-    @Test(arguments: LocalSpeechPair.allCases) func packageRoundTrip(_ pair: LocalSpeechPair) throws {
+    // Only these pairs have a package schema; FireRed distribution is still gated.
+    @Test(arguments: [LocalSpeechPair.taiwanMandarinEnglish, .vietnameseEnglish]) func packageRoundTrip(_ pair: LocalSpeechPair) throws {
         let package = fixture(pair)
         #expect(try SpeechPackage.decode(package.canonicalData()) == package)
         #expect(package.supports(hardware: "iPhone18,3", osMajor: 27))
@@ -38,7 +39,7 @@ struct SpeechPackageTests {
         #expect(SpeechPackagePins.breezeManifest == "64021fb776ee2ef4cf02c05b2a9dafde0e0700e9bf7d967b4bc5302558b5fdb4")
         #expect(SpeechPackagePins.breezeRevision == "cffe7ccb404d025296a00758d0a33468bec3a9d0")
         #expect(LocalSpeechPair.forSupportLanguage("Traditional Chinese") == .taiwanMandarinEnglish)
-        #expect(LocalSpeechPair.forSupportLanguage("Simplified Chinese") == nil)
+        #expect(LocalSpeechPair.forSupportLanguage("Simplified Chinese") == .mainlandMandarinEnglish)
         #expect(LocalSpeechPair.taiwanMandarinEnglish.supportLocale == "zh-Hant-TW")
     }
     @Test func supportCacheDoesNotCrossPairs() {

@@ -101,6 +101,19 @@ final class MuralUITests: XCTestCase {
         XCTAssertEqual(languagePair.label, "English · Traditional Chinese")
         XCTAssertTrue(localRecognizer(app).label.contains("breeze-asr25-pal8-v1"))
 
+        setMeaningLanguage("Simplified Chinese", app: app)
+        XCTAssertEqual(languagePair.label, "English · Simplified Chinese")
+        XCTAssertTrue(localRecognizer(app).label.contains("firered-v2-aed-int8"))
+        let simplifiedStart = app.buttons["local-conversation-start"]
+        for _ in 0..<8 where !simplifiedStart.isHittable { app.swipeUp() }
+        simplifiedStart.tap()
+        let unavailable = app.alerts["A little interruption"]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 5))
+        XCTAssertTrue(unavailable.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "requires the FireRed development build")).firstMatch.exists)
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
+        keepScreenshot("Simplified Chinese fails closed without native linkage", app: app)
+        unavailable.buttons["OK"].tap()
+
         setMeaningLanguage("French", app: app)
         XCTAssertEqual(languagePair.label, "English · French")
         let start = app.buttons["local-conversation-start"]
@@ -108,7 +121,7 @@ final class MuralUITests: XCTestCase {
         start.tap()
         let alert = app.alerts["A little interruption"]
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "supports English learning with Vietnamese or Traditional Chinese meanings")).firstMatch.exists)
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Vietnamese, Traditional Chinese, or Simplified Chinese meanings")).firstMatch.exists)
         alert.buttons["OK"].tap()
 
         setMeaningLanguage("Traditional Chinese", app: app)
@@ -122,7 +135,7 @@ final class MuralUITests: XCTestCase {
         for _ in 0..<8 where !start.isHittable { app.swipeUp() }
         start.tap()
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "supports English learning with Vietnamese or Traditional Chinese meanings")).firstMatch.exists)
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Vietnamese, Traditional Chinese, or Simplified Chinese meanings")).firstMatch.exists)
         alert.buttons["OK"].tap()
     }
     func testSpeechSetupConsentThenAutomaticContinuation() {
@@ -164,7 +177,8 @@ final class MuralUITests: XCTestCase {
         XCTAssertFalse(app.buttons["local-tutor-probe"].isEnabled)
         setMeaningLanguage("Vietnamese", app: app)
         XCTAssertEqual(app.staticTexts["conversation-language-pair"].label, "English · Vietnamese")
-        XCTAssertTrue(localRecognizer(app).label.contains("phowhisper"))
+        XCTAssertTrue(localRecognizer(app).label.contains("breeze-asr25-pal8-v1"))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains("Breeze PAL8"))
         XCTAssertEqual(stage.label, "Setup cancelled")
         XCTAssertFalse(start.isEnabled) // Selecting a future pair must not release the old owner.
         keepScreenshot("Cancel acknowledges immediately; next language is selectable", app: app)

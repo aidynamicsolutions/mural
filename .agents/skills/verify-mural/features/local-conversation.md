@@ -1,5 +1,13 @@
 # Local conversation feasibility probes
 
+## Simplified Chinese candidate: native continuation still blocked
+
+See `docs/asr/chinese/simplified-talk-candidate.md` for source/build/UI evidence and the exact public model revision. Fresh-install downloads remain required but unfinished. Do not ask for FireRed preparation until its documented memory continuation gate is resolved.
+
+For ordinary-build UI regression, run the existing `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed` and `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain` on an exclusively owned iOS 27 simulator. The first checks Settings English + Vietnamese/Traditional Chinese/Simplified Chinese, selected headings and backend identities, and the explicit unavailable-FireRed alert. The second changes the next Settings language during synthetic cancellation drain: Start stays disabled and diagnostics must still name the OLD job's Breeze backend until drain completes. Record video under `.build/verification/`; preview drain is not native acceptance.
+
+Once continuation is justified, use normal Settings/Talk, not the flask/file runner. Capture Mural-only logs before the human batch; require `local_talk_model_selected pair=zh-CN-en` and FireRed, not merely the generic PhoWhisper launch event. Check Mandarin, English, mixed speech, natural Yes/No and a name/number; English speech, Simplified meanings/lookup and on-screen-only Help; no Chinese learning credit. Then check the approved lifecycle/offline/idle/drain scenarios and both existing pairs. Preserve voice settings and raw transcript output. Stop on the first resource warning or native-duration blocker, without an automatic retry.
+
 ## Current phone build: explicit Core AI Release
 
 For the user's paired iPhone 17/h18p on iOS 27, preserve the explicitly opted-in staged Core AI GPU-preferred encoder with the existing Core ML decoder. This supersedes the historical baseline-only build instructions below, not the safety or release gates in `docs/coreai/gpu-talk-checkpoint.md` and `docs/coreai/first-turn-readiness-prewarm-plan.md`.

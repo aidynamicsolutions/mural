@@ -255,15 +255,15 @@ struct TalkView: View {
             }
             DisclosureGroup("On-device details & diagnostics") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("ASR backend: \(coordinator.isStoppingSpeechSetup ? coordinator.localAudio.selectedConversationASRBackend : coordinator.localSpeechPair == .taiwanMandarinEnglish ? "Breeze PAL8 · WhisperKit / Core ML" : LocalConversationEngine.conversationASRBackend)")
+                    Text("ASR backend: \(LocalConversationEngine.backendDescription(for: coordinator.localDiagnosticPair))")
                         .accessibilityIdentifier("local-asr-backend")
-                    Text("\(coordinator.localSpeechPair.recognizerID) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
+                    Text("\(coordinator.localDiagnosticPair.recognizerID) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
                         .accessibilityIdentifier("local-recognizer")
                     Text("Microphone is off except while recording. On-device conversations do not end for inactivity; tap End when you are done.")
                     Text("Speech-presence checks cannot guarantee that recognition is accurate. Review the transcript; reported preparation speed does not qualify a recognizer's language accuracy.")
-                    Text("Finalized turns, \(coordinator.localSpeechPair.supportLanguage) meanings, lookup, Help and typed replies stay on this iPhone. Raw recognition is saved separately from display text; teaching never rewrites it. Themes and search remain unavailable.")
-                    Text(coordinator.localSpeechPair == .taiwanMandarinEnglish
-                         ? "Taiwan Mandarin–English is a user-test mode. Traditional Chinese Help is on screen; practice speech stays English. Automatic learning credit is disabled pending separate semantic qualification."
+                    Text("Finalized turns, \(coordinator.localDiagnosticPair.supportLanguage) meanings, lookup, Help and typed replies stay on this iPhone. Raw recognition is saved separately from display text; teaching never rewrites it. Themes and search remain unavailable.")
+                    Text(coordinator.localDiagnosticPair != .vietnameseEnglish
+                         ? "\(coordinator.localDiagnosticPair.title) is a user-test mode. \(coordinator.localDiagnosticPair.supportLanguage) Help is on screen; practice speech stays English. Automatic learning credit is disabled pending separate semantic qualification."
                          : "After End, only your last reply is reviewed for up to two English words or phrases. Evidence is provisional; supported practice is not independent recall.")
                     if coordinator.session != nil, !coordinator.localAudio.rawASRText.isEmpty {
                         DisclosureGroup("Raw recognition · not translated") {

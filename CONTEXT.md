@@ -13,8 +13,12 @@ An on-demand contextual explanation opened by tapping an English word in an assi
 _Avoid_: sentence meaning, meaning toggle
 
 **On-device conversation**:
-An English practice session processed locally on the iPhone with Vietnamese support.
+An English practice session processed locally on the iPhone with the selected meaning/support language.
 _Avoid_: local chat, offline chat
+
+**Chinese support script**:
+The Simplified or Traditional writing system selected for Chinese meanings, lookup and on-screen Help, not a separate spoken language or inferred accent.
+_Avoid_: speaking Simplified Chinese, automatic script conversion
 
 **On-device details & diagnostics**:
 A collapsed secondary disclosure for technical local status and troubleshooting information, not primary conversation content.

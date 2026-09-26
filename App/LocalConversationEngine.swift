@@ -188,6 +188,17 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         case fireRed = "FireRed v2 CN-EN (probe)"
         #endif
 
+        var conversationPair: LocalSpeechPair? {
+            switch self {
+            case .phoWhisper: .vietnameseEnglish
+            case .breeze: .taiwanMandarinEnglish
+            #if MURAL_FIRERED_FILE_PROBE
+            case .fireRed: .mainlandMandarinEnglish
+            #endif
+            default: nil
+            }
+        }
+
         var supportsRepairDownload: Bool {
             switch self {
             case .phoWhisper, .breeze: false
@@ -743,12 +754,46 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         audioRelease = Task { _ = try? await AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) }
     }
 
+    static func conversationModel(for pair: LocalSpeechPair) throws -> ASRModel {
+        switch pair {
+        case .vietnameseEnglish: return .phoWhisper
+        case .taiwanMandarinEnglish: return .breeze
+        case .mainlandMandarinEnglish:
+            #if MURAL_FIRERED_FILE_PROBE
+            return .fireRed
+            #else
+            throw SpeechError.unavailableRecognizer("Simplified Chinese speech requires the FireRed development build. No other recognizer or cloud fallback was selected.")
+            #endif
+        }
+    }
+
+    static func backendDescription(for pair: LocalSpeechPair) -> String {
+        switch pair {
+        case .vietnameseEnglish: return conversationASRBackend
+        case .taiwanMandarinEnglish: return "Breeze PAL8 · WhisperKit / Core ML"
+        case .mainlandMandarinEnglish:
+            return FireRedEnglishRecognizer.available
+                ? "FireRedASR2-AED INT8 · sherpa-onnx / ONNX Runtime · CPU, one thread (candidate)"
+                : "FireRedASR2-AED · not included in this build"
+        }
+    }
+
     var selectedConversationASRBackend: String {
-        asrModel == .breeze ? "Breeze PAL8 · WhisperKit / Core ML" : Self.conversationASRBackend
+        guard let pair = asrModel.conversationPair else { return asrModel.rawValue }
+        return Self.backendDescription(for: pair)
     }
 
     func hasConversationAssets(for pair: LocalSpeechPair) throws -> Bool {
+        _ = try Self.conversationModel(for: pair) // Reject an unavailable backend before resolving any assets.
         let manager = FileManager.default
+        if pair == .mainlandMandarinEnglish {
+            guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
+                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
+            // Developer assets only in this candidate. Existence is not verification or readiness.
+            return ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"].allSatisfy {
+                manager.fileExists(atPath: FireRedEnglishRecognizer.developmentDirectory.appending(path: $0).path)
+            }
+        }
         if pair == .taiwanMandarinEnglish {
             guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
@@ -783,7 +828,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
     func prepareConversation(model: ASRModel = .phoWhisper) async throws {
         try await SpeechSetupReporting.checkAdmission()
-        guard model == .phoWhisper || model == .breeze else { throw SpeechError.busy }
+        guard let pair = model.conversationPair else { throw SpeechError.busy }
         rawASRText = ""
         preparationProgress = .init(.checkingVoice)
         if let warmup = stagedDecoderWarmup {
@@ -797,13 +842,13 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         guard canPrepare else { throw SpeechError.busy }
         selectASR(model)
         guard asrModel == model else { throw SpeechError.busy }
-        logger.notice("local_talk_model_selected pair=\(model == .breeze ? "zh-TW-en" : "vi-en", privacy: .public) model=\(self.asrModel.rawValue, privacy: .public) backend=\(self.selectedConversationASRBackend, privacy: .public)")
-        if model == .breeze {
+        logger.notice("local_talk_model_selected pair=\(pair.rawValue, privacy: .public) model=\(self.asrModel.rawValue, privacy: .public) backend=\(self.selectedConversationASRBackend, privacy: .public)")
+        if pair != .vietnameseEnglish {
             stopForTTSSafety(footprint: 0, thermal: ttsThermalState)
             try Task.checkCancellation()
             guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
-            // The same 3 GB/thermal guard also applies when Breeze uses the Apple voice.
-            startTTSConversationMonitor(model: BreezeEnglishRecognizer.identity)
+            // Retain the existing guard with either voice; it does not qualify FireRed's memory use.
+            startTTSConversationMonitor(model: pair.recognizerID)
         }
         submittedAt = nil; sendToPlaybackSeconds = nil
         await ttsCleanup?.value
@@ -824,7 +869,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 try await SpeechSetupReporting.checkAdmission()
                 let failure = error as NSError
                 logger.error("tts_fallback backend=supertonic reason=preparation domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
-                if model != .breeze { ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil }
+                if pair == .vietnameseEnglish { ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil }
                 await ttsCleanup?.value
                 ttsBackend = .apple
             }
@@ -950,6 +995,8 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 case .fireRed:
                     let recognizer = FireRedEnglishRecognizer()
                     try await recognizer.prepare(directory: directory)
+                    await SpeechSetupReporting.emit(.stage(.validatingSpeech))
+                    try await SpeechSetupReporting.checkAdmission()
                     try Task.checkCancellation()
                     guard self.generation == token else { return }
                     self.fireRed = recognizer
@@ -1900,8 +1947,10 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
     private enum SpeechError: LocalizedError {
         case busy, noVoice
+        case unavailableRecognizer(String)
         var errorDescription: String? {
             switch self {
+            case .unavailableRecognizer(let message): message
             case .busy: "Wait for the current speech to finish."
             case .noVoice: "No English voice is available. Download an English voice in iPhone Settings > Accessibility > Read & Speak > Voices, then try again."
             }

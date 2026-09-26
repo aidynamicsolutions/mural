@@ -294,8 +294,8 @@ struct WordsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 PageHeading(eyebrow: "Little by little · \(coordinator.language.name)", title: "Your words.", subtitle: "Familiar words, ready for another conversation.")
                 if coordinator.isLocal {
-                    Text(coordinator.localSpeechPair == .taiwanMandarinEnglish
-                         ? "Taiwan Mandarin–English test conversations keep your transcript and Traditional Chinese support. Automatic learning credit is disabled until separately qualified."
+                    Text(coordinator.localSpeechPair != .vietnameseEnglish
+                         ? "\(coordinator.localSpeechPair.title) conversations keep your transcript and \(coordinator.localSpeechPair.supportLanguage) support. Automatic learning credit is disabled until separately qualified."
                          : coordinator.localAssessmentRunning ? "Reviewing your last reply on this iPhone…" : "On-device practice reviews only your last reply after you tap End, saving up to two English words or phrases when the evidence is clear.")
                         .font(.footnote).foregroundStyle(MuralColor.secondary)
                 }

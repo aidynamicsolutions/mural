@@ -38,9 +38,7 @@ import MuralCore
         let package = SpeechPackageCatalog.entries.filter { $0.pair == pair }
             .map { "\($0.id):\($0.manifestSHA256)" }.sorted().joined(separator: ";")
         return .init(pair: pair,
-            preparationContract: pair == .vietnameseEnglish
-                ? "vi-staged-coreai-fp8-pal8-g16-v1:validated-decoder-v1"
-                : "breeze-asr25-pal8-v1:validated-eager-v1",
+            preparationContract: pair.preparationContract,
             voice: "\(localAudio.conversationTTSBackend.rawValue):\(localAudio.supertonicVoice.rawValue):supertonic3-ane-int4-v1",
             downloadContract: package.isEmpty ? "reviewed-catalog-empty-v1" : package)
     }
@@ -120,6 +118,10 @@ import MuralCore
     var localSpeechPair: LocalSpeechPair {
         if let session, session.isLocalConversation { return session.localSpeechPair ?? .vietnameseEnglish }
         return selectedLocalSpeechPair
+    }
+    var localDiagnosticPair: LocalSpeechPair {
+        if isStoppingSpeechSetup, let job = setup.job { return job.identity.pair }
+        return localSpeechPair
     }
     var localAssistance: String? {
         guard let passage = assistantPassage else { return nil }
@@ -403,7 +405,7 @@ import MuralCore
         guard !needsThermalResume else { resumeAfterCooling(); return }
         let pair = selectedLocalSpeechPair
         guard localPairSupported else {
-            error = "On-device Talk supports English learning with Vietnamese or Traditional Chinese meanings. Set those languages in Settings; your learning history stays unchanged."
+            error = "On-device Talk supports English learning with Vietnamese, Traditional Chinese, or Simplified Chinese meanings. The selected speech model must be included in this build. Set those languages in Settings; your learning history stays unchanged."
             return
         }
         #if DEBUG && targetEnvironment(simulator)
@@ -412,7 +414,11 @@ import MuralCore
         #else
         let isSetupPreview = false
         #endif
-        if !isSetupPreview, let message = LocalTutorModel.availabilityMessage(for: pair) { error = message; return }
+        if !isSetupPreview {
+            do { _ = try LocalConversationEngine.conversationModel(for: pair) }
+            catch { self.error = error.localizedDescription; return }
+            if let message = LocalTutorModel.availabilityMessage(for: pair) { error = message; return }
+        }
         guard UIApplication.shared.applicationState == .active else { return }
         do { _ = try setup.start(identity: setupIdentity) }
         catch {
@@ -435,7 +441,7 @@ import MuralCore
         sessionMode = .local
         memoryPressurePaused = false
         selectedTheme = nil; pendingTopic = nil
-        var record = SessionRecord(languageID: "en", title: pair == .vietnameseEnglish ? "On-device conversation" : "Taiwan Mandarin–English practice")
+        var record = SessionRecord(languageID: "en", title: pair.conversationTitle)
         record.localSpeechPair = pair
         localStartedAt = ProcessInfo.processInfo.systemUptime
         session = record
@@ -577,7 +583,7 @@ import MuralCore
                                     }
                                     self.reportSetupProgress(.init(stage), jobID: jobID)
                                 }) {
-                                    try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
+                                    try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair))
                                 }
                             }
                         }
@@ -996,8 +1002,8 @@ import MuralCore
     func help() {
         if isLocal {
             guard canUseLocalSupport, state == .active, let id = session?.id else { return }
-            if localSpeechPair == .taiwanMandarinEnglish {
-                explainTaiwan(sessionID: id)
+            if localSpeechPair != .vietnameseEnglish {
+                explainChinese(sessionID: id)
                 return
             }
             localAudio.clearSubmissionTiming()
@@ -1014,9 +1020,10 @@ import MuralCore
         append("instructions", TeachingPolicy.help(language: language))
         notice = "Mural will make that a little simpler."
     }
-    private func explainTaiwan(sessionID: UUID) {
+    private func explainChinese(sessionID: UUID) {
         guard let passage = assistantPassage else { return }
-        let key = localSpeechPair.helpCacheKey(revisionKey: passage.revisionKey)
+        let pair = localSpeechPair
+        let key = pair.helpCacheKey(revisionKey: passage.revisionKey)
         localSupportUsed = true; error = nil
         if session?.translations[key] != nil { return }
         localPhase = .thinking
@@ -1035,14 +1042,14 @@ import MuralCore
                 self.scheduleTranslation()
             }
             do {
-                let text = try await self.localTutor.taiwanHelp(passage.text)
+                let text = try await self.localTutor.chineseHelp(passage.text, pair: pair)
                 try self.checkLocal(sessionID)
-                guard self.assistantPassage?.revisionKey == passage.revisionKey else { return }
+                guard self.localSpeechPair == pair, self.assistantPassage?.revisionKey == passage.revisionKey else { return }
                 self.session?.translations[key] = text
                 self.saveIfEligible()
             } catch {
                 guard !Task.isCancelled, self.session?.id == sessionID else { return }
-                self.error = LocalTutorModel.message(for: error, pair: .taiwanMandarinEnglish)
+                self.error = LocalTutorModel.message(for: error, pair: pair)
             }
         }
     }
@@ -1267,7 +1274,7 @@ import MuralCore
                     return
                 }
                 #endif
-                try await self.localAudio.prepareConversation(model: pair == .taiwanMandarinEnglish ? .breeze : .phoWhisper)
+                try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair))
                 try self.checkLocal(id)
                 self.markSpeechPreparationSucceeded(for: pair)
                 self.memoryPressurePaused = false
