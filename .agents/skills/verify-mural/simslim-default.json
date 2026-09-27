@@ -1,0 +1,19 @@
+{
+  "name": "mural-default",
+  "description": "Validated iOS 27 simulator UI profile. Keep all speech/Intelligence, widget refresh and Live Activities. Use stock for affected system integrations; see docs/simulator-verification-lifecycle-plan.md.",
+  "except": [
+    "siri",
+    "icloud",
+    "store",
+    "web",
+    "photos",
+    "messaging",
+    "connectivity",
+    "telemetry",
+    "other"
+  ],
+  "keep": [
+    "com.apple.chronod",
+    "com.apple.liveactivitiesd"
+  ]
+}

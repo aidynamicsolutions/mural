@@ -26,7 +26,29 @@ Mural has two useful verification surfaces:
 
 The current environment does not have an OpenAI API key. Prove the missing-key and consent guards, but report live provider response checks as blocked. Never add a key to a command, source file, screenshot, or evidence artifact.
 
-Run commands from the repository root. The app bundle identifier is `no.william.mural`. The project has no checked-in simulator launcher; use the commands below.
+Run commands from the repository root. The app bundle identifier is `no.william.mural`. Simulator verification must use the checked-in lifecycle below; physical recipes remain separate and opt-in.
+
+## Mandatory simulator lifecycle
+
+```sh
+make build  # Generic arm64 simulator compilation only; never boots a device.
+make agent-verify SIM_UDID="$SIM_UDID"  # Three-check smoke fallback.
+make agent-verify SIM_UDID="$SIM_UDID" TESTS='testThemeSearchFiltersLocally'
+make agent-verify SIM_UDID="$SIM_UDID" VERIFY_SUITE=qualification
+make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock
+```
+
+Pass the exact UUID of an available, **initially Shutdown, explicitly owned synthetic simulator**. Never select by name, `booted`, or another project's device. The runner takes the shared real-user lock at `~/Library/Caches/ios-verification/<UDID>.lock`; a prebooted device or busy lock is a refusal, not permission to stop its owner.
+
+Make prepares artifacts before boot, locks canonical DerivedData across the whole job, serially tests the selected UDID, finalizes its recorder and confirms Shutdown on success, failure, timeout and ordinary cancellation. Routine focused/smoke jobs share a 600-second whole-command budget: 420 seconds for build/setup/tests and 180 seconds reserved for cleanup. Qualification has a 2400-second budget. Overruns fail; cleanup is never killed to manufacture a fast result. Give the outer tool at least 900 seconds for routine work (3000 for qualification) so the owner's separately bounded cleanup can finish even on an overrun. Do not nest `make agent-verify` inside another lifecycle runner.
+
+Coordinate heavy simulator jobs across projects before measuring. A different UDID or DerivedData lock does not isolate CPU, memory or automation services. Observe other jobs read-only; defer/report active competition rather than stopping it. Do not add parallel simulator workers or clean caches to chase a number.
+
+Default: `simslim-default.json`, reviewed SimSlim **0.11.0**, qualified on iPhone 17 / iOS 27.0. It disables system search, Health/Home/Fitness, Mail/Calendar/Contacts, Family/Screen Time, News/Weather/Maps/Games and only PosterBoard from widgets. All Siri/Intelligence/speech, chronod, liveactivitiesd, account/keychain, media, web, photos, messaging, connectivity, diagnostics and assets remain enabled. Use **stock** for integrations affected by disabled services. This does not qualify actual model/audio/background execution.
+
+Both modes require SimSlim: missing/unreviewed CLI, invalid profile or setup failure stops before tests, with no silent fallback. `--stock` restores and verifies every SimSlim-managed override, not arbitrary manual changes. Install only if missing: `brew install mobai-app/tap/simslim`; review any version other than 0.11.0 before mutation. Profiles persist through shutdown; normal cleanup never erases data or restores/reboots again.
+
+Optional Make variables: `EVIDENCE` (fresh directory), `DERIVED_DATA` (default `.build/mural-lifecycle-derived-data`, shared lock rejects contention), `VERIFY_SUITE=smoke|qualification` (default smoke), `TESTS` (space-separated method names replacing the suite selection), `SIMSLIM_PROFILE` (explicit reviewed trial; conflicts with stock). Omit `TESTS` for the suite; explicitly empty, malformed or duplicate selections fail before building. Omitted/empty profile selects the default, **not** stock. Evidence defaults to `.build/verification/<unique-run>/`.
 
 ## Concise Xcode output and test results
 
@@ -38,7 +60,7 @@ mkdir -p "$EVIDENCE"
 set -o pipefail
 ```
 
-For every `xcodebuild` command in this skill and its feature guides, preserve the raw log locally while showing only formatted output:
+Make already applies this convention. For explicitly authorized physical commands, or simulator commands **inside the enclosing lifecycle only**, preserve raw logs while showing formatted output:
 
 ```sh
 xcodebuild <existing arguments> 2>&1 | tee "$EVIDENCE/<action>.log" | xcbeautify --is-ci
@@ -54,7 +76,7 @@ Check the summary first. Inspect only failed-test details or attachments needed 
 
 ## Preconditions
 
-- Apple Silicon macOS with Xcode 26 or newer, an installed iOS 26.1 or newer simulator runtime, and Swift 6 tooling.
+- Apple Silicon macOS, Xcode 27, iOS 27.0 simulator runtime, Python 3, xcbeautify, ffmpeg/ffprobe and reviewed SimSlim 0.11.0. Other runtimes are not app-qualified; persistent slimming refuses runtimes before iOS 18.5.
 - Node.js 20 or newer for the pinned `.tools/serve-sim` package.
 - A selected, explicit iPhone 17-family simulator UDID for each run.
 - For physical checks: a paired, unlocked iPhone 17 with Developer Mode enabled, a trusted Mac, a valid signing team in `Config/Local.xcconfig`, and the user's authorization to install the current build.
@@ -67,7 +89,6 @@ xcodebuild -version
 node --version
 swift --version
 xcrun simctl list devices available
-xcrun devicectl list devices
 ```
 
 Install the pinned simulator helper only if it is absent:
@@ -79,90 +100,43 @@ if [ ! -x "$SERVE_SIM" ]; then npm ci --prefix .tools/serve-sim; fi
 
 The helper is `serve-sim` version 0.1.46. It targets simulators only. It does not control a physical iPhone.
 
-## Build and prepare the simulator
-
-Choose an available iPhone 17 or iPhone 17 Pro simulator from `xcrun simctl list devices available`, then set `SIM` to its UDID. Use that same value for building, launching, input, screenshots, and cleanup.
+## Build and run supported simulator checks
 
 ```sh
+: "${SIM_UDID:?Set an exact owned Shutdown simulator UUID}"
 export APP_BUNDLE_ID=no.william.mural
-export SERVE_SIM="$PWD/.tools/serve-sim/node_modules/.bin/serve-sim"
-: "${SIM:?Set SIM to an available iPhone 17-family simulator UDID}"
-export DERIVED_DATA="$PWD/.build/verify-mural-derived-data"
-mkdir -p "$DERIVED_DATA"
-
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS Simulator,id=$SIM" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  ARCHS=arm64 \
-  ONLY_ACTIVE_ARCH=YES \
-  build 2>&1 | tee "$EVIDENCE/simulator-build.log" | xcbeautify --is-ci
-
+export DERIVED_DATA="$PWD/.build/mural-lifecycle-derived-data"
 export SIM_APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/Mural.app"
-test -d "$SIM_APP"
+make agent-verify SIM_UDID="$SIM_UDID"
 ```
 
-Run supporting checks when the change warrants them:
+Prefer the smallest sufficient **affected-feature selection** below; there is no mandatory smoke run before it. The default smoke fallback reuses three existing checks: onboarding/language selection, meaning toggle/New conversation/preview History, and Apple/Mural voice preference reselection and relaunch retention. Preview History is temporary, while preference retention is asserted across app launches. Neither is native model/audio proof.
+
+`VERIFY_SUITE=qualification` retains all 13 previously qualified UI checks: onboarding/consent/missing-key guards; meaning/backend and unsupported combinations; synthetic setup cancel/drain/retry; both voice checks; theme navigation/local search; secure settings; ended transcript/New conversation/preview History; largest Dynamic Type; and a recorded Settings transition. Use it for profile/runtime or broad integration changes, not every edit. Relevant exhaustive setup and reboot-retention scenarios remain separate; see the feature map.
+
+Every selection checks exact test counts, zero skipped tests and the selected device. `make-action.json` records exact coverage, `timings.json` records preparation/build/lifecycle/total elapsed time, and `cleanup.json` separates setup/command/cleanup durations and outcomes. Stage markers and XCTest output show progress; raw logs remain saved. Native XCTest allows 180 seconds per test, destination lookup is bounded at 30 seconds, and automatic retries/verbose sysdiagnose collection are not enabled. A failed invocation stops later stages; diagnose its first failure/stall instead of blindly rerunning or waiting for the qualification ceiling. The native per-test limit is not a custom whole-suite abort-on-first-assertion mechanism. No test-worker clones or serve-sim mirror are needed. See the [speedup plan](../../../docs/simulator-test-speedup-plan.md) for measured evidence and scope differences.
+
+Measured on the qualified runtime with incremental builds: smoke **4m23s / 4m35s**, median **4m29s**, through confirmed Shutdown; the final focused recorded transition took **4m27s**. The test-action window dropped 75.8% versus the broader 13-check qualification because coverage was selected more narrowly, not because identical tests ran faster. See the linked plan for raw evidence, failed artifact-check attempts, source-decode correction and limitations.
+
+For a focused change (replaces smoke, never appends it):
 
 ```sh
-swift test
-
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS Simulator,id=$SIM" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  ARCHS=arm64 \
-  ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO \
-  -resultBundlePath "$EVIDENCE/simulator-tests.xcresult" test 2>&1 | tee "$EVIDENCE/simulator-tests.log" | xcbeautify --is-ci
-xcrun xcresulttool get test-results summary --path "$EVIDENCE/simulator-tests.xcresult" --compact
+make agent-verify SIM_UDID="$SIM_UDID" \
+  TESTS='testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount'
 ```
 
-For a focused native UI check, append one of the test names in the feature map:
+For custom simulator work, compile first with `make build`, then enclose **all** install/launch/input/capture steps in one bounded script:
 
 ```sh
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS Simulator,id=$SIM" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  ARCHS=arm64 \
-  ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO \
-  -only-testing:MuralUITests/MuralUITests/testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount \
-  -resultBundlePath "$EVIDENCE/focused-ui.xcresult" test 2>&1 | tee "$EVIDENCE/focused-ui.log" | xcbeautify --is-ci
-xcrun xcresulttool get test-results summary --path "$EVIDENCE/focused-ui.xcresult" --compact
+python3 scripts/verify_simulator.py --udid "$SIM_UDID" \
+  --evidence "$PWD/.build/verification/custom-$(date +%Y%m%d-%H%M%S)-$$" \
+  --timeout 300 --cleanup-script /absolute/path/to/owned-finalizer.sh \
+  -- bash /absolute/path/to/interaction.sh
 ```
 
-## Launch the simulator app
+Inside that script, the runner supplies identical `SIM` and `SIM_UDID`, and `EVIDENCE`. Install `$SIM_APP` on that exact device, then use `simctl launch --terminate-running-process` with the desired preview arguments. Do not boot another simulator or return to chat with the device still running. Any direct Xcode test must use `-parallel-testing-enabled NO` and the exact ID, hold an exclusive DerivedData lock (or use its own isolated directory), and save a unique xcresult/compact summary.
 
-Boot the selected simulator without erasing it, install the app built above, and launch it with a deterministic Debug preview argument:
-
-```sh
-xcrun simctl boot "$SIM" 2>/dev/null || true
-xcrun simctl bootstatus "$SIM" -b
-xcrun simctl install "$SIM" "$SIM_APP"
-xcrun simctl terminate "$SIM" "$APP_BUNDLE_ID" 2>/dev/null || true
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=greeting
-```
-
-Useful simulator-only launch states are:
-
-```sh
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --preview-onboarding
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --preview-existing-user
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --ended-conversation
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=conversation
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=themes
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=words
-```
-
-`--preview` uses temporary SwiftData and skips normal onboarding. `--preview-onboarding` reopens the two-screen onboarding fixture. `--preview-existing-user` starts with an onboarded user. `--ended-conversation` seeds a finished coffee conversation. `--screenshot` seeds synthetic simulator-only content and never calls OpenAI.
+Useful arguments: `--preview --preview-onboarding`, `--preview --preview-existing-user`, `--preview --ended-conversation`, or `--preview --screenshot=greeting|conversation|themes|words`. Preview records are temporary; selected preferences can still use UserDefaults. None of these proves native microphone/model execution or durable conversations.
 
 ## Animation and transient layout bugs
 
@@ -170,34 +144,19 @@ For shifting, snapping, flicker, menu dismissal, or transient clipping, follow [
 
 ## Serve-sim readiness and observation
 
-Start one mirror for the selected simulator. Do not start a second mirror for the same device.
+Prefer native tests. Start a mirror only inside an owned runner session when live input/accessibility is needed. Never take over an existing mirror. The tested repeatable startup/finalizer examples are linked in the [rollout evidence log](../../../docs/simulator-verification-lifecycle-plan.md).
 
-```sh
-"$SERVE_SIM" --detach --panes devices,tools --fit "$SIM"
-SERVE_INFO=$("$SERVE_SIM" --list "$SIM" -q)
-printf '%s\n' "$SERVE_INFO"
-export PREVIEW_URL=$(printf '%s' "$SERVE_INFO" | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])')
-export HELPER_URL=$(printf '%s' "$SERVE_INFO" | python3 -c 'import json,sys; print(json.load(sys.stdin)["streamUrl"].rsplit("/stream.mjpeg", 1)[0])')
+Within `interaction.sh`:
 
-curl --fail --max-time 10 "$HELPER_URL/health"
-curl --fail --max-time 10 "$HELPER_URL/foreground"
-curl --fail --max-time 15 "$HELPER_URL/ax"
-```
+1. Save `"$SERVE_SIM" --list "$SIM" -q`; require `running: false` before starting.
+2. Record ownership intent **before** `--detach`, so a partially failed startup is finalized. Start only that exact device, without `--theme` or other global-setting changes.
+3. Save the resulting stream JSON, PID, command/start identity and URL. Derive `HELPER_URL` from `streamUrl`; require `/health`, `/foreground` (Mural) and fresh `/ax` before input. Bound each request with `curl --fail --max-time`.
+4. Drive mapped feature actions with `tap`, `type` or `button`, always passing `--device "$SIM"`. Coordinates come from current accessibility bounds/frame, not guessed browser pixels. Re-read state after each meaningful action.
+5. The runner's `--cleanup-script` must verify the saved mirror identity, call only `"$SERVE_SIM" --kill "$SIM"`, and require a stopped stream and no owned helper process. Run it even after command failure, timeout or cancellation. Never use an unscoped kill.
 
-Open `PREVIEW_URL` in the host browser when visual interaction or a browser screenshot is useful. The displayed frame must show Mural, not the Home Screen or a stale frame. Use the accessibility response and a fresh frame to choose targets.
+The main runner stops its command group before invoking the separately bounded finalizer. Detached helpers are **not** covered by process-group cleanup; explicitly own and finalize them. Restore any changed appearance/text size/accessibility setting before shutdown and fail cleanup if restoration cannot be confirmed. The existing recorder should remain in the owned command group and finalize gracefully before movie decode validation.
 
-`serve-sim` commands use normalized coordinates inside the simulator display, not browser pixels:
-
-```sh
-"$SERVE_SIM" tap 0.50 0.50 --device "$SIM"
-"$SERVE_SIM" type "Mural verification text" --device "$SIM"
-"$SERVE_SIM" button home --device "$SIM"
-"$SERVE_SIM" event-log --device "$SIM"
-```
-
-The tap above is syntax only. Derive the actual coordinate from the current screenshot or accessibility bounds before sending it. After every meaningful action, fetch `/ax` or a screenshot again. An event-log entry saying that a tap was accepted does not prove that a native control changed state.
-
-On Xcode 27, keyboard input is bridged through Device Hub. The selected simulator window must be visible and frontmost, and the app that launched `serve-sim` may need macOS Accessibility permission. Do not silently grant that permission. If keyboard input is not important, use the native UI tests instead.
+On Xcode 27, keyboard input may require a visible simulator and macOS Accessibility permission. Do not grant permission silently. If blocked, prefer native UI tests; an accepted input event is not proof of the visible outcome. Do not keep a mirror alive while reviewing saved artifacts.
 
 ## Seed, reset, and persistence
 
@@ -300,7 +259,7 @@ These helpers incur API usage and are not substitutes for listening or checking 
 
 ## Evidence
 
-Keep fresh, local, uncommitted evidence under `.build/verification/`. Use the `$EVIDENCE` directory initialized before build and test commands:
+Keep fresh, local, uncommitted evidence under `.build/verification/`. Make creates a unique directory, or accepts a fresh `EVIDENCE`. The observation commands below belong **inside the bounded interaction script**, never after its runner has returned:
 
 ```sh
 xcodebuild -version > "$EVIDENCE/toolchain.txt"
@@ -330,16 +289,13 @@ For each run, write `$EVIDENCE/result.md` with:
 
 Screenshots and accessibility output can contain personal content. Keep them local and review them before sharing. Do not commit evidence. The existing `.build/` ignore rule keeps this directory out of Git.
 
-## Cleanup
+## Cleanup and forced-kill recovery
 
-Stop only resources owned by this verification run:
+Cleanup is an acceptance gate, not an optional final instruction. Require `cleanup.json` with `cleanup: PASS` and `final_state: Shutdown`; also inspect the separate command status. Preserve all evidence/app data. A finalizer failure makes the run fail even if tests passed. An ordinary signal cannot interrupt the final cleanup a second time.
 
-```sh
-"$SERVE_SIM" --kill "$SIM"
-xcrun simctl terminate "$SIM" "$APP_BUNDLE_ID" 2>/dev/null || true
-```
+SIGKILL or host failure can bypass cleanup. Inspect `session.json`, `command-process.json`, helper ownership records and the exact UDID's lock metadata. Compare PID/PGID, start time and command to current `ps` output before signaling anything. Never automatically reclaim a stale-looking owner or shut down a borrowed booted device. Once ownership is established and surviving owned work is stopped, gracefully finalize recorded captures/helpers, run `xcrun simctl shutdown <that-owned-UDID>` and confirm its state via `simctl list devices -j`. Save the recovery result. Do not erase, delete, uninstall, clear caches/models, shut down all devices, or globally quit Simulator.
 
-If a foreground `serve-sim` process was used, stop it with Ctrl-C and wait for it to exit. Shut down a simulator only if this run booted it and no one else is using it. Never use an unscoped `serve-sim --kill`, never erase a simulator, and never uninstall Mural just to clean up. Leave evidence in place and confirm the named files still exist after cleanup.
+Required closeout: supported checks PASS/FAIL/BLOCKED; profile/runtime/CLI; evidence paths; owned helper/recorder stops; every owned simulator Shutdown; cleanup PASS/FAIL; other projects not targeted; physical microphone/model/native-background checks not run unless separately authorized and actually executed.
 
 ## Feature map
 
@@ -351,7 +307,11 @@ Read `features/README.md`, then the relevant feature file before choosing a chec
 - `features/conversation-lifecycle.md`
 - `features/live-ai-device.md`
 
-Match the check to the changed behavior. Prefer one real-path UI check plus the normal core/native test that covers the same behavior.
+Match the check to the changed behavior. Prefer one sufficient real-path UI journey with outcome assertions; do not automatically run overlapping suites. Layout changes require relevant transition/large-text checks, search semantics require filtering/recovery cases, and persistence changes require the appropriate relaunch/reboot path. Repeated gestures can prove distinct behaviors: changing versus reselecting, retaining across relaunch, or the same query under a different filter. Do not delete them merely because the interaction repeats.
+
+For changed data semantics, use assertions against production code for exhaustive matrices plus representative real UI integration; enumerate failures and write any necessary isolated checks before implementation. Do not reproduce the algorithm in the test or migrate unrelated coverage for this tooling rollout. Retain meaningful UI-state waits and target-driven scrolling.
+
+Reuse saved evidence only after checking relevant production/test/fixture code, build configuration, runtime/Xcode, profile/CLI and exercised state. Record current input hashes and revision/dirty state beside measurements. An old app pass does not qualify new harness behavior or changed inputs; rerun affected checks, not automatically every overlapping suite.
 
 ## Failure behavior
 
@@ -363,90 +323,13 @@ Match the check to the changed behavior. Prefer one real-path UI check plus the 
 
 ## Quick run
 
-This is the minimal harness smoke check for a cold agent. It proves a real simulator UI feature without an API key:
-
 ```sh
 cd "$(git rev-parse --show-toplevel)"
-set -euo pipefail
-export APP_BUNDLE_ID=no.william.mural
-export SERVE_SIM="$PWD/.tools/serve-sim/node_modules/.bin/serve-sim"
-: "${SIM:?Set SIM to an available iPhone 17-family simulator UDID}"
-export DERIVED_DATA="$PWD/.build/verify-mural-derived-data"
-export SIM_APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/Mural.app"
-export EVIDENCE="$PWD/.build/verification/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$EVIDENCE"
-cleanup() {
-  "$SERVE_SIM" --kill "$SIM" > "$EVIDENCE/serve-stop.txt" 2>&1 || true
-  xcrun simctl terminate "$SIM" "$APP_BUNDLE_ID" > /dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-test -d "$SIM_APP"
-xcrun simctl boot "$SIM" 2>/dev/null || true
-xcrun simctl bootstatus "$SIM" -b
-xcrun simctl install "$SIM" "$SIM_APP"
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --preview-onboarding
-"$SERVE_SIM" --detach --panes devices,tools --fit "$SIM"
-SERVE_INFO=""
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  SERVE_INFO=$("$SERVE_SIM" --list "$SIM" -q 2>/dev/null || true)
-  if printf '%s' "$SERVE_INFO" | grep -q '"running":true'; then break; fi
-  sleep 1
-done
-export HELPER_URL=$(printf '%s' "$SERVE_INFO" | python3 -c 'import json,sys; print(json.load(sys.stdin)["streamUrl"].rsplit("/stream.mjpeg", 1)[0])')
-curl --fail --max-time 10 "$HELPER_URL/health"
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  curl --fail --max-time 15 "$HELPER_URL/ax" > "$EVIDENCE/onboarding-ax.json" && grep -q 'onboarding-language-title' "$EVIDENCE/onboarding-ax.json" && break
-  sleep 1
-done
-test -s "$EVIDENCE/onboarding-ax.json"
-xcrun simctl io "$SIM" screenshot "$EVIDENCE/onboarding.png"
-
-TEST_STATUS=0
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS Simulator,id=$SIM" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  ARCHS=arm64 \
-  ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO \
-  -only-testing:MuralUITests/MuralUITests/testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount \
-  -resultBundlePath "$EVIDENCE/onboarding-test.xcresult" test 2>&1 | tee "$EVIDENCE/onboarding-test.log" | xcbeautify --is-ci || TEST_STATUS=$?
-printf 'test status: %s\\n' "$TEST_STATUS" > "$EVIDENCE/onboarding-test-status.txt"
-xcrun xcresulttool get test-results summary --path "$EVIDENCE/onboarding-test.xcresult" --compact | tee "$EVIDENCE/onboarding-test-summary.json"
-if [ "$TEST_STATUS" -ne 0 ]; then exit "$TEST_STATUS"; fi
-
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=greeting
-AFTER_AX_AVAILABLE=no
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl --fail --max-time 15 "$HELPER_URL/ax" > "$EVIDENCE/after-ax.json" && grep -q 'target-caption' "$EVIDENCE/after-ax.json"; then
-    AFTER_AX_AVAILABLE=yes
-    break
-  fi
-  sleep 1
-done
-xcrun simctl io "$SIM" screenshot "$EVIDENCE/greeting-after-test.png"
-"$SERVE_SIM" event-log --device "$SIM" > "$EVIDENCE/events.txt"
-cat > "$EVIDENCE/result.md" <<EOF
-# Mural verification harness self-check
-
-- Surface: iOS Simulator with serve-sim 0.1.46
-- Simulator: iPhone 17, UDID $SIM
-- Starting state: --preview --preview-onboarding
-- Driven feature: onboarding language, subtitle, consent, and Talk transition
-- UI test status: passed
-- API key: not used; this flow makes no provider calls
-- Post-test accessibility availability: $AFTER_AX_AVAILABLE; the screenshot remains the visual proof if the bridge is unavailable
-- Evidence: onboarding.png, onboarding-ax.json, greeting-after-test.png, after-ax.json, events.txt, onboarding-test.log
-- Cleanup: serve-sim stopped and app terminated by the exit trap
-EOF
-
-test -s "$EVIDENCE/greeting-after-test.png"
-test -s "$EVIDENCE/after-ax.json"
+: "${SIM_UDID:?Choose an explicitly owned Shutdown iPhone 17 simulator}"
+make agent-verify SIM_UDID="$SIM_UDID" \
+  TESTS='testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount'
 ```
 
-The targeted test must pass, `onboarding.png` must show Mural's onboarding screen, and `greeting-after-test.png` must show Mural's Talk screen. If any step is unavailable, label the run partial or blocked and preserve the exact output.
+This is a focused synthetic UI check, not the complete smoke selection or a microphone/model test. Inspect the xcresult screenshots and compact summary **after confirmed shutdown**. For broader qualification and the finalized Settings movie, omit `TESTS` and set `VERIFY_SUITE=qualification`. For an animation-only change, select `testSettingsDropdownTransitions` directly. Use `SIMULATOR_MODE=stock` to deliberately restore managed services, not to bypass ownership/cleanup.
 
 Invoke this skill with `/skill:verify-mural` from Pi.

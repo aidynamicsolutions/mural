@@ -8,29 +8,13 @@ The learner can choose a conversation theme, move between Talk, Themes, and Word
 
 Use the preview app on the selected simulator. For visual fixtures:
 
-```sh
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=themes
-xcrun simctl io "$SIM" screenshot "$EVIDENCE/themes.png"
-xcrun simctl launch --terminate-running-process "$SIM" "$APP_BUNDLE_ID" --preview --screenshot=words
-xcrun simctl io "$SIM" screenshot "$EVIDENCE/words.png"
-```
+Use `--preview --screenshot=themes` or `--preview --screenshot=words` **inside a single bounded interaction script**, as described in the parent skill. No standalone boot/launch/mirror calls between tool turns. The focused Make command below handles build, exact ownership, default profile, results and verified shutdown.
 
 Run the focused native checks when the changed behavior is navigation, language selection, settings, or notices:
 
 ```sh
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS Simulator,id=$SIM" \
-  -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  ARCHS=arm64 \
-  ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO \
-  -only-testing:MuralUITests/MuralUITests/testThemeSurvivesNavigationToWords \
-  -only-testing:MuralUITests/MuralUITests/testLanguageSwitchUpdatesGreetingThemesAndWords \
-  -only-testing:MuralUITests/MuralUITests/testSettingsOfferSecureKeyEntryAndBackups \
-  test
+make agent-verify SIM_UDID="$SIM_UDID" \
+  TESTS='testThemeSurvivesNavigationToWords testThemeSearchFiltersLocally testLanguageSwitchUpdatesGreetingThemesAndWords testSettingsOfferSecureKeyEntryAndBackups'
 ```
 
 Use the exact test target spelling from `xcodebuild -list` if Xcode reports an unknown selector. The reliable settings test names are also listed in `UITests/MuralUITests.swift`; run `testSettingsOfferSecureKeyEntryAndBackups` and `testSettingsKeepLicensesInNoticesWithoutTransportDetails` separately when needed.
@@ -54,3 +38,7 @@ Capture the changed screens and accessibility output. Success is a visible selec
 - Preview data is synthetic and in memory. It is safe for visual checks but does not prove persistence across a relaunch.
 - Never enter a real key during simulator verification. For key persistence, use the physical device UI only with an explicitly authorized key.
 - Do not infer that a selected menu item proves language-specific themes or words; inspect both tabs.
+
+## Simulator evidence boundary
+
+Use an explicitly owned, initially Shutdown simulator. Default slimming is validated for this synthetic UI flow; use `SIMULATOR_MODE=stock` for affected system integrations. Preview History is temporary, not reboot-persistence proof. Microphone, actual model execution, speech output and native background/drain remain physical-only checks. Require cleanup PASS/Shutdown before reviewing artifacts.

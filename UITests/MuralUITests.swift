@@ -898,6 +898,85 @@ final class MuralUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["target-caption"].label, "Hei!")
     }
 
+    func testThemeSearchFiltersLocally() {
+        let app = launch()
+        app.tabBars.buttons["Themes"].tap()
+        let coffee = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "A coffee?")).firstMatch
+        XCTAssertTrue(coffee.waitForExistence(timeout: 5))
+        let search = app.searchFields.firstMatch
+        for _ in 0..<5 where !search.isHittable { app.swipeDown() }
+        XCTAssertTrue(search.isHittable)
+        search.tap(); search.typeText("coffee")
+        XCTAssertTrue(coffee.waitForExistence(timeout: 5))
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "zznomatch")
+        XCTAssertTrue(coffee.waitForNonExistence(timeout: 5))
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 9) + "coffee")
+        XCTAssertTrue(coffee.waitForExistence(timeout: 5))
+        keepScreenshot("Local theme search survives system search slimming", app: app)
+    }
+
+    // Opt-in, multi-boot checks. Never include these in the ordinary preview suite.
+    // Run Set, then Check in fresh slim and stock lifecycles, then Restore.
+    private func launchLifecycleInstallation() throws -> XCUIApplication {
+        #if targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"]?.hasPrefix("Mural Lifecycle") == true else {
+            throw XCTSkip("Requires an explicitly owned Mural Lifecycle synthetic simulator")
+        }
+        let app = XCUIApplication()
+        app.launch() // Deliberately no --preview and no defaults/fixture injection.
+        return app
+        #else
+        throw XCTSkip("Simulator-only lifecycle check; never run on a physical phone")
+        #endif
+    }
+
+    private func assertLifecycleSettings(_ app: XCUIApplication, learning: String, meaning: String) {
+        app.buttons["Settings"].tap()
+        for (id, expected) in [("learning-language-picker", learning), ("settings-meaning-language", meaning)] {
+            let picker = app.buttons[id]
+            for _ in 0..<8 where !picker.isHittable { app.swipeUp() }
+            XCTAssertTrue(picker.isHittable)
+            XCTAssertEqual(picker.value as? String, expected, picker.debugDescription)
+        }
+        keepScreenshot("Disk-backed settings: \(learning), \(meaning)", app: app)
+        app.buttons["Done"].tap()
+    }
+
+    func testSimulatorLifecycleSetRetainedSettings() throws {
+        let app = try launchLifecycleInstallation()
+        if app.buttons["onboarding-language-en"].waitForExistence(timeout: 5) {
+            app.buttons["onboarding-language-en"].tap()
+            app.buttons["onboarding-continue"].tap()
+            app.buttons["onboarding-meaning-picker"].tap()
+            app.buttons["Vietnamese"].tap()
+            app.buttons["onboarding-continue"].tap()
+        }
+        // Establish a repeatable safe baseline through UI, never by editing a container.
+        setLearningLanguage("English · International", app: app)
+        setMeaningLanguage("Vietnamese", app: app)
+        assertLifecycleSettings(app, learning: "English · International", meaning: "Vietnamese")
+        setLearningLanguage("French · France", app: app)
+        setMeaningLanguage("German", app: app)
+        assertLifecycleSettings(app, learning: "French · France", meaning: "German")
+        app.terminate(); app.launch()
+        assertLifecycleSettings(app, learning: "French · France", meaning: "German")
+    }
+
+    func testSimulatorLifecycleCheckRetainedSettings() throws {
+        let app = try launchLifecycleInstallation()
+        XCTAssertFalse(app.buttons["onboarding-language-en"].exists)
+        // Assert before selecting any value: this must come from the on-disk archive.
+        assertLifecycleSettings(app, learning: "French · France", meaning: "German")
+    }
+
+    func testSimulatorLifecycleRestoreSettings() throws {
+        let app = try launchLifecycleInstallation()
+        assertLifecycleSettings(app, learning: "French · France", meaning: "German")
+        setLearningLanguage("English · International", app: app)
+        setMeaningLanguage("Vietnamese", app: app)
+        assertLifecycleSettings(app, learning: "English · International", meaning: "Vietnamese")
+    }
+
     func testOpenTranscriptRemainsReadableUntilManualNewConversation() {
         let app = launch(ended: true)
         XCTAssertTrue(app.buttons["new-conversation"].waitForExistence(timeout: 5))
