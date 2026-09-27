@@ -136,6 +136,19 @@ public struct CoreMLPreparationReceipt: Sendable {
         #endif
     }
 
+    /// In-place iOS installs can relocate the entire data container without changing
+    /// its contents. Retain the model's location within that sandbox, not its UUID.
+    /// Outside paths (including symlink escapes) remain absolute and distinct.
+    static func pathIdentity(for directory: URL, within home: URL) -> String {
+        let directory = directory.resolvingSymlinksInPath().standardizedFileURL
+        let home = home.resolvingSymlinksInPath().standardizedFileURL
+        let components = directory.pathComponents, root = home.pathComponents
+        if components.count > root.count, components.starts(with: root) {
+            return "sandbox-relative:" + components.dropFirst(root.count).joined(separator: "/")
+        }
+        return "absolute:" + directory.path
+    }
+
     #if canImport(CryptoKit) && canImport(Darwin)
     /// The manifest has already been checked against its independent pin and all files hashed.
     /// Reading that small manifest here does not replace or weaken those checks.
@@ -147,9 +160,11 @@ public struct CoreMLPreparationReceipt: Sendable {
         let manifest = try Data(contentsOf: directory.appending(path: "manifest.json"))
         let key = Key(model: directory.lastPathComponent, scope: scope,
                       manifestSHA256: digest(manifest),
-                      modelPathSHA256: digest(Data(directory.standardizedFileURL.path.utf8)),
+                      modelPathSHA256: digest(Data(Self.pathIdentity(for: directory,
+                          within: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)).utf8)),
                       osBuild: try Self.systemValue("kern.osversion"),
-                      device: try Self.systemValue("hw.machine"), computeUnits: computeUnits)
+                      device: try Self.systemValue("hw.machine"), computeUnits: computeUnits,
+                      policyVersion: 2) // One safe miss migrates the old absolute-path policy.
         let file = URL.applicationSupportDirectory
             .appending(path: "Mural/CoreMLPreparation", directoryHint: .isDirectory)
             .appending(path: "\(key.model)-\(scope.rawValue).json")

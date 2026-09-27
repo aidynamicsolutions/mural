@@ -6,11 +6,17 @@
 | UI animations and transient layout | Labels and controls stay correctly positioned throughout transitions | `ui-animation.md` |
 | Themes, words, and settings | The learner browses practice choices, sees learning state, and can reach secure settings | `themes-words-settings.md` |
 | Conversation lifecycle | The learner can see meaning, reset a finished conversation, and retain its history | `conversation-lifecycle.md` |
-| Local feasibility probes | On-device Apple tutor and independent bilingual microphone ASR; physical human checks | `local-conversation.md` |
+| Local conversation | Qualified opt-in native acoustic/tutor/TTS/persistence checks in the parent skill; paired probes and remaining human-only quality checks | `local-conversation.md` |
 | Live AI conversation | The learner receives a real voice or typed response and the device handles audio and failure states | `live-ai-device.md` |
 
-Use simulator preview fixtures and native UI tests for onboarding, navigation/settings, and conversation lifecycle. For animation defects, also inspect recorded transition frames as described in `ui-animation.md`. Use the physical iPhone 17 through Device Hub for live provider, microphone, WebRTC, and device-only behavior. With no OpenAI API key, the live response portion is blocked; missing-key and consent guards remain testable.
+Use simulator preview fixtures and native UI tests for onboarding, navigation/settings, and synthetic conversation-lifecycle UI. For animation defects, also inspect recorded transition frames as described in `ui-animation.md`. Use the parent skill's explicitly authorized native physical workflow for real local microphone/model/speech/persistence checks. Device Hub is a premium typed/visual fallback and must be closed during microphone testing. With no OpenAI API key, the live response portion is blocked; missing-key and consent guards remain testable.
 
+
+## Physical acceptance selection
+
+The real iPhone is primary for actual microphone/model/speech and native lifecycle acceptance, with explicit opt-in. Follow the [parent skill's stage selection](../SKILL.md#select-the-affected-behavior): `acoustic` for one real input turn, `multi` for conversation/persistence, `cancel` for End during recording and recovery. The latter does not prove inference cancellation or background execution. Initial or affected-contract qualification uses the ordered gates; routine checks do not automatically run every stage or duplicate simulator coverage.
+
+Prepare before the audible window, use saved Make/report commands, and distinguish automated results from human listening. See [physical E2E lessons](../../../../docs/physical-iphone-e2e-lessons.md) for matched runtime measurements, qualified playback synchronization and remaining human-only acceptance.
 
 ## Required simulator entrypoints
 

@@ -1,11 +1,13 @@
 ---
 name: verify-mural
-description: Verify Mural by building and launching its iOS app, using serve-sim for simulator UI and Device Hub for iPhone 17 AI and audio flows. Use after changes affecting onboarding, conversation, themes, words, settings, persistence, audio, or OpenAI integration, when reproducing bugs including animation, shifting, flicker, or transient clipping, and before claiming work complete.
+description: Verify Mural through bounded simulator checks or explicitly authorized native XCUITest on iPhone 17 for real local microphone, models, speech and persistence. Use serve-sim for simulator UI and Device Hub only for physical typed/visual fallback, never microphone acceptance. Use after user-visible or audio/model changes, when reproducing UI bugs, and before claiming work complete.
 ---
 
 # Verify Mural
 
 ## Local MVP workflow override
+
+**Explicit native-device authorization override:** the qualified opt-in native local workflow below may replace manual operation when the user authorizes it and confirms an audible window. Without that authorization, keep the paired workflow. Native tests do not eliminate trust/unlock/microphone-permission or listening gates. Never collect room audio without separate permission.
 
 For local MVP work, follow `mvp_plan.md`'s current paired-verification workflow: the implementation agent builds/installs/launches directly and the user performs phone speech/listening checks. Do not spawn tester subagents. Read `features/local-conversation.md`. Local probes need no OpenAI key; the key requirement and `--verify-audio`/`--verify-meaning` helpers below are premium-only. Preserve the confirmed existing phone bundle `com.kevintruong.mural.dev` using a build override, rather than installing the public default alongside it. Discover devices; use iOS 27 and Release for local timing.
 
@@ -22,13 +24,17 @@ Mural has two useful verification surfaces:
 | Surface | Use it for | API key needed |
 |---|---|---:|
 | iOS Simulator plus `serve-sim` | Onboarding, consent, navigation, themes, words, settings layout, preview data, reset, history, screenshots, and native UI tests | No |
-| Physical iPhone 17 through Device Hub | Live OpenAI conversation, microphone, WebRTC audio routing, typed replies, meaning requests, network behavior, and device-only behavior | Yes for provider responses |
+| Physical iPhone 17 | Opt-in native XCUITest for real local microphone/model/speech/persistence; Device Hub for premium typed/visual checks only | No for local; yes for live provider responses |
+
+The physical iPhone is the primary acceptance surface for real microphone, ASR/tutor/TTS, audible output and native lifecycle behavior. Simulator checks remain the faster supporting surface for UI and synthetic guards. Select by the changed behavior; do not require both surfaces or the full physical qualification ladder for every change. A passing recording-cancellation test does not qualify background execution or inference cancellation.
 
 The current environment does not have an OpenAI API key. Prove the missing-key and consent guards, but report live provider response checks as blocked. Never add a key to a command, source file, screenshot, or evidence artifact.
 
 Run commands from the repository root. The app bundle identifier is `no.william.mural`. Simulator verification must use the checked-in lifecycle below; physical recipes remain separate and opt-in.
 
 ## Mandatory simulator lifecycle
+
+Reuse `Mural Lifecycle Verification`, UDID `C094F154-7674-4A17-9F6B-319959B1F49A` (iPhone 17 / iOS 27.0), as the single persistent project device across tasks, retries and worktrees. Confirm availability and Shutdown before use. If busy, wait rather than create a substitute. Never create per-test devices or parallel test-worker clones. If missing, inspect the inventory before deliberately replacing it. Additional migration/runtime/screen-size devices require a concrete coverage gap, user approval and an agreed deletion plan before creation; export evidence and delete only those approved temporary devices afterward. Retain the primary device's app/model data.
 
 ```sh
 make build  # Generic arm64 simulator compilation only; never boots a device.
@@ -76,7 +82,7 @@ Check the summary first. Inspect only failed-test details or attachments needed 
 
 ## Preconditions
 
-- Apple Silicon macOS, Xcode 27, iOS 27.0 simulator runtime, Python 3, xcbeautify, ffmpeg/ffprobe and reviewed SimSlim 0.11.0. Other runtimes are not app-qualified; persistent slimming refuses runtimes before iOS 18.5.
+- Apple Silicon macOS, Xcode 27, iOS 27.0 simulator runtime, Python 3, xcbeautify, ffmpeg/ffprobe and reviewed SimSlim 0.11.0. Other simulator runtimes are not app-qualified; persistent slimming refuses runtimes before iOS 18.5. Physical iOS 27.2 qualification is separate.
 - Node.js 20 or newer for the pinned `.tools/serve-sim` package.
 - A selected, explicit iPhone 17-family simulator UDID for each run.
 - For physical checks: a paired, unlocked iPhone 17 with Developer Mode enabled, a trusted Mac, a valid signing team in `Config/Local.xcconfig`, and the user's authorization to install the current build.
@@ -167,11 +173,89 @@ Prefer the app's existing preview arguments. They create temporary records and a
 - `--preview --ended-conversation` for Settings-only meaning subtitles, transcript, manual reset, and retained history.
 - `--preview --screenshot=greeting|conversation|themes|words` for visual fixtures.
 
-Do not use `xcrun simctl erase`, do not uninstall the app to force a state, and do not overwrite a simulator another session owns. For persistence changes, create a disposable iPhone 17 simulator from an installed device type and runtime listed by `xcrun simctl list devicetypes` and `xcrun simctl list runtimes`; record its returned UDID, use the normal non-preview launch, and shut down only that simulator when finished. Keep its evidence.
+Do not use `xcrun simctl erase`, do not uninstall the app to force a state, and do not overwrite a simulator another session owns. For persistence changes, reuse the persistent project simulator with synthetic content and a normal non-preview launch; preserve unrelated retained data. Only a demonstrated fresh-install/migration or runtime/screen-size requirement justifies an additional device, with user approval and cleanup agreed before creation. Record that temporary UDID, export evidence outside it, shut it down and delete only that approved temporary device when finished. A failed test or retry is not a reason to create a device.
 
 Restore settings through the UI after a check. Do not seed private conversations, keys, or learning exports by editing the container.
 
 ## Physical iPhone 17 and Device Hub
+
+### Qualified opt-in native local workflow
+
+See the [physical plan](../../../docs/physical-iphone-e2e-plan.md) for acceptance evidence and limitations, and [lessons and optimization backlog](../../../docs/physical-iphone-e2e-lessons.md) for failures, measured timings and qualified runtime optimizations. Qualified on the paired iPhone 17, iOS 27.2, with explicit Core AI Release and retained model/voice assets. This is separate from simulator verification and never a default dependency of `make build` or `make agent-verify`.
+
+#### Select the affected behavior
+
+| Change / purpose | Smallest sufficient starting stage | Coverage boundary |
+| --- | --- | --- |
+| Real microphone / recognition path | `acoustic` | One actual acoustic turn, real reply and saved transcript; no relaunch |
+| Conversation / durable transcript | `multi` | Two acoustic turns and exact text/count/order after normal relaunch |
+| End during recording / recovery | `cancel` | Canceled recording drains, distinct new conversation completes; not inference cancellation or background execution |
+| Native control / real-model baseline | `baseline` | Typed real-model turn; not acoustic input proof |
+| Known synthetic-flow settings / selector recovery | `restore-settings` | Model-free; requires the recorded original meaning language, not a guessed value |
+| Signing / runner / runtime / backend contract qualification | Applicable qualification ladder below | Do not treat an old pass as evidence for changed contracts |
+
+For initial qualification, establish native control and real-model readiness (`baseline`), then one actual acoustic turn (`acoustic`), then `multi` and a fresh repeat after reviewing the first pass. Add `cancel` for its distinct lifecycle requirement. For changed contracts, rerun affected gates in that order. For routine feature checks on unchanged qualified contracts, choose the relevant stage, not the entire ladder; `multi` need not be preceded by a redundant `acoustic` or typed baseline.
+
+#### Prepare first, then run one selected scenario
+
+```sh
+# Discover the exact physical UDID; never select by historical name alone.
+xcrun devicectl list devices
+export DEVICE_UDID='<freshly discovered physical UDID>'
+make agent-verify-device DEVICE_STAGE=status
+make agent-verify-device DEVICE_STAGE=prepare
+# Example: conversation/persistence change, after confirming the audible window.
+# Choose the stage from the table; do not run every stage by default.
+make agent-verify-device DEVICE_STAGE=multi DEVICE_READY=YES \
+  DEVICE_PLACEMENT='20-30 cm, microphone unobstructed, cool phone'
+make agent-device-report  # Saved evidence only, no phone operations.
+make agent-device-report DEVICE_RUN='.build/verification/physical-iphone-e2e/<run>'
+```
+
+`prepare` only builds/signs. It never installs, launches, plays or records, and does not require the screen unlocked. App and XCTest runner have separate identifiers: `com.kevintruong.mural.dev` and `com.kevintruong.mural.dev.physicaltests.xctrunner`. Keep the existing team, release flags, model/voice selection and main app data. If free provisioning has no available slot, stop; deleting any other app requires explicit authorization. The one-time QA deletion in the qualification log is not general permission to delete apps.
+
+Runtime stages select a saved preparation only when source, app/test artifacts and device match; `DEVICE_PREPARED` can pin an explicit receipt. They launch a run-local copy of the fingerprinted `.xctestrun` directly, resolving its original product root and preserving signed identities/settings, explicit environment, selection, deadlines and locks. The original manifest is untouched; runtime does not resolve the project package graph. Incremental builds reuse original compiler-command evidence only for identical app executable bytes. Host-script edits alone no longer force recompilation. Never touch source timestamps or clear caches to manufacture a new compiler invocation.
+
+Before runtime: close mirroring with ownership coordination; require idle/no personal conversation, an unlocked and cool phone, approved English/Vietnamese test pair, unobstructed microphone, and built-in Mac speakers at a user-agreed moderate unmuted volume. The test records/restores the original meaning preference through UI. It refuses active/paused personal Talk; no cloud fallback. Current user's comfortable volume is user-controlled; the runner only inspects it. It does not record the room.
+
+The host launches the normal app with a scoped `devicectl --console` and `OS_ACTIVITY_DT_MODE=YES`, then native XCTest activates it. A fresh real backend event gates model work; `idevicesyslog` returned only `[connected]` in this runtime and is not acceptance evidence. Playback additionally needs the current native capture event and turn-specific Send-label UI marker. After successful bounded `afplay` completion, host transfers a fresh run/turn-specific random token into the XCTest runner's temporary container using `devicectl copy to` (minimum tool timeout five seconds, six-second host bound). Native XCTest requires its exact token within 12 seconds, keeps a 0.75-second trailing margin, and deletes the receipt before Send or recording cancellation. It never reads injected speech/text or writes Mural's data container; missing/wrong acknowledgments cannot release Send. Late/missing gates, changed route/fixture, early Send, wrong/duplicate turn, zero frames, model/resource faults, skips or incorrect results fail without automatic retry. Manual permission prompts are not auto-approved. Preparation temporarily holds the app's idle timer only while active, then restores it; manual locking and system Auto-Lock settings are unchanged.
+
+Frozen fixtures live locally in `.build/verification/physical-iphone-e2e/fixtures-v1/`. If absent, generate them before playback and verify the runner's frozen hashes; do not silently accept new bytes:
+
+```sh
+mkdir -p .build/verification/physical-iphone-e2e/fixtures-v1
+say -v Samantha -r 150 -o .build/verification/physical-iphone-e2e/fixtures-v1/turn-1.aiff 'I bought three apples on Tuesday.'
+say -v Samantha -r 150 -o .build/verification/physical-iphone-e2e/fixtures-v1/turn-2.aiff 'My appointment is tomorrow morning.'
+```
+
+Case, punctuation, whitespace and the user-approved token `3=three` are the only equivalences. Preserve raw recognition. Initial setup reads/logs the original meaning preference and selects Vietnamese in one Settings visit. Later restoration and a separate readback visit remain intentional cleanup checks. `multi` checks both completed replies and exact text/count/order from one settled, transcript-scoped native snapshot after a normal relaunch; real passage visibility/scrolling remains required. `cancel` covers **End during recording**, drain and a distinct new conversation, not cancellation during inference or native background execution. Two full runs passed; physical speaker output was separately human-confirmed. TTS logs alone are never audible-output proof. No accent-wide, teaching-quality, cold-cache or sustained thermal benchmark is claimed.
+
+Use saved operations instead of repeated inline scripts:
+
+- `DEVICE_STAGE=status`: read-only lock/process status and the known content-free decoder receipt/container metadata, not acceptance. Missing receipt-copy evidence is explicitly recorded; no personal history or model files are copied.
+- `DEVICE_STAGE=stop-idle DEVICE_READY=YES DEVICE_IDLE_PID=<fresh PID>`: only after the user confirms the app is idle. Verifies that exact PID against the installed main bundle under the device lock before termination. Never automatically terminate an unknown/personal session.
+- `DEVICE_STAGE=restore-settings DEVICE_READY=YES DEVICE_RESTORE_MEANING='<recorded original>'`: bounded model-free recovery for this synthetic verification flow. Tests log the original preference. It also exercises the model-free playback-acknowledgment transport, diagnostics and nested synthetic-history dismissal. Do not guess the original value or use this to inspect personal history.
+
+Every runtime is bounded (420-second test-command ceiling, 300-second XCTest allowance, separately bounded cleanup); preparation has a 900-second ceiling. Evidence includes automatic compact xcresult summaries even on failure, per-turn playback receipts, app-only logs, source/artifact identity, settings/cleanup and elapsed time. Failures do not become passes because cleanup succeeded. Review `cleanup.json`; settings-only recovery gets a separate run, preserving the original failure. SIGKILL/host-crash recovery is manual: inspect saved PID/PGID/command/start identities before stopping anything, then use exact device-scoped operations. No global kill, erase, uninstall, model/cache deletion or physical shutdown.
+
+#### Efficient execution and diagnosis
+
+1. Review saved reports and changed inputs first. Use `status` for current ownership/lock state and `agent-device-report` for saved evidence, not repeated ad hoc Python. Reporting successfully is not test acceptance.
+2. Complete signing/build, fixture validation and applicable host-runner checks before asking the user to wait beside an unlocked phone. Preserve matching build receipts and warm assets. A discovery tunnel marked disconnected is not alone proof that wired control is unavailable; use bounded device status checks.
+3. Consolidate the runtime readiness request: exclusive idle app, mirroring closed, cool/unlocked phone, agreed placement/output route/volume and listening availability. Carry approvals forward within that window; ask again only when readiness changed or a protected prompt requires action. Never change system Auto-Lock. The app's temporary preparation idle-timer hold does not remove unlock requirements.
+4. Declare fixture and recognition equivalences before playback. Keep current-turn capture/UI gates, actual backend evidence and bounded state waits. Use the qualified completion acknowledgment, not fixture-duration sleeps; preserve its bounded wait and trailing margin. Requalify transport changes model-free first, then one actual acoustic turn before multi-turn/repeat and affected cancellation.
+5. Diagnose the first failure from compact xcresult and scoped logs. For selector/cleanup bugs, reproduce and qualify the relevant model-free path before another expensive acoustic run. Scope queries to the active sheet/navigation container, use the actual accessibility element type, and scroll toward the target. Physical helpers now exit as soon as the target is hittable; preserve that behavior rather than repeating remote queries for the unused loop iterations.
+6. Review automated outcome and cleanup separately, then request only needed human listening confirmation. Save unresolved gaps explicitly. No automatic retry after model/resource faults, and no reuse of old listening confirmation for new audio.
+
+For preparation-checklist regressions, native runtime samples real checklist accessibility states until Record is ready and rejects completed steps reverting. The copied test plan retains XCTest screen recordings on success and failure, without opening a mirror or recording the room. Export only the needed test's attachments using `xcrun xcresulttool export attachments --path <run>/baseline.xcresult --output-path <run>/attachments` (save verbose export output locally). Follow the source-decode and transition-inspection rules in [UI animation verification](features/ui-animation.md). A passing sampled assertion alone does not prove every video frame.
+
+Preparation receipt policy 2 uses canonical sandbox-relative model location, with absolute identity outside the sandbox. Install-related container UUID changes no longer cause false misses. Manifest/model/scope/OS/device/compute/policy invalidation and actual native loading/contract validation remain mandatory. A legacy receipt misses once. Diagnose content-free key differences using saved `status` evidence before changing policy; never force a hit or assume skipped prewarm removes all native loading cost.
+
+`timings.json` now partitions host preflight/install/launch/test/result/cleanup (or build/validation for `prepare`). Native device-uptime intervals measure UI setup, preparation, recording, Send-to-Ready, assertions, persistence and teardown; they overlap the host test phase and must not be added to its total. Saved playback receipts include completion and acknowledgment-transfer times. `agent-device-report` displays the breakdown without phone access.
+
+Matched retained-cache two-turn/persistence runtime measured **221.25 s before, 159.02 / 157.55 s after**, all including cleanup and unchanged scenario assertions, about 28% shorter in this small sample. Build was separate (19.59 s baseline preparation, 16.39 s optimized preparation). The four follow-up improvements and checklist fix measured **155.96 / 152.56 s**, an observed further 2.5% reduction with added checklist/video coverage, not an isolated identical-instrumentation comparison. Separate production rebuild: 40.64 s. Mandatory first native loading still took 19.40 / 16.54 s despite receipt hits. Both final runs passed real acoustic/model/persistence/cleanup checks, and the user separately confirmed both replies audible in each. Do not promise these gains on another runtime or call them faster inference. Evidence remains in the linked lessons/plan.
+
+### Device Hub manual/premium fallback
 
 Use this path only for behavior that cannot be proved on a simulator. Discover the current identifier every time; the currently paired phone is named `Kevq`, but names and UDIDs can change:
 
@@ -220,7 +304,7 @@ If Device Hub shows live frames but taps no longer alter the phone:
 5. Send one harmless navigation action and verify the resulting settled screenshot.
 6. If it still has no visible effect, stop and report input as blocked instead of retrying indefinitely.
 
-For microphone recording or live voice capture, fully quit Device Hub before testing and operate the iPhone directly. Device Hub can interfere with microphone capture even while a recording timer advances. Use Device Hub for typed input and visual control, not as proof of microphone behavior.
+For microphone recording or live voice capture, fully quit Device Hub before testing. Use the explicitly authorized native local runner above, or operate the iPhone directly for manual checks. Device Hub can interfere with microphone capture even while a recording timer advances. Use Device Hub for typed input and visual control, not as proof of microphone behavior.
 
 ## Live AI checks
 
@@ -289,11 +373,13 @@ For each run, write `$EVIDENCE/result.md` with:
 
 Screenshots and accessibility output can contain personal content. Keep them local and review them before sharing. Do not commit evidence. The existing `.build/` ignore rule keeps this directory out of Git.
 
-## Cleanup and forced-kill recovery
+## Simulator cleanup and forced-kill recovery
+
+This section applies only to simulators. Physical runs use the owned-process/settings cleanup described above; never shut down the physical phone.
 
 Cleanup is an acceptance gate, not an optional final instruction. Require `cleanup.json` with `cleanup: PASS` and `final_state: Shutdown`; also inspect the separate command status. Preserve all evidence/app data. A finalizer failure makes the run fail even if tests passed. An ordinary signal cannot interrupt the final cleanup a second time.
 
-SIGKILL or host failure can bypass cleanup. Inspect `session.json`, `command-process.json`, helper ownership records and the exact UDID's lock metadata. Compare PID/PGID, start time and command to current `ps` output before signaling anything. Never automatically reclaim a stale-looking owner or shut down a borrowed booted device. Once ownership is established and surviving owned work is stopped, gracefully finalize recorded captures/helpers, run `xcrun simctl shutdown <that-owned-UDID>` and confirm its state via `simctl list devices -j`. Save the recovery result. Do not erase, delete, uninstall, clear caches/models, shut down all devices, or globally quit Simulator.
+SIGKILL or host failure can bypass cleanup. Inspect `session.json`, `command-process.json`, helper ownership records and the exact UDID's lock metadata. Compare PID/PGID, start time and command to current `ps` output before signaling anything. Never automatically reclaim a stale-looking owner or shut down a borrowed booted device. Once ownership is established and surviving owned work is stopped, gracefully finalize recorded captures/helpers, run `xcrun simctl shutdown <that-owned-UDID>` and confirm its state via `simctl list devices -j`. Save the recovery result. Do not erase, delete, uninstall, clear caches/models, shut down all devices, or globally quit Simulator as recovery. The only test-cleanup deletion exception is an explicitly approved temporary device under the lifecycle policy above; never delete the retained primary.
 
 Required closeout: supported checks PASS/FAIL/BLOCKED; profile/runtime/CLI; evidence paths; owned helper/recorder stops; every owned simulator Shutdown; cleanup PASS/FAIL; other projects not targeted; physical microphone/model/native-background checks not run unless separately authorized and actually executed.
 

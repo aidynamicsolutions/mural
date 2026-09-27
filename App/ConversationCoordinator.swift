@@ -817,6 +817,9 @@ import MuralCore
     private func speakLocal(_ text: String, sessionID: UUID, fragmentID: String) async throws {
         try checkLocal(sessionID)
         guard UIApplication.shared.applicationState == .active else { throw CancellationError() }
+        // Preparation has finished. Leave its checklist before greeting synthesis
+        // suspends; actual speaking still starts only with the playback callback.
+        if localPhase == .preparing { localPhase = .thinking }
         let origin = localStartedAt
         localAudio.onPlayback = { [weak self] start, end, completed in
             guard let self, self.session?.id == sessionID, self.state == .active,

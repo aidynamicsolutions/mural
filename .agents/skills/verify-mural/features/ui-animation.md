@@ -8,7 +8,9 @@ Ask only for missing details: starting screen/value, exact taps, changing versus
 
 ## Prepare and record inside the lifecycle
 
-Use the same owned iPhone 17 / iOS 27.0, fixture, text size, orientation and actions in both runs. The public entrypoint requires an initially Shutdown exact UUID; it builds before boot, records only after readiness, runs serially and confirms Shutdown before returning:
+For an explicitly authorized **physical microphone/model transition**, use the parent skill's bounded native device workflow instead of this simulator recipe. Its prepared `.xctestrun` retains native XCTest screen recordings on success and failure; no mirror, USB microphone redirection or room-audio capture is needed. Export the selected test's attachments after cleanup, validate source decoding and inspect before/after transition frames as below. The physical Prepare checklist regression is qualified this way; preserve its sampled monotonic-state assertion too. Do not apply simulator shutdown or preview arguments to the phone.
+
+For simulator UI work, use the same owned iPhone 17 / iOS 27.0, fixture, text size, orientation and actions in both runs. The public entrypoint requires an initially Shutdown exact UUID; it builds before boot, records only after readiness, runs serially and confirms Shutdown before returning:
 
 ```sh
 make agent-verify SIM_UDID="$SIM_UDID" \

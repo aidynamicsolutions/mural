@@ -32,6 +32,43 @@ struct CoreMLPreparationReceiptTests {
         #expect(try Data(contentsOf: file) == data) // A hit does not rewrite an old success.
     }
 
+    // Relocation failure matrix: a new sandbox UUID must reuse identical verified
+    // assets, but a different in-container location, external path or symlink escape
+    // must not collide. Existing tests retain all manifest/runtime/compute guards.
+    @Test func sandboxRelocationReusesPreparationButStillLoads() async throws {
+        let file = file(); defer { clean(file) }
+        let oldHome = file.deletingLastPathComponent().appendingPathComponent("old-home")
+        let newHome = file.deletingLastPathComponent().appendingPathComponent("new-home")
+        let relative = "Library/Application Support/model"
+        let oldPath = CoreMLPreparationReceipt.pathIdentity(for: oldHome.appendingPathComponent(relative), within: oldHome)
+        let newPath = CoreMLPreparationReceipt.pathIdentity(for: newHome.appendingPathComponent(relative), within: newHome)
+        #expect(oldPath == newPath)
+        var prewarms = 0, loads = 0
+        _ = try await CoreMLPreparationReceipt(key: key(path: oldPath), file: file)
+            .prepare(prewarm: { prewarms += 1 }, loadAndValidate: { loads += 1 })
+        _ = try await CoreMLPreparationReceipt(key: key(path: newPath), file: file)
+            .prepare(prewarm: { prewarms += 1 }, loadAndValidate: { loads += 1 })
+        #expect(prewarms == 1 && loads == 2)
+        let moved = CoreMLPreparationReceipt.pathIdentity(for: newHome.appendingPathComponent("Documents/model"), within: newHome)
+        #expect(CoreMLPreparationReceipt(key: key(path: moved), file: file).lookup() == .incompatible)
+    }
+
+    @Test func pathIdentityPreservesBoundariesAndResolvesSymlinkEscapes() throws {
+        let file = file(); defer { clean(file) }
+        let root = file.deletingLastPathComponent(), home = root.appendingPathComponent("home")
+        let outside = root.appendingPathComponent("home-other/model")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let link = home.appendingPathComponent("model")
+        let inside = CoreMLPreparationReceipt.pathIdentity(for: link, within: home)
+        let external = CoreMLPreparationReceipt.pathIdentity(for: outside, within: home)
+        #expect(inside != external)
+        #expect(external != CoreMLPreparationReceipt.pathIdentity(for: root.appendingPathComponent("elsewhere/model"), within: home))
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        #expect(CoreMLPreparationReceipt.pathIdentity(for: link, within: home) == external)
+        #expect(CoreMLPreparationReceipt.pathIdentity(for: link, within: home) != inside)
+    }
+
     @Test func everySpecializationInputInvalidates() async throws {
         let file = file(); defer { clean(file) }
         _ = try await CoreMLPreparationReceipt(key: key(), file: file).prepare(prewarm: {}, loadAndValidate: {})

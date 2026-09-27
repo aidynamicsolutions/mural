@@ -989,3 +989,338 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["new-conversation"].exists)
     }
 }
+
+// Deliberate physical-only opt-in. Ordinary suites skip before creating an app.
+final class MuralPhysicalDeviceTests: XCTestCase {
+    private var ownedApp: XCUIApplication?
+    private var startedConversation = false
+    private var originalMeaning: String?
+
+    private func markTiming(_ phase: String) {
+        print("MURAL_DEVICE_TIMING \(phase) \(ProcessInfo.processInfo.systemUptime)")
+    }
+
+    private func awaitPlaybackCompletion(_ index: Int) throws {
+        let run = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_PLAYBACK_RUN"])
+        _ = try XCTUnwrap(UUID(uuidString: run))
+        let token = UUID().uuidString
+        let receipt = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mural-playback-\(run)-\(index).txt")
+        defer {
+            if FileManager.default.fileExists(atPath: receipt.path) {
+                XCTAssertNoThrow(try FileManager.default.removeItem(at: receipt))
+            }
+        }
+        if index == 0 {
+            // Model-free transport qualification also proves stale content cannot
+            // satisfy this fresh random token. Host overwrites only this test file.
+            try "stale-token".write(to: receipt, atomically: true, encoding: .utf8)
+        }
+        print("MURAL_DEVICE_PLAYBACK_WAIT \(run) \(index) \(token)")
+        let deadline = ProcessInfo.processInfo.systemUptime + 12
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if (try? String(contentsOf: receipt, encoding: .utf8)) == token {
+                print("MURAL_DEVICE_PLAYBACK_ACK_\(index)")
+                if index > 0 { Thread.sleep(forTimeInterval: 0.75) }
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        XCTFail("Playback acknowledgment missing, stale or wrong-turn; refusing Send")
+        throw NSError(domain: "MuralPhysicalGate", code: 3)
+    }
+
+    private func descendants(_ snapshot: any XCUIElementSnapshot) -> [any XCUIElementSnapshot] {
+        [snapshot] + snapshot.children.flatMap { descendants($0) }
+    }
+
+    private func waitForPreparedConversation(_ app: XCUIApplication) throws {
+        // Real UI regression: completed checkmarks must never revert during greeting
+        // synthesis. Observe the transition, not just the settled Record button.
+        var completed = Set<String>(), regressed = Set<String>()
+        var ready = false
+        let deadline = ProcessInfo.processInfo.systemUptime + 90
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            let elements = descendants(try app.snapshot())
+            for step in elements where step.identifier.hasPrefix("speech-setup-step-") {
+                if step.value as? String == "Complete" { completed.insert(step.identifier) }
+                else if completed.contains(step.identifier), regressed.insert(step.identifier).inserted {
+                    print("MURAL_DEVICE_CHECKLIST_REGRESSION \(step.identifier) \(step.value ?? "missing")")
+                    let image = XCTAttachment(screenshot: app.screenshot())
+                    image.name = "Completed setup step regressed"; image.lifetime = .keepAlways; add(image)
+                }
+            }
+            if elements.contains(where: { $0.identifier == "local-conversation-record-send" && $0.label == "Record" && $0.isEnabled }) {
+                ready = true; break
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertTrue(ready, "Preparation did not reach the real Record-ready state")
+        XCTAssertTrue(completed.contains("speech-setup-step-checking"), "Must observe actual checklist progress")
+        XCTAssertTrue(completed.contains("speech-setup-step-voice"), "Must observe completed voice preparation")
+        XCTAssertTrue(regressed.isEmpty, "Completed setup steps became unchecked: \(regressed.sorted())")
+        print("MURAL_DEVICE_CHECKLIST_PASS")
+    }
+
+    private func meaningSetting(_ app: XCUIApplication, select: String? = nil,
+                                preservingOriginal: Bool = false) throws -> String {
+        let settings = app.buttons["Settings"]
+        for _ in 0..<8 {
+            if settings.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(settings.isHittable); settings.tap()
+        let row = app.buttons["settings-meaning-language"]
+        try reveal(row, app: app)
+        let value = try XCTUnwrap(row.value as? String)
+        if preservingOriginal {
+            print("MURAL_DEVICE_ORIGINAL_MEANING=\(value)")
+            if value != select { originalMeaning = value } // Before any mutation or failed UI action.
+        }
+        if let select, select != value {
+            XCTAssertTrue(row.isEnabled); row.tap()
+            let choice = app.buttons[select]
+            try reveal(choice, app: app); choice.tap()
+            XCTAssertEqual(row.value as? String, select)
+        }
+        app.buttons["Done"].tap()
+        return value
+    }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Physical device only")
+        #else
+        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
+            throw XCTSkip("Use the explicit agent-verify-device entrypoint")
+        }
+        #endif
+    }
+
+    private func wait(_ predicate: String, _ element: XCUIElement, seconds: TimeInterval) throws {
+        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: predicate), object: element)], timeout: seconds)
+        guard result == .completed else {
+            XCTFail("Physical gate timed out: \(predicate), \(element.identifier)")
+            throw NSError(domain: "MuralPhysicalGate", code: 1)
+        }
+    }
+
+    private func reveal(_ element: XCUIElement, app: XCUIApplication) throws {
+        for _ in 0..<12 {
+            if element.isHittable { return }
+            if element.exists && element.frame.midY < app.frame.midY { app.swipeDown() }
+            else { app.swipeUp() }
+        }
+        guard element.isHittable else {
+            XCTFail("Missing physical control: \(element.identifier)")
+            throw NSError(domain: "MuralPhysicalGate", code: 2)
+        }
+    }
+
+    private func closeTranscriptSheets(_ app: XCUIApplication) throws {
+        for title in ["Our conversation", "Past conversations"] {
+            let bar = app.navigationBars[title]
+            if bar.exists {
+                bar.buttons["Done"].tap()
+                try wait("exists == false", bar, seconds: 5)
+            }
+        }
+    }
+
+    override func tearDownWithError() throws {
+        guard let app = ownedApp else { return }
+        markTiming("cleanup_started")
+        if app.buttons["Close"].exists && app.buttons["Close"].isHittable { app.buttons["Close"].tap() }
+        try closeTranscriptSheets(app)
+        app.tabBars.buttons["Talk"].tap()
+        if startedConversation {
+            let end = app.buttons["local-conversation-end"]
+            if end.exists { try reveal(end, app: app); end.tap() }
+            let idle = app.buttons["new-conversation"].exists
+                ? app.buttons["new-conversation"] : app.buttons["local-conversation-start"]
+            try wait("exists == true AND enabled == true", idle, seconds: 60)
+        }
+        if let originalMeaning {
+            _ = try meaningSetting(app, select: originalMeaning)
+            XCTAssertEqual(try meaningSetting(app), originalMeaning)
+            print("MURAL_DEVICE_SETTINGS_RESTORED")
+        }
+        app.terminate()
+        XCTAssertEqual(app.state, .notRunning)
+        print("MURAL_DEVICE_CLEANUP_PASS")
+        markTiming("cleanup_finished")
+    }
+
+    private func assertRetainedTurns(_ turns: [String], app: XCUIApplication) throws {
+        // The sheet leaves Talk's latest learner/caption in the accessibility tree.
+        // MURAL speaker headings belong to Transcript, not the underlying Talk view.
+        let transcripts = app.scrollViews.containing(.staticText, identifier: "MURAL")
+        XCTAssertEqual(transcripts.count, 1)
+        let transcript = transcripts.firstMatch
+        for text in turns {
+            let passage = transcript.staticTexts.matching(NSPredicate(format: "label == %@", text))
+            try reveal(passage.firstMatch, app: app)
+        }
+        // One settled native snapshot, not a remote request for every label/count.
+        // Visibility still requires the real scrolling above, including after relaunch.
+        let snapshot = try transcript.snapshot()
+        let hierarchy = XCTAttachment(string: String(describing: snapshot.dictionaryRepresentation))
+        hierarchy.name = "Synthetic transcript hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+        let labels = descendants(snapshot).filter { $0.elementType == .staticText }.map(\.label)
+        for text in turns {
+            XCTAssertEqual(labels.filter { $0 == text }.count, turns.filter { $0 == text }.count)
+        }
+        XCTAssertEqual(labels.filter { turns.contains($0) }, turns, "Exact synthetic turns must persist once and in order")
+    }
+
+    func testNativeBaseline() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.kevintruong.mural.dev")
+        // Host launches the real signed app with its scoped console attached first.
+        // No previews, defaults, transcript injection or model substitutes.
+        XCTAssertNotEqual(app.state, .notRunning, "Host must own the console-attached app")
+        app.activate()
+        ownedApp = app
+        markTiming("activated")
+        if ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "restore-settings" {
+            originalMeaning = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_RESTORE_MEANING"],
+                                               "Recovery requires the recorded original preference")
+            try awaitPlaybackCompletion(0) // Transport only: no speech or models.
+            _ = try meaningSetting(app, select: "Vietnamese") // Single visit, then restore the recorded original in teardown.
+            // Reproduce the cleanup navigation gap without starting models: End and
+            // Settings can be above expanded, scrolled diagnostics, not below them.
+            let details = app.buttons["On-device details & diagnostics"]
+            try reveal(details, app: app); details.tap()
+            app.swipeUp(); app.swipeUp()
+            try reveal(details, app: app); details.tap()
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "Cleanup returns from expanded diagnostics"; image.lifetime = .keepAlways; add(image)
+            app.tabBars.buttons["Words"].tap()
+            let history = app.buttons["Past conversations"]
+            try reveal(history, app: app); history.tap()
+            let newest = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "On-device conversation")).firstMatch
+            XCTAssertTrue(newest.waitForExistence(timeout: 5)); newest.tap()
+            XCTAssertTrue(app.navigationBars["Our conversation"].waitForExistence(timeout: 5))
+            // Both sheets expose Done. Exercise precisely scoped dismissal during teardown.
+            print("MURAL_DEVICE_RESTORE_ONLY")
+            return // tearDown restores through UI; no Prepare/model/microphone action.
+        }
+        XCTAssertTrue(app.staticTexts["conversation-language-pair"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists, "Refuse an active personal conversation")
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists, "Do not clear existing Talk")
+        XCTAssertTrue(app.staticTexts["conversation-language-pair"].label.hasPrefix("English · "))
+        _ = try meaningSetting(app, select: "Vietnamese", preservingOriginal: true)
+        XCTAssertEqual(app.staticTexts["conversation-language-pair"].label, "English · Vietnamese")
+        let start = app.buttons["local-conversation-start"]
+        XCTAssertEqual(start.label, "Prepare & start", "Refuse paused/pending personal work")
+        try reveal(start, app: app)
+        XCTAssertTrue(start.isEnabled)
+        let details = app.buttons["On-device details & diagnostics"]
+        try reveal(details, app: app); details.tap()
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains("Core AI GPU-preferred encoder + Core ML decoder (staged)"))
+        details.tap()
+        try reveal(start, app: app)
+        startedConversation = true
+        markTiming("preparation_requested")
+        start.tap()
+        let record = app.buttons["local-conversation-record-send"]
+        try waitForPreparedConversation(app)
+        XCTAssertTrue(app.staticTexts["conversation-status"].label.contains("Ready"))
+        markTiming("ready")
+        let multi = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "multi"
+        let cancelling = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "cancel"
+        let phrases = (multi || cancelling) ? ["I bought three apples on Tuesday.", "My appointment is tomorrow morning."] : ["I bought three apples on Tuesday."]
+        var retainedTurns: [String] = []
+        for (index, phrase) in phrases.enumerated() {
+        var learner = phrase
+        if multi || cancelling || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "acoustic" {
+            try reveal(record, app: app); record.tap()
+            // Permission remains a human gate. No automatic alert approval.
+            try wait("label == 'Send'", record, seconds: 90)
+            markTiming("capture_\(index + 1)_ready")
+            print("MURAL_DEVICE_RECORD_UI_READY_\(index + 1)")
+            // Only a fresh nonce delivered after successful host playback can
+            // release Send. Missing/wrong/late acknowledgments fail closed.
+            try awaitPlaybackCompletion(index + 1)
+            XCTAssertEqual(record.label, "Send")
+            markTiming("capture_\(index + 1)_finished")
+            if cancelling && index == 0 {
+                let end = app.buttons["local-conversation-end"]
+                try reveal(end, app: app); end.tap()
+                try wait("exists == true AND enabled == true", start, seconds: 60)
+                XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+                XCTAssertFalse(app.buttons["new-conversation"].exists)
+                print("MURAL_DEVICE_CANCELLED_RECORDING")
+                try reveal(start, app: app); start.tap()
+                try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 90)
+                continue
+            }
+            markTiming("turn_\(index + 1)_send_requested")
+            record.tap()
+            try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 90)
+            markTiming("turn_\(index + 1)_response_ready")
+            let details = app.buttons["On-device details & diagnostics"]
+            try reveal(details, app: app); details.tap()
+            let raw = app.buttons["Raw recognition · not translated"]
+            if !app.staticTexts["local-raw-asr"].exists { try reveal(raw, app: app); raw.tap() }
+            learner = app.staticTexts["local-raw-asr"].label
+            let normalized = learner.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || CharacterSet.whitespaces.contains($0) }
+            XCTAssertEqual(String(String.UnicodeScalarView(normalized)).split(whereSeparator: { $0.isWhitespace }).map { $0 == "3" ? "three" : String($0) }.joined(separator: " "),
+                           phrase.lowercased().replacingOccurrences(of: ".", with: ""))
+            try reveal(details, app: app); details.tap()
+        } else {
+            let typing = app.buttons["Type instead"]
+            try reveal(typing, app: app); typing.tap()
+            let input = app.textFields["Reply in English or another language"]
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            input.tap(); input.typeText(learner)
+            app.buttons["Send reply"].tap()
+            try wait("exists == false", app.buttons["Send reply"], seconds: 60)
+            try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 60)
+        }
+        let reply = app.staticTexts["target-caption"].label
+        XCTAssertFalse(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertNotEqual(reply, "Hi! What did you do today?")
+        retainedTurns += [learner, reply]
+        markTiming("turn_\(index + 1)_verified")
+        }
+        markTiming("end_requested")
+        let end = app.buttons["local-conversation-end"]
+        try reveal(end, app: app); end.tap()
+        try wait("exists == true AND enabled == true", app.buttons["new-conversation"], seconds: 60)
+        let transcript = app.buttons["local-conversation-transcript"]
+        try reveal(transcript, app: app); transcript.tap()
+        try assertRetainedTurns(retainedTurns, app: app)
+        markTiming("transcript_verified")
+        if cancelling {
+            let transcript = app.scrollViews.containing(.staticText, identifier: "MURAL").firstMatch
+            XCTAssertEqual(transcript.staticTexts.matching(identifier: "YOU").count, 1)
+            print("MURAL_DEVICE_CANCELLATION_PASS")
+        }
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Synthetic native transcript"; image.lifetime = .keepAlways; add(image)
+        let text = XCTAttachment(string: retainedTurns.joined(separator: "\n"))
+        text.name = "Synthetic turn text in order"; text.lifetime = .keepAlways; add(text)
+        try closeTranscriptSheets(app)
+        if multi {
+            print("MURAL_DEVICE_MODEL_PHASE_COMPLETE")
+            app.terminate(); app.launch() // Normal disk-backed launch, no setup or fixtures.
+            app.tabBars.buttons["Words"].tap()
+            let history = app.buttons["Past conversations"]
+            try reveal(history, app: app); history.tap()
+            // History is newest-first in production; open only this just-created synthetic record.
+            let newest = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "On-device conversation")).firstMatch
+            XCTAssertTrue(newest.waitForExistence(timeout: 5)); newest.tap()
+            try assertRetainedTurns(retainedTurns, app: app)
+            let saved = XCTAttachment(screenshot: app.screenshot())
+            saved.name = "Synthetic transcript after normal relaunch"; saved.lifetime = .keepAlways; add(saved)
+            markTiming("persistence_verified")
+            print("MURAL_DEVICE_PERSISTENCE_PASS")
+            try closeTranscriptSheets(app)
+            app.tabBars.buttons["Talk"].tap()
+            startedConversation = false // Relaunched only after explicit End and confirmed drain.
+        }
+        print("MURAL_DEVICE_BASELINE_UI_PASS")
+    }
+}

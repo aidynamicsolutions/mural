@@ -1,12 +1,14 @@
 import SwiftUI
 import AVFoundation
 import MuralCore
+import OSLog
 
 struct RootView: View {
     @State private var coordinator: ConversationCoordinator
     @State private var tab = 0
     @State private var onboarding = false
     @State private var localProbe = false
+    @State private var idleTimerBeforePreparation: Bool?
     @Environment(\.scenePhase) private var scenePhase
     init(store: LearningStore) {
         let coordinator = ConversationCoordinator(store: store)
@@ -60,12 +62,29 @@ struct RootView: View {
             if phase == .background { coordinator.background() }
             else if phase == .active { coordinator.resume() }
         }
+        .onChange(of: scenePhase == .active && coordinator.localPhase == .preparing && coordinator.speechDownloadOffer == nil, initial: true) { _, preparing in
+            keepAwakeDuringPreparation(preparing)
+        }
+        .onDisappear { keepAwakeDuringPreparation(false) }
         #if DEBUG
         .task {
             if AudioVerification.requested { await AudioVerification.run(coordinator) }
             else if ProcessInfo.processInfo.arguments.contains("--ended-conversation") { coordinator.prepareEndedPreview() }
         }
         #endif
+    }
+    private func keepAwakeDuringPreparation(_ preparing: Bool) {
+        let app = UIApplication.shared
+        let logger = Logger(subsystem: "no.william.mural", category: "Preparation")
+        if preparing, idleTimerBeforePreparation == nil {
+            idleTimerBeforePreparation = app.isIdleTimerDisabled
+            app.isIdleTimerDisabled = true
+            logger.notice("preparation_idle_timer acquired=true")
+        } else if !preparing, let previous = idleTimerBeforePreparation {
+            app.isIdleTimerDisabled = previous
+            idleTimerBeforePreparation = nil
+            logger.notice("preparation_idle_timer restored=\(previous, privacy: .public)")
+        }
     }
     private var errorTitle: String {
         if coordinator.thermalAlertPresented { return "Your iPhone needs to cool down" }
