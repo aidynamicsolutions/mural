@@ -2,7 +2,8 @@
 """Replay local WAVs through Breeze/PyTorch or FireRed-AED/sherpa-onnx.
 
 No downloads. Install the reviewed model/runtime in an isolated environment first.
-The FireRed backend is the AED encoder+decoder API, NOT the CTC-only shortcut.
+firered-onnx remains the AED encoder+decoder API. firered-ctc-onnx is an
+explicit host-only candidate and requires a separately reviewed artifact pin.
 Outputs are private local evidence. Runtime/model inference was not run on the
 connector host; use the accompanying native qualification plans.
 """
@@ -65,29 +66,46 @@ def load_firered(directory: Path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("backend", choices=("breeze", "firered-onnx"))
+    parser.add_argument("backend", choices=("breeze", "firered-onnx", "firered-ctc-onnx"))
     parser.add_argument("corpus", type=Path); parser.add_argument("audio_root", type=Path)
     parser.add_argument("--model-dir", type=Path, required=True)
-    parser.add_argument("--revision", required=True, help="Caller-verified immutable source/export revision")
+    parser.add_argument("--revision", help="Required for existing backends; immutable source/export revision")
+    parser.add_argument("--candidate-pin", type=Path, help="CTC research only: separately reviewed two-file pin")
+    parser.add_argument("--candidate-pin-sha256", help="CTC research only: independently reviewed pin digest")
     parser.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu", help="Breeze only; start with a bounded reference run")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if args.output.exists():
+    if args.output.exists() or args.output.is_symlink():
         parser.error("Output exists; do not overwrite previous evidence")
-    if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
-        parser.error("Use a full immutable source/export revision, not main")
+    ctc_research = args.backend == "firered-ctc-onnx"
+    if ctc_research:
+        if args.revision is not None or args.device != "cpu" or args.candidate_pin is None or not args.candidate_pin_sha256:
+            parser.error("CTC research requires --candidate-pin and --candidate-pin-sha256, CPU, and no invented --revision")
+    else:
+        if args.candidate_pin is not None or args.candidate_pin_sha256 is not None:
+            parser.error("Candidate pin arguments are valid only for explicit firered-ctc-onnx")
+        if not args.revision or not re.fullmatch(r"[0-9a-f]{40}", args.revision):
+            parser.error("Use a full immutable source/export revision, not main")
     report = {"schema": "mural.chinese-asr.predictions.v1", "backend": args.backend,
               "revision": args.revision, "predictions": [], "complete": False}
     try:
         rows = corpus(args.corpus)
         report["corpus_sha256"] = sha256(args.corpus)
         report["audio"] = validate_audio(rows, args.audio_root)
-        report["artifacts"] = {str(path.relative_to(args.model_dir)): {"bytes": path.stat().st_size, "sha256": sha256(path)}
-                               for path in sorted(args.model_dir.rglob("*")) if path.is_file() and not any(part.startswith(".") for part in path.relative_to(args.model_dir).parts)}
+        if ctc_research:
+            from firered_ctc_candidate import verify_candidate
+            report.update(verify_candidate(args.model_dir, args.candidate_pin, args.candidate_pin_sha256))
+        else:
+            report["artifacts"] = {str(path.relative_to(args.model_dir)): {"bytes": path.stat().st_size, "sha256": sha256(path)}
+                                   for path in sorted(args.model_dir.rglob("*")) if path.is_file() and not any(part.startswith(".") for part in path.relative_to(args.model_dir).parts)}
         if not report["artifacts"]:
             raise ValueError("Model directory is empty")
         started = time.perf_counter()
-        decode, runtime = load_breeze(args.model_dir, args.device) if args.backend == "breeze" else load_firered(args.model_dir)
+        if ctc_research:
+            from firered_ctc_candidate import load_ctc
+            decode, runtime = load_ctc(args.model_dir)
+        else:
+            decode, runtime = load_breeze(args.model_dir, args.device) if args.backend == "breeze" else load_firered(args.model_dir)
         report.update(runtime=runtime, prepare_seconds=time.perf_counter() - started)
         for row in rows:
             samples, seconds = pcm16(audio_path(args.audio_root, row["wav"]))
