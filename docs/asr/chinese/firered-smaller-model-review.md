@@ -2,7 +2,119 @@
 
 Review date: 28 September 2026. Mural anchor: `mvp` at `a73d8163355fb2137d552196677c1b722840d9df`, also the branch head returned during this review.
 
-## Local host result, September 28: CTC quality FAIL / STOP
+## Expanded 30-clip screen, September 28: English regression confirmed
+
+The user explicitly requested a new, larger host comparison after the six-clip
+screen, retaining the phone STOP. After annotation inspection exposed sparse
+natural switching, the user chose to preserve the original 10/10/10 split and
+spend more preparation time searching additional speakers rather than switch to
+English-only testing. This is a separately authorized comparison, not an automatic
+retry of the six-clip failure.
+
+**CTC remains rejected for the English/mixed-speech path.** The expanded screen
+supports a material English regression under these sampled conditions; no
+400-clip study or phone experiment is needed to reject this candidate now.
+
+### Sample and reference integrity
+
+- **30 new, disjoint clips from 10 speakers**, one English-only, one
+  Mandarin-to-English and one English-to-Mandarin clip per speaker. Mixed strata
+  name the first transition; some clips subsequently switch back.
+- **654 English words, 317 Han characters, 348.143 seconds** of audio. Most clips
+  are 8-15 seconds; one complete annotated utterance is 16.447 seconds. No clip
+  overlaps the original six, which remain separate and are not pooled.
+- Inspected corrected annotations for 48 candidate speakers to find genuine
+  lexical switching, excluding romanized pronunciation exercises, redactions,
+  unintelligible speech and partial-word notation. The selected sample has three
+  women and seven men, with individual Mainland childhood/residence metadata
+  retained. Overseas schooling/residence and availability-based selection limit
+  generalization; this is not a representative mainland-population benchmark.
+- References use MELI 1.1's published bilingual-human-corrected utterance tier,
+  **not a new independent listening review**. Removed only explicit language tags
+  and nonlexical event labels, before inference. Spoken fillers, repetitions,
+  number words and script remain unchanged. Dataset transcription imperfections
+  are a limitation, not permission to correct references after seeing output.
+- Downloaded only exact HTTPS file-ID PCM ranges rather than full multi-GB source
+  recordings. Required HTTP 206, exact Content-Range/total length, consistent RIFF
+  PCM contract and exact payload size. Retained headers/ranges and SHA-256 hashes.
+  Full-recording metadata MD5s are provenance, **not locally verified full-file
+  hashes**. Extracted continuous left participant channel and resampled to mono
+  PCM16/16 kHz; no stitching, gain, denoising or speed change.
+
+Frozen replayer corpus SHA-256:
+`bd7bbfb6ab48ff42d17069357a732e659a0adb1809720836f6bf72722579faf5`.
+Final pre-output acceptance SHA-256:
+`679764f7e5c563a5f869a5a01e137966dc09236b377625291bb29be1d3aacb52`.
+Models, CTC pin, AED revision and sherpa/ORT identities are unchanged from the
+host gate below; actual retained native-library hashes were checked before replay.
+
+### English results and predeclared uncertainty
+
+Before inference, froze the agreed **+3 percentage-point English WER tolerance**,
+existing normalization, paired speaker-cluster bootstrap (20,000 replicates,
+seed 20260928) and interpretation. Each resample retains all three clips belonging
+to each sampled speaker. Aggregate WER uses summed edits / summed reference words,
+not an unweighted average of clip WERs. The 95% interval uses percentile endpoints.
+
+| Stratum | Reference English words | AED errors / WER | CTC errors / WER | Increase |
+| --- | ---: | ---: | ---: | ---: |
+| English only, 10 clips | 288 | 35 / 12.15% | 68 / 23.61% | +11.46 pp |
+| Mandarin-to-English, 10 clips | 97 | 20 / 20.62% | 33 / 34.02% | +13.40 pp |
+| English-to-Mandarin, 10 clips | 269 | 55 / 20.45% | 91 / 33.83% | +13.38 pp |
+| **All 30 clips** | **654** | **110 / 16.82%** | **192 / 29.36%** | **+12.54 pp** |
+
+- **82 additional English errors**, or **74.5% more errors relative to AED**.
+  This is not "74.5% less accurate": WER includes insertions and is not simply
+  the percentage of correctly recognized words.
+- Approximate paired speaker-cluster **95% interval: +8.55 to +16.72 percentage
+  points**, entirely above the +3-point materiality margin.
+- English errors increased for **all 10 speakers**. Across clips, CTC was worse
+  on **25**, tied on **5**, and better on **0** by English edit count.
+- Raw-output review found malformed/truncated ordinary English words and phrases,
+  not only omitted fillers or repetitions. Full text and error details stay local;
+  no transcript repair, spelling correction or automatic AED fallback was used.
+- Mixed MER: AED **140/971 = 14.42%**, CTC **224/971 = 23.07%**. Han CER: AED
+  **40/317 = 12.62%**, CTC **37/317 = 11.67%**. The small Han difference does not
+  establish Mandarin equivalence or outweigh the English regression.
+
+Ten purposively selected speaker clusters give an approximate uncertainty estimate,
+not a population guarantee or comprehensive accent/quality qualification. The large
+consistent English gap is nevertheless sufficient for this bounded screening
+rejection. No post-hoc tolerance or reference changes were made.
+
+### Runtime, cleanup and remaining boundaries
+
+Same Apple M1 Pro/macOS 26.6.2 host and CPU/one-thread/greedy policy; one fresh AED
+process then one fresh CTC process, serially. Each had a 300-second ceiling plus
+15 seconds reserved owned cleanup. No retries or simultaneous model residency.
+
+| Host observation | AED | CTC |
+| --- | ---: | ---: |
+| Preparation, seconds | 2.139 | 1.287 |
+| All 30 native decode calls, seconds | 130.610 | 90.421 |
+| Command through cleanup, seconds | 133.936 | 92.887 |
+| Maximum process RSS, bytes | 1,979,662,336 | 1,212,596,224 |
+
+Combined replay time was approximately **3 minutes 47 seconds**, excluding dataset
+selection/acquisition/scoring. Peak host RSS was 38.75% lower in this comparison;
+that is not phase attribution, an isolated performance benchmark, iPhone footprint
+or sustainable-use evidence. No thermal/energy or OS warning observer was collected.
+Both runs exited zero with 30 complete predictions, empty owned process groups and
+**cleanup PASS**. No phone operation, audible playback, room recording, simulator
+run or app/backend change occurred. Original iPhone warning/profiler cleanup STOP
+and missing +30-second sample remain unresolved.
+
+Private evidence: `.build/verification/firered-ctc-meli30/`. Retains pre-output plan,
+annotation/source provenance, frozen selection/corpus, range receipts, audio,
+model invocations/ownership, raw predictions, scores, uncertainty and cleanup.
+Statistics failure cases were written first; observed missing-module failure before
+implementation, then weighted/paired/deterministic/zero-denominator checks PASS.
+The existing evaluator supplies tokenization/edit distance. Repeat saved-output
+verification with `python3 .build/verification/firered-ctc-meli30/check-result.py`;
+expected exit **1**, `QUALITY FAIL / STOP CTC`, without running models again.
+Prior unrelated source-contract failures remain separately documented below.
+
+## Initial six-clip host result, September 28: CTC quality FAIL / STOP
 
 The packet was applied on the exact review anchor without conflicts. Source commit
 `e519ae01a1128f5572367bdc3e47bf3c7211f6b0` adds the host gate; documentation commit
