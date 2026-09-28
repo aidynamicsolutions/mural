@@ -72,11 +72,25 @@ def playback_ack_token(log, run, index, playback):
     return token
 
 
-def validate_request(udid, stage, ready):
+def consumed_ack_copy(copy_log, test_log, run, index, token):
+    # devicectl stats the destination after writing; XCTest can already have
+    # consumed/unlinked it. Prove exact nonce delivery, never forgive other errors.
+    destination = f"tmp/mural-playback-{run}-{index}.txt"
+    expected = (f"ERROR: Failed to retrieve the file node for {destination} "
+                "(com.apple.dt.CoreDeviceError error 7000 (0x1B58))")
+    marker = f"MURAL_DEVICE_PLAYBACK_ACK_{index} {run} {token}"
+    return copy_log.strip() == expected and test_log.splitlines().count(marker) == 1
+
+
+def validate_request(udid, stage, ready, pair="vi-en"):
     if not re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{16}", udid):
         raise ValueError("DEVICE_UDID must be an explicit freshly discovered physical UDID")
-    if stage not in ("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings"):
+    if stage not in ("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"):
         raise ValueError("Unknown physical stage")
+    if pair not in ("vi-en", "zh-CN-en"):
+        raise ValueError("Unknown physical test pair")
+    if pair == "zh-CN-en" and stage != "pair-check":
+        raise ValueError("FireRed native continuation is blocked; only model-free pair-check is available")
     if stage not in ("prepare", "status") and not ready:
         raise ValueError("Confirm the private audible window, idle phone and closed mirroring, then set DEVICE_READY=YES")
 
@@ -300,7 +314,7 @@ def device_json(arguments, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings"), default=os.environ.get("DEVICE_STAGE", "prepare"))
+    parser.add_argument("--stage", choices=("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"), default=os.environ.get("DEVICE_STAGE", "prepare"))
     parser.add_argument("--report", type=Path, nargs="?", const=Path("latest"), help="Summarize saved evidence (latest by default); no device operations")
     args = parser.parse_args()
     if args.report:
@@ -313,7 +327,8 @@ def main():
     started = time.monotonic()
     phases = [("preflight", started)]
     udid = os.environ.get("DEVICE_UDID", "").upper()
-    validate_request(udid, args.stage, os.environ.get("DEVICE_READY") == "YES")
+    pair = os.environ.get("DEVICE_PAIR", "vi-en")
+    validate_request(udid, args.stage, os.environ.get("DEVICE_READY") == "YES", pair=pair)
     if args.stage == "restore-settings" and not os.environ.get("DEVICE_RESTORE_MEANING"):
         raise ValueError("DEVICE_RESTORE_MEANING must be the recorded original preference, never a guessed default")
     os.chdir(ROOT)
@@ -327,7 +342,7 @@ def main():
     locks.mkdir(parents=True, exist_ok=True)
     playback_run = str(uuid.uuid4()).upper()
     session = dict(pid=os.getpid(), udid=udid, stage=args.stage, app=APP_ID, runner=TEST_ID,
-                   playback_run=playback_run,
+                   playback_run=playback_run, pair=pair,
                    configuration="Release", backend=BACKEND, settings="No changes",
                    started_at=datetime.now(timezone.utc).isoformat(), evidence=str(evidence),
                    runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
@@ -491,10 +506,19 @@ def main():
                     # Only the XCTest runner's temporary container, never Mural data.
                     receipt = evidence / f"playback-ack-{index}.txt"
                     receipt.write_text(token)
-                    run_bounded(["xcrun", "devicectl", "device", "copy", "to", "--device", udid,
-                                 "--source", str(receipt), "--destination", f"tmp/mural-playback-{playback_run}-{index}.txt",
-                                 "--domain-type", "appDataContainer", "--domain-identifier", TEST_ID + ".xctrunner",
-                                 "--timeout", "5"], evidence / f"playback-ack-{index}.log", 6, monitor=check_faults)
+                    copy_log = evidence / f"playback-ack-{index}.log"
+                    try:
+                        run_bounded(["xcrun", "devicectl", "device", "copy", "to", "--device", udid,
+                                     "--source", str(receipt), "--destination", f"tmp/mural-playback-{playback_run}-{index}.txt",
+                                     "--domain-type", "appDataContainer", "--domain-identifier", TEST_ID + ".xctrunner",
+                                     "--timeout", "5"], copy_log, 6, monitor=check_faults)
+                    except RuntimeError:
+                        if not consumed_ack_copy(copy_log.read_text(), (evidence / "test.log").read_text(),
+                                                 playback_run, index, token):
+                            raise
+                        write_json(evidence / f"playback-ack-{index}-consumed.json", {
+                            "run": playback_run, "index": index, "token": token,
+                            "delivery": "native exact-token receipt precedes devicectl post-copy stat"})
 
                 def monitor():
                     nonlocal playback, playback_state, capture_received, probe_sent
@@ -507,7 +531,7 @@ def main():
                         if event in content and event not in observed_phases:
                             observed_phases.add(event)
                             print(f"Device phase: {event}", flush=True)
-                    if args.stage == "restore-settings" and not probe_sent and f"MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 0 " in test_content:
+                    if args.stage in ("restore-settings", "pair-check") and not probe_sent and f"MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 0 " in test_content:
                         acknowledge(0, playback_request(test_content, playback_run, 0))
                         probe_sent = True
                         write_json(evidence / "sync-probe.json", {"run": playback_run, "ack_sent": True, "playback": "NOT REQUESTED"})
@@ -570,6 +594,7 @@ def main():
                 test_plan = evidence / "runtime.xctestrun"
                 test_plan.write_bytes(plistlib.dumps(runtime_test_plan(plans[0], {
                     "MURAL_PHYSICAL_E2E": args.stage,
+                    "MURAL_PHYSICAL_PAIR": pair,
                     "MURAL_RESTORE_MEANING": os.environ.get("DEVICE_RESTORE_MEANING", ""),
                     "MURAL_PLAYBACK_RUN": playback_run})))
                 command = ["xcodebuild", "-xctestrun", str(test_plan), "-destination", f"platform=iOS,id={udid}",
@@ -591,11 +616,14 @@ def main():
                 summary = subprocess.check_output(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(bundle), "--compact"], timeout=30)
                 (evidence / "summary.json").write_bytes(summary)
                 check_summary(json.loads(summary))
-                if args.stage == "restore-settings":
+                if args.stage in ("restore-settings", "pair-check"):
                     text = (evidence / "test.log").read_text()
-                    if not all(marker in text for marker in ("MURAL_DEVICE_RESTORE_ONLY", "MURAL_DEVICE_SETTINGS_RESTORED", "MURAL_DEVICE_CLEANUP_PASS", "MURAL_DEVICE_PLAYBACK_ACK_0")):
-                        raise ValueError("Settings-only recovery not confirmed")
-                    write_json(evidence / "result.json", {"settings_restoration": "PASS", "models": "NOT REQUESTED"})
+                    outcome = f"MURAL_DEVICE_PAIR_CHECK_PASS {pair}" if args.stage == "pair-check" else "MURAL_DEVICE_RESTORE_ONLY"
+                    if not all(marker in text for marker in (outcome, "MURAL_DEVICE_SETTINGS_RESTORED", "MURAL_DEVICE_CLEANUP_PASS", "MURAL_DEVICE_PLAYBACK_ACK_0")):
+                        raise ValueError("Model-free selection/restoration not confirmed")
+                    if re.search(r"firered_native_begin|asr_trial_capture|model_request|asr_ready", log.read_text()):
+                        raise ValueError("Unexpected model/capture work during model-free verification")
+                    write_json(evidence / "result.json", {"settings_restoration": "PASS", "pair": pair, "models": "NOT REQUESTED"})
                 else:
                     pid = baseline_events(log.read_text())
                     if "MURAL_DEVICE_BASELINE_UI_PASS" not in (evidence / "test.log").read_text():

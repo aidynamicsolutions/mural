@@ -1020,7 +1020,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         let deadline = ProcessInfo.processInfo.systemUptime + 12
         while ProcessInfo.processInfo.systemUptime < deadline {
             if (try? String(contentsOf: receipt, encoding: .utf8)) == token {
-                print("MURAL_DEVICE_PLAYBACK_ACK_\(index)")
+                print("MURAL_DEVICE_PLAYBACK_ACK_\(index) \(run) \(token)")
                 if index > 0 { Thread.sleep(forTimeInterval: 0.75) }
                 return
             }
@@ -1092,7 +1092,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         #if targetEnvironment(simulator)
         throw XCTSkip("Physical device only")
         #else
-        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
+        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
             throw XCTSkip("Use the explicit agent-verify-device entrypoint")
         }
         #endif
@@ -1176,6 +1176,13 @@ final class MuralPhysicalDeviceTests: XCTestCase {
     }
 
     func testNativeBaseline() throws {
+        let stage = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? ""
+        let pair = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_PAIR"] ?? "vi-en"
+        guard pair == "vi-en" || (pair == "zh-CN-en" && stage == "pair-check") else {
+            XCTFail("FireRed runtime is blocked pending resource review; unknown pairs are refused")
+            throw NSError(domain: "MuralPhysicalGate", code: 4)
+        }
+        let meaning = pair == "zh-CN-en" ? "Simplified Chinese" : "Vietnamese"
         let app = XCUIApplication(bundleIdentifier: "com.kevintruong.mural.dev")
         // Host launches the real signed app with its scoped console attached first.
         // No previews, defaults, transcript injection or model substitutes.
@@ -1210,15 +1217,34 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         XCTAssertFalse(app.buttons["local-conversation-end"].exists, "Refuse an active personal conversation")
         XCTAssertFalse(app.buttons["local-conversation-transcript"].exists, "Do not clear existing Talk")
         XCTAssertTrue(app.staticTexts["conversation-language-pair"].label.hasPrefix("English · "))
-        _ = try meaningSetting(app, select: "Vietnamese", preservingOriginal: true)
-        XCTAssertEqual(app.staticTexts["conversation-language-pair"].label, "English · Vietnamese")
+        _ = try meaningSetting(app, select: meaning, preservingOriginal: true)
+        if stage == "pair-check", let restore = ProcessInfo.processInfo.environment["MURAL_RESTORE_MEANING"],
+           !restore.isEmpty {
+            originalMeaning = restore // Explicit recorded preference after a failed run, never guessed.
+        }
+        XCTAssertEqual(app.staticTexts["conversation-language-pair"].label, "English · \(meaning)")
         let start = app.buttons["local-conversation-start"]
         XCTAssertEqual(start.label, "Prepare & start", "Refuse paused/pending personal work")
         try reveal(start, app: app)
         XCTAssertTrue(start.isEnabled)
         let details = app.buttons["On-device details & diagnostics"]
         try reveal(details, app: app); details.tap()
-        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains("Core AI GPU-preferred encoder + Core ML decoder (staged)"))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(pair == "zh-CN-en"
+            ? "FireRedASR2-AED" : "Core AI GPU-preferred encoder + Core ML decoder (staged)"))
+        if stage == "pair-check" {
+            // Never Prepare or inspect personal history. Exercise the actual pair,
+            // scrolled diagnostics and nonce transport before admitting native work.
+            originalMeaning = originalMeaning ?? meaning
+            app.swipeUp(); app.swipeUp()
+            try reveal(details, app: app); details.tap()
+            try reveal(start, app: app)
+            XCTAssertEqual(start.label, "Prepare & start")
+            try awaitPlaybackCompletion(0)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "Model-free selected pair \(pair)"; image.lifetime = .keepAlways; add(image)
+            print("MURAL_DEVICE_PAIR_CHECK_PASS \(pair)")
+            return // Teardown restores and independently reads the original preference.
+        }
         details.tap()
         try reveal(start, app: app)
         startedConversation = true

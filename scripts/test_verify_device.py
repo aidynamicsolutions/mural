@@ -12,7 +12,7 @@ from pathlib import Path
 
 from verify_device import (validate_request, check_summary, baseline_events, acoustic_events, run_bounded,
                            compiler_proof, select_prepared, idle_process, cancellation_events, APP_EXECUTABLE,
-                           phase_durations, native_phase_durations, playback_ack_token, runtime_test_plan)
+                           phase_durations, native_phase_durations, playback_ack_token, runtime_test_plan, consumed_ack_copy)
 
 
 def refuses(operation):
@@ -53,7 +53,26 @@ if __name__ == "__main__":
                     {"ended_monotonic": 16.0}, {"ended_monotonic": 9.0},
                     {"send_observed_at_completion": True}):
         refuses(lambda: playback_ack_token(request, run, 1, {**completed, **changes}))
+    # Reproduced transport race: native consumed/deleted the exact receipt before
+    # devicectl's post-copy stat. Only exact current nonce consumption plus that
+    # specific missing-node error can recover; other transfer failures still fail.
+    destination = f"tmp/mural-playback-{run}-0.txt"
+    copy_error = f"ERROR: Failed to retrieve the file node for {destination} (com.apple.dt.CoreDeviceError error 7000 (0x1B58))\n"
+    consumed = f"MURAL_DEVICE_PLAYBACK_ACK_0 {run} {nonce}\n"
+    assert consumed_ack_copy(copy_error, consumed, run, 0, nonce)
+    for bad in ("", consumed.replace(nonce, run), consumed.replace("ACK_0", "ACK_1"), consumed + consumed):
+        assert not consumed_ack_copy(copy_error, bad, run, 0, nonce)
+    for bad in ("device disconnected", copy_error.replace(run, nonce), copy_error + "other failure"):
+        assert not consumed_ack_copy(bad, consumed, run, 0, nonce)
     udid = "00008150-000D25942278401C"
+    # Pair-extension failure matrix: unknown pair, missing readiness, accidental
+    # native FireRed admission before resource approval, and unchanged VI defaults.
+    validate_request(udid, "pair-check", True, pair="zh-CN-en")
+    validate_request(udid, "pair-check", True, pair="vi-en")
+    refuses(lambda: validate_request(udid, "pair-check", False, pair="zh-CN-en"))
+    refuses(lambda: validate_request(udid, "pair-check", True, pair="zh-TW-en"))
+    for stage in ("prepare", "baseline", "acoustic", "multi", "cancel", "restore-settings"):
+        refuses(lambda: validate_request(udid, stage, True, pair="zh-CN-en"))
     validate_request(udid, "prepare", False)
     validate_request(udid, "baseline", True)
     validate_request(udid, "status", False)

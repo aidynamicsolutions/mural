@@ -162,3 +162,13 @@ The four approved priorities are complete. Further substantial savings would req
 4. Run the selected native stage with actual capture/model gates. Stop at the first model/resource or unsafe thermal failure.
 5. Inspect compact results, raw recognition/order evidence and cleanup. Save any necessary listening confirmation separately.
 6. Restore settings and stop owned processes. Report PASS/FAIL/BLOCKED with scope and evidence; do not silently extrapolate to background execution or teaching quality.
+
+## September 28: model-free Simplified pair and receipt cleanup race
+
+The Simplified Talk extension adds only a model-free `pair-check` so far; the existing Vietnamese native qualification is not FireRed evidence. See the [current qualification plan](asr/chinese/simplified-talk-qualification-plan.md).
+
+- `20260928-083618-32989` reproduced a completion-receipt race: XCTest consumed and immediately unlinked the exact nonce file, then devicectl's post-copy destination stat failed with file-node error 7000. The host aborted native teardown. Preserve that failed result/cleanup; no models or audio ran.
+- Shared correction accepts only the exact destination-specific missing-node error with a fresh native ACK containing the exact run/index/nonce once. Other errors, missing/wrong/duplicate ACKs, timeout, unfinished playback and early Send still fail. Existing bounds and trailing audio margin are unchanged; no receipt sleep/retry or silent acceptance of failed playback. Prewritten host failure checks passed.
+- Separate model-free recovery/qualification `20260928-083908-39499`: one native pass, zero failures/skips, cleanup PASS; **28.78 seconds through cleanup**. Traditional Chinese was restored from the failed run's original-preference record and independently read back. Settings/FireRed diagnostics/scrolling/transport were exercised without Prepare or history access. This run's copy returned normally; do not label it physical injection of the race branch.
+- Signed test preparation was **14.01 seconds**, separate from runtime, using unchanged production executable/compiler proof. Screen movie exported and fully decoded; screenshot inspected. No audible-output, acoustic recognition, native FireRed or timing-speedup claim. All owned work stopped and no room audio recorded.
+- Fresh `pair-check` `20260928-084236-47188` passed actual Traditional-to-Simplified selection and automatic original-preference restoration/readback without a recovery override, **36.48 seconds**, one test and cleanup PASS. Recovery had started already on Simplified, so this second model-free run proves a distinct required behavior, not an acoustic/model retry.
