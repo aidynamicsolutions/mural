@@ -26,7 +26,7 @@ private func replacing(_ value: SpeechPackage, key: String, with replacement: An
 }
 
 struct SpeechPackageTests {
-    // Only these pairs have a package schema; FireRed distribution is still gated.
+    // Existing Core ML packages retain their canonical schema and validation.
     @Test(arguments: [LocalSpeechPair.taiwanMandarinEnglish, .vietnameseEnglish]) func packageRoundTrip(_ pair: LocalSpeechPair) throws {
         let package = fixture(pair)
         #expect(try SpeechPackage.decode(package.canonicalData()) == package)
@@ -170,12 +170,55 @@ struct SpeechPackageTests {
         try LocalSpeechProvisioning.publishPointer(new, to: pointer, publishedDirectory: published, base: root)
         #expect(try Data(contentsOf: pointer) == new)
     }
-    @Test func missingPublishedCatalogFailsClosed() {
-        // Replace this test with concrete catalog checks when reviewed packages are published.
-        guard SpeechPackageCatalog.entries.isEmpty else { return }
-        for pair in LocalSpeechPair.allCases {
-            #expect(throws: (any Error).self) { try SpeechPackageCatalog.entry(for: pair) }
+    // Failure matrix before implementation: no remote/fake manifest, changed revision,
+    // graph size/hash/name/mapping, missing/extra files, wrong pair/compute/reserve,
+    // legacy canonical drift, and accidentally publishing another pair.
+    @Test func fireRedCatalogContainsOnlyReviewedBundledMetadata() throws {
+        let entry = try SpeechPackageCatalog.entry(for: .mainlandMandarinEnglish)
+        try entry.validate()
+        guard case .bundled(let data) = entry.manifest else {
+            Issue.record("FireRed needs reviewed bundled metadata, not a fabricated upstream manifest")
+            return
         }
+        #expect(Self.digest(data) == entry.manifestSHA256)
+        let package = try SpeechPackage.decode(data)
+        #expect(package.backend == .fireRedASR2Int8)
+        #expect(package.pair == entry.pair)
+        #expect(package.id == entry.id)
+        #expect(package.downloadBytes == 1_234_657_933)
+        #expect(package.specializationReserveBytes == 0) // ONNX has no on-disk specialization.
+        #expect(package.revision == "374cff185e952c40fcf2f6da972a3b6cf340608d")
+        #expect(package.files.map(\.path) == ["support/decoder.int8.onnx", "support/encoder.int8.onnx", "support/tokens.txt"])
+        #expect(package.files.map(\.downloadPath) == ["decoder.int8.onnx", "encoder.int8.onnx", "tokens.txt"])
+        #expect(entry.filesURL.absoluteString == "https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26/resolve/374cff185e952c40fcf2f6da972a3b6cf340608d/")
+        for pair in [LocalSpeechPair.taiwanMandarinEnglish, .vietnameseEnglish] {
+            #expect(throws: SpeechPackageError.self) { try SpeechPackageCatalog.entry(for: pair) }
+        }
+    }
+    @Test func fireRedRejectsEveryContractMutation() throws {
+        let entry = try SpeechPackageCatalog.entry(for: .mainlandMandarinEnglish)
+        guard case .bundled(let data) = entry.manifest else { Issue.record("Missing bundled metadata"); return }
+        let package = try SpeechPackage.decode(data)
+        for (key, value) in [("revision", String(repeating: "0", count: 40)), ("pair", "vi-en"),
+                             ("computeUnits", ["recognizer": "gpu"]), ("specializationReserveBytes", -1)] as [(String, Any)] {
+            #expect(throws: SpeechPackageError.self) { try SpeechPackage.decode(replacing(package, key: key, with: value)) }
+        }
+        let files = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(package.files)) as? [[String: Any]])
+        for (key, value) in [("bytes", 1), ("sha256", exampleHash), ("path", "support/other.onnx"),
+                             ("downloadPath", "../decoder.int8.onnx"), ("downloadPath", "encoder.int8.onnx")] as [(String, Any)] {
+            var changed = files; changed[0][key] = value
+            #expect(throws: SpeechPackageError.self) { try SpeechPackage.decode(replacing(package, key: "files", with: changed)) }
+        }
+        for changed in [Array(files.dropLast()), files + [files[0]]] {
+            #expect(throws: SpeechPackageError.self) { try SpeechPackage.decode(replacing(package, key: "files", with: changed)) }
+        }
+    }
+    @Test func legacyFilesDoNotGainAnUpstreamMapping() throws {
+        let package = fixture()
+        #expect(String(decoding: try package.canonicalData(), as: UTF8.self).contains("downloadPath") == false)
+        var files = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(package.files)) as? [[String: Any]])
+        files[0]["downloadPath"] = "other.bin"
+        #expect(throws: SpeechPackageError.self) { try SpeechPackage.decode(replacing(package, key: "files", with: files)) }
     }
 
     private static func digest(_ data: Data) -> String {

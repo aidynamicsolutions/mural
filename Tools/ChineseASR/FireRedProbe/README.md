@@ -15,6 +15,35 @@ released INT8 bytes, and maintained runtime. These are separate identities:
 the release does not contain a reproducible producer-build attestation. Both
 INT8 graphs are self-contained; inspection found no external tensor files.
 
+## Managed Talk runtime (September 28 candidate)
+
+Talk now resolves only the verified managed FireRed package. The legacy file-probe
+controller below remains separate development tooling; its staged Documents files
+are never a Talk fallback. These historical phone-copy commands are not the current
+qualification path and do not authorize another model run.
+
+For a checkout-owned device runtime, run `bash scripts/build_firered_runtime.sh`.
+It verifies both pinned source/runtime archives, uses the existing no-TTS OS64
+CMake recipe and checked dependency hashes, and saves libraries, full selected
+notices, logs and `runtime-sha256.txt` in `.build/firered-runtime`. It never downloads
+weights or touches a phone. An existing output is a refusal, not permission to
+replace it; inspect/preserve failed or prior output before a reviewed rebuild.
+
+`scripts/generate_project.py --firered-runtime --output-directory <ignored-path>`
+links that runtime through `App/Native/FireRedRuntime`, includes its notices and
+pin, and excludes the probe UI. `make agent-verify-device DEVICE_STAGE=prepare
+DEVICE_PAIR=zh-CN-en DEVICE_UDID=<fresh physical UDID>` uses this isolated variant,
+retaining Vietnamese's Core AI Release flag. Ordinary/public promotion remains
+gated on native acceptance. No simulator-runtime claim is made by this device slice.
+
+The `provision` physical stage is acquisition-only: it requires an empty managed
+FireRed location, exercises real network consent/cancel/resume/activation, and
+launches with `--firered-provision-only`. That flag stops the existing setup owner
+at verified publication and independently refuses native conversation/FireRed
+preparation. It does not qualify native readiness. See the current
+[execution plan](../../../docs/asr/chinese/simplified-talk-qualification-plan.md)
+for phone-window approval, budgets and outstanding acceptance.
+
 ## Prepared local layout
 
 Run from the merged `mvp` checkout. The completed Breeze work is preserved:

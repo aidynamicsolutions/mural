@@ -1,6 +1,12 @@
 # Chinese-English ASR: two separate work items
 
-## Native execution update
+## Current Simplified Talk checkpoint, September 28
+
+Managed FireRed download/cancel/resume/integrity/activation is implemented and phone-verified within the existing installation. The runtime-only candidate remains opt-in. The approved native continuation received an iOS memory warning during recording before decode; no automatic retry or ordinary promotion. The user reports good brief native-Mandarin-speaker accuracy and now prioritizes memory reduction.
+
+Start with the [qualification tracker](simplified-talk-qualification-plan.md) and [memory research handoff](firered-memory-research-handoff.md). The latter packages exact pins, sanitized old/new memory evidence, source map, retained worktree/quantization inventory, constraints and questions for an online research agent. The current model is already released INT8; no separate lower-bit FireRed candidate was found in the inspected worktree/history. The original preparation inventory below is historical, not current execution guidance.
+
+## Historical native execution update
 
 Breeze is integrated in `App/BreezeEnglishRecognizer.swift` and registered in the
 Xcode project. The guarded installer was reviewed and applied on its exact pinned

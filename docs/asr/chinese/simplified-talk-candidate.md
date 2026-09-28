@@ -1,6 +1,6 @@
 # Simplified Chinese-English Talk candidate
 
-2026-09-26. **Opt-in source/build/UI checkpoint only. Native speech remains STOP/unqualified. Fresh-install downloads are required for completion and are not implemented yet.**
+2026-09-26. **Historical opt-in source/build/UI checkpoint.** The status and remaining-work statements below describe that date. September 28 managed acquisition/recovery subsequently passed, but native Talk hit another memory-warning stop. Use the [current qualification tracker](simplified-talk-qualification-plan.md) and [memory research handoff](firered-memory-research-handoff.md); native speech remains unqualified and ordinary promotion gated.
 
 ## Source and scope
 

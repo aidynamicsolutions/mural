@@ -685,10 +685,10 @@ struct LocalTutorProbeView: View {
             case .vadOnly:
                 Text("VAD-only diagnosis uses the normal microphone and converter, but loads only Silero. Send reports the current gate decision, not a transcript.").font(.footnote)
             #endif
-            #if MURAL_FIRERED_FILE_PROBE
+            #if MURAL_FIRERED_RUNTIME
             case .fireRed:
                 Text("FireRedASR2-AED · Mainland Mandarin and English · INT8 · CPU · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)
-                Text("Development-only probe with pinned local assets. No download, transcript correction, or cloud fallback. Stop and report memory warnings, errors, or excessive delay.").font(.footnote)
+                Text("Development-only candidate using the verified managed Talk package. Manage downloads from Talk; no transcript correction or cloud fallback. Stop and report memory warnings, errors, or excessive delay.").font(.footnote)
             #endif
             case .breeze:
                 Text("Breeze ASR 25 · Taiwan Mandarin and English · PAL8 · auto language · 16 kHz mono · 30 seconds per turn. Recognition starts after Send.").font(.footnote)

@@ -145,6 +145,7 @@ import MuralCore
     private var memoryPressurePaused = false
     private var localTask: Task<Void, Never>?
     private var localResumeTask: Task<Void, Never>?
+    @ObservationIgnored private var fireRedResourceTask: Task<Void, Never>?
     private var localTimeout: Task<Void, Never>?
     private(set) var localReplySeconds: Double?
     private(set) var localModelSeconds: Double?
@@ -265,6 +266,11 @@ import MuralCore
         }
         localAudio.onSafetyStop = { [weak self] reason in
             guard let self, self.isLocal, self.isRunning else { return }
+            if FireRedEnglishRecognizer.resourceDiagnostic {
+                self.localLogger.fault("firered_resource_fault reason=safety-stop")
+                self.endLocal(reason: "Resource qualification stopped", setupInterruption: .systemInterrupted)
+                return
+            }
             switch reason {
             case .memoryPressure:
                 self.error = nil
@@ -449,7 +455,61 @@ import MuralCore
         inputLevel = 0; outputLevel = 0
         localReplySeconds = nil; localModelSeconds = nil; localSupportUsed = false
         state = .connecting; localPhase = .preparing
+        observeFireRedResourceRun()
         runLocalPreparation(sessionID: record.id)
+    }
+
+    /// Explicit native qualification only. Observes the real combined owner without
+    /// changing model/provider/thread policy or extending the preparation idle timer.
+    private func observeFireRedResourceRun() {
+        guard FireRedEnglishRecognizer.resourceDiagnostic, fireRedResourceTask == nil else { return }
+        // Settings can recreate idle engines. Anchor exactly once to this real
+        // combined Talk owner, not to each engine's initialization.
+        FireRedEnglishRecognizer.resourceBoundary("baseline")
+        let deadline = ProcessInfo.processInfo.systemUptime + 660
+        fireRedResourceTask = Task { [weak self] in
+            var ready = false, completed = false, lastSample = 0.0
+            defer { self?.fireRedResourceTask = nil }
+            while let self {
+                let now = ProcessInfo.processInfo.systemUptime
+                if self.isRunning && (now >= deadline || self.error != nil ||
+                    ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue) {
+                    self.localLogger.fault("firered_resource_fault reason=deadline-error-or-thermal")
+                    self.endLocal(reason: "Resource qualification stopped", setupInterruption: .failed)
+                }
+                if now - lastSample >= 3 {
+                    FireRedEnglishRecognizer.resourceBoundary("sample"); lastSample = now
+                }
+                if !self.isRunning {
+                    // Each existing owner keeps its synchronous native work alive
+                    // until return. No recognizer is freed by this observer.
+                    await self.localTask?.value
+                    await self.localResumeTask?.value
+                    _ = await self.localLookupTask?.result
+                    await self.localPostTask?.value
+                    try? await self.speechModels.waitForCompletion()
+                    await self.localAudio.waitForResourceDrain()
+                    if !self.localResourcesBusy {
+                        FireRedEnglishRecognizer.resourceBoundary("owner-drained")
+                        for (delay, phase) in [(2, "post-drain-2"), (8, "post-drain-10"), (20, "post-drain-30")] {
+                            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                            FireRedEnglishRecognizer.resourceBoundary(phase)
+                        }
+                        return
+                    }
+                } else if self.localPhase == .ready && !self.localResourcesBusy {
+                    if !ready {
+                        ready = true; FireRedEnglishRecognizer.resourceBoundary("ready")
+                    }
+                    if !completed, self.session?.hasUserMessage == true,
+                       self.session?.fragments.last?.speaker == .assistant,
+                       self.session?.fragments.last?.playbackCompleted == true {
+                        completed = true; FireRedEnglishRecognizer.resourceBoundary("turn-complete")
+                    }
+                }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            }
+        }
     }
 
     private func speechDownloadNeeded(for pair: LocalSpeechPair) async throws -> SpeechDownloadOffer? {
@@ -469,6 +529,12 @@ import MuralCore
         #else
         needsSpeechDownload = try !localAudio.hasConversationAssets(for: pair)
         #endif
+        if needsSpeechDownload, FireRedEnglishRecognizer.resourceDiagnostic {
+            // Resource runs use an already verified managed package. Missing
+            // assets never authorize repair/downloads inside the resource window.
+            localLogger.fault("firered_resource_fault reason=missing-retained-asr-assets")
+            throw SpeechPackageError.notPublished
+        }
         if needsSpeechDownload {
             speechModels.check(pair)
             if setup.pauseRequested || !setup.isLive { speechModels.cancel() }
@@ -478,6 +544,10 @@ import MuralCore
         let needsVoice = try localAudio.conversationVoiceNeedsDownload
         let needsSpeechDetection = try localAudio.speechDetectionNeedsDownload
         guard needsSpeechDownload || needsVoice || needsSpeechDetection else { return nil }
+        if FireRedEnglishRecognizer.resourceDiagnostic {
+            localLogger.fault("firered_resource_fault reason=missing-retained-assets")
+            throw SpeechPackageError.notPublished
+        }
         let package = needsSpeechDownload ? speechModels.package : nil
         if needsSpeechDownload, package == nil { throw SpeechPackageError.notPublished }
         let storage = try package.map { $0.downloadBytes + $0.specializationReserveBytes + SpeechPackage.chunkBytes + Int64(try $0.canonicalData().count) }
@@ -517,6 +587,12 @@ import MuralCore
                         if self.setup.pauseRequested { try self.saveSetup { try self.setup.continueAfterDrain() } }
                         try self.checkSetupAdmission(sessionID: id)
                         // Approval is permission, never evidence that assets still exist.
+                        if FireRedEnglishRecognizer.provisioningOnly {
+                            guard pair == .mainlandMandarinEnglish, !FireRedEnglishRecognizer.resourceDiagnostic else {
+                                throw SpeechPackageError.incompatible
+                            }
+                            self.localLogger.notice("firered_provision_only_enabled")
+                        }
                         let offer = try await self.speechDownloadNeeded(for: pair)
                         try self.checkSetupAdmission(sessionID: id)
                         self.setup.setPlan(needsRecognitionDownload: self.needsSpeechDownload)
@@ -550,6 +626,17 @@ import MuralCore
                             }
                             self.setupContinuation.finish(success: true,
                                 needsForeground: UIApplication.shared.applicationState != .active)
+                        }
+                        if FireRedEnglishRecognizer.provisioningOnly {
+                            guard try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") != nil else {
+                                throw SpeechPackageError.integrity
+                            }
+                            let entry = try SpeechPackageCatalog.entry(for: pair)
+                            self.localLogger.notice("firered_provision_verified bytes=1234657933 manifest=\(entry.manifestSHA256, privacy: .public)")
+                            // Keep the real published package and setup checkpoint, but never
+                            // cross into VAD/voice/ASR/tutor initialization in this launch.
+                            self.endLocal(reason: "Managed speech verified; native qualification deferred", setupInterruption: .userCancelled)
+                            return
                         }
                         // No native operation is admitted while away, even with a system grant.
                         try await self.waitForSetupForeground(sessionID: id)
@@ -622,6 +709,12 @@ import MuralCore
                 }
             } catch {
                 if !Task.isCancelled, self.session?.id == id, self.isRunning {
+                    if FireRedEnglishRecognizer.resourceDiagnostic {
+                        self.localLogger.fault("firered_resource_fault reason=preparation-or-greeting")
+                    }
+                    if FireRedEnglishRecognizer.provisioningOnly {
+                        self.localLogger.fault("firered_provision_fault reason=setup-failed")
+                    }
                     self.speechSetupDiagnostic = error.localizedDescription
                     self.endLocal(reason: "Local preparation or greeting failed")
                     if self.setupCheckpointFailed {
@@ -866,6 +959,7 @@ import MuralCore
     private func endLocal(reason: String, assess: Bool = false,
                           setupInterruption: SpeechSetupJob.Interruption = .failed) {
         guard isRunning else { return }
+        FireRedEnglishRecognizer.resourceBoundary("end-requested")
         if setup.isLive {
             do { try setup.interrupt(setupInterruption) }
             catch {
@@ -1092,6 +1186,11 @@ import MuralCore
         localLogger.notice("local_paused")
     }
     func background() {
+        if FireRedEnglishRecognizer.resourceDiagnostic, isRunning {
+            localLogger.fault("firered_resource_fault reason=background")
+            endLocal(reason: "Resource qualification requires foreground", setupInterruption: .systemInterrupted)
+            return
+        }
         if setup.isLive {
             // Consent is not execution; keep its presentation/approval separate from suspension.
             if awaitingSpeechDownload { return }

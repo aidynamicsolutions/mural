@@ -1,5 +1,7 @@
 # FireRed idle memory-warning investigation
 
+**Later checkpoint:** the September 28 managed Talk continuation hit another warning, during recording before decode. See the [memory research handoff](firered-memory-research-handoff.md) for its measurements, later offline analysis, worktree/quantization inventory and current research request. The report below preserves the September 20 chronology; it is not new runtime authorization.
+
 2026-09-20. **INCONCLUSIVE pressure cause; FireRed remains stopped and unqualified.**
 Saved-evidence and pinned-source review, host checks, and one subsequently
 approved phone diagnostic are complete. The diagnostic showed stable sampled

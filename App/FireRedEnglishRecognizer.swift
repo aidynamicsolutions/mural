@@ -7,23 +7,46 @@ import OSLog
 /// Opt-in AED Talk candidate and probe. Not qualified for ordinary builds.
 /// The existing audio task retains this actor until native work drains.
 actor FireRedEnglishRecognizer {
-    static var developmentDirectory: URL {
-        URL.documentsDirectory.appending(path: "FireRedProbe/model", directoryHint: .isDirectory)
-    }
-
     static var available: Bool {
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         true
         #else
         false
         #endif
     }
 
-    nonisolated static var memoryDiagnostic: Bool {
-        #if MURAL_FIRERED_FILE_PROBE
-        ProcessInfo.processInfo.arguments.contains("--firered-memory-diagnostic")
+    nonisolated static var provisioningOnly: Bool {
+        #if MURAL_FIRERED_RUNTIME
+        ProcessInfo.processInfo.arguments.contains("--firered-provision-only")
         #else
         false
+        #endif
+    }
+
+    nonisolated static var memoryDiagnostic: Bool {
+        #if MURAL_FIRERED_RUNTIME
+        resourceDiagnostic || ProcessInfo.processInfo.arguments.contains("--firered-memory-diagnostic")
+        #else
+        false
+        #endif
+    }
+
+    nonisolated static var resourceDiagnostic: Bool {
+        #if MURAL_FIRERED_RUNTIME
+        ProcessInfo.processInfo.arguments.contains("--firered-talk-resource")
+        #else
+        false
+        #endif
+    }
+
+    nonisolated static func resourceBoundary(_ phase: String) {
+        #if MURAL_FIRERED_RUNTIME
+        guard resourceDiagnostic else { return }
+        let memory = VietnameseEnglishRecognizer.logMemory(stage: phase, model: "firered-resource")
+        let footprint = memory["footprintBytes"] ?? 0
+        let logger = Logger(subsystem: "no.william.mural", category: "LocalAudio")
+        if footprint == 0 { logger.fault("firered_resource_fault reason=memory-sample-unavailable") }
+        logger.notice("firered_resource phase=\(phase, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) footprint_bytes=\(footprint, privacy: .public) headroom_bytes=\(os_proc_available_memory(), privacy: .public) thermal_state=\(ProcessInfo.processInfo.thermalState.rawValue, privacy: .public)")
         #endif
     }
 
@@ -33,7 +56,7 @@ actor FireRedEnglishRecognizer {
         VietnameseEnglishRecognizer.logMemory(stage: stage, model: "firered-memory-diagnostic")
     }
 
-    #if MURAL_FIRERED_FILE_PROBE
+    #if MURAL_FIRERED_RUNTIME
     private var recognizer: OpaquePointer?
     private var vad: VadManager?
     private var vadMode: SpeechPresencePolicy.Mode = .off
@@ -67,7 +90,9 @@ actor FireRedEnglishRecognizer {
               Set(pin.artifacts.keys) == Set(["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]) else {
             throw Failure("FireRed AED model/runtime identity mismatch. No fallback.")
         }
-        let folder = developmentDirectory
+        guard let folder = try LocalSpeechProvisioning.installedDirectory(for: .mainlandMandarinEnglish, component: "support") else {
+            throw Failure("Download the reviewed FireRed package in Talk before preparing speech. Developer assets are not used.")
+        }
         let root = folder.deletingLastPathComponent()
         for url in [root, folder] {
             guard try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
@@ -101,6 +126,7 @@ actor FireRedEnglishRecognizer {
     }
 
     func prepare(directory: URL) async throws {
+        guard !Self.provisioningOnly else { throw Failure("Native preparation is prohibited during download qualification.") }
         guard !busy, recognizer == nil else { throw Failure("FireRed is busy or already prepared.") }
         busy = true; defer { busy = false }
         await SpeechSetupReporting.emit(.stage(.checkingDetection))
@@ -133,7 +159,7 @@ actor FireRedEnglishRecognizer {
         let started = ProcessInfo.processInfo.systemUptime
         logger.notice("firered_native_begin phase=prepare uptime=\(started, privacy: .public) cpu_threads=1")
         defer {
-            logger.notice("firered_native_return phase=prepare uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public)")
+            logger.notice("firered_native_return phase=prepare uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) cancelled=\(Task.isCancelled, privacy: .public)")
             VietnameseEnglishRecognizer.logMemory(stage: "prepared-or-draining", model: Self.identity)
         }
         Self.diagnosticMemory("native-prepare-begin")
@@ -174,7 +200,7 @@ actor FireRedEnglishRecognizer {
     #endif
 
     func transcribe(_ samples: [Float]) async throws -> String {
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         guard !busy, let recognizer else { throw Failure("Prepare FireRed before recording.") }
         guard samples.count <= 480_000, samples.allSatisfy(\.isFinite) else {
             throw Failure("FireRed accepts at most 30 seconds of finite 16 kHz mono audio.")

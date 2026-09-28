@@ -87,12 +87,12 @@ private func installerDigest(_ data: Data) -> String {
         var target: URL { staging.appending(path: file.path) }
         var pointer: URL { root.appending(path: "active-\(entry.pair.rawValue).json") }
 
-        init(base: URL, id: String, body: Data, expectedHash: String? = nil) {
+        init(base: URL, id: String, body: Data, expectedHash: String? = nil, downloadPath: String? = nil) {
             self.base = base
             root = base.appending(path: "SpeechModels", directoryHint: .isDirectory)
             self.body = body
             data = Data("{\"fixture\":true}".utf8)
-            file = .init(path: "support/model.bin", bytes: Int64(body.count), sha256: expectedHash ?? installerDigest(body))
+            file = .init(path: "support/model.bin", bytes: Int64(body.count), sha256: expectedHash ?? installerDigest(body), downloadPath: downloadPath)
             entry = .init(id: id, pair: .taiwanMandarinEnglish,
                 manifestURL: URL(string: "https://models.example.test/package.json")!,
                 filesURL: URL(string: "https://models.example.test/")!, manifestSHA256: installerDigest(data),
@@ -172,6 +172,23 @@ private func installerDigest(_ data: Data) -> String {
         #expect(try Data(contentsOf: fixture.final.appending(path: fixture.file.path)) == body)
         #expect(try active(fixture).id == fixture.entry.id)
         #expect(FileManager.default.fileExists(atPath: fixture.final.appending(path: "package.json").path))
+    }
+
+    @Test func mappedUpstreamPathResumesIntoTheManagedLocalPath() async throws {
+        let base = try temporaryBase(); defer { try? FileManager.default.removeItem(at: base) }
+        let body = Data(repeating: 0x51, count: Int(SpeechPackage.chunkBytes) + 17)
+        let fixture = Fixture(base: base, id: "mapped-v1", body: body, downloadPath: "encoder.int8.onnx")
+        InstallerURLProtocol.state.reset { request, ordinal in
+            #expect(request.url?.path == "/encoder.int8.onnx")
+            return ordinal == 2 ? .networkLost : Self.response(for: request, body: body)
+        }
+        await #expect(throws: URLError.self) { try await install(fixture) }
+        #expect(FileManager.default.fileExists(atPath: fixture.pointer.path) == false)
+        try await install(fixture)
+        #expect(InstallerURLProtocol.state.snapshot() == ["bytes=0-4194303", "bytes=4194304-4194320", "bytes=4194304-4194320"])
+        #expect(try Data(contentsOf: fixture.final.appending(path: "support/model.bin")) == body)
+        #expect(FileManager.default.fileExists(atPath: fixture.final.appending(path: "encoder.int8.onnx").path) == false)
+        #expect(try active(fixture).id == fixture.entry.id)
     }
 
     @Test func acceptsCompleteObjectWhenServerIgnoresInitialRange() async throws {

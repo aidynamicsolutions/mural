@@ -3,6 +3,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import Observation
+import OSLog
 
 /// One foreground transfer owner. Background/cancel checkpoints remain on disk; a new
 /// instance resumes from actual file lengths and rehashes every file before publication.
@@ -36,8 +37,12 @@ import Observation
             defer { worker = nil }
             do {
                 let entry = try SpeechPackageCatalog.entry(for: pair)
-                let data = try await SpeechHTTP.fetch(entry.manifestURL, entry: entry,
-                    maximumBytes: SpeechPackage.maximumManifestBytes)
+                let data: Data
+                switch entry.manifest {
+                case .bundled(let metadata): data = metadata
+                case .remote(let url):
+                    data = try await SpeechHTTP.fetch(url, entry: entry, maximumBytes: SpeechPackage.maximumManifestBytes)
+                }
                 try Task.checkCancellation()
                 guard Self.digest(data) == entry.manifestSHA256 else { throw SpeechPackageError.integrity }
                 let manifest = try SpeechPackage.decode(data)
@@ -210,7 +215,7 @@ import Observation
                             throw SpeechPackageError.storage(required: remainingRequired, available: nowAvailable)
                         }
                         let count = min(SpeechPackage.chunkBytes, file.bytes - offset)
-                        let url = entry.filesURL.appending(path: file.path)
+                        let url = entry.filesURL.appending(path: file.downloadPath ?? file.path)
                         let block = try await SpeechHTTP.fetch(url, entry: entry, maximumBytes: Int(count),
                             range: (offset, count, file.bytes), configuration: sessionConfiguration)
                         try Task.checkCancellation()
@@ -218,6 +223,9 @@ import Observation
                         // actual surviving file length is the next offset; full SHA-256 is authoritative.
                         try handle.write(contentsOf: block)
                         try handle.synchronize()
+                        if pair == .mainlandMandarinEnglish {
+                            Logger(subsystem: "no.william.mural", category: "SpeechProvisioning").notice("speech_package_range file=\(url.lastPathComponent, privacy: .public) offset=\(offset, privacy: .public) bytes=\(block.count, privacy: .public) total=\(file.bytes, privacy: .public)")
+                        }
                         offset += Int64(block.count)
                         missing -= Int64(block.count)
                         await progress(.downloading, complete + offset)
@@ -361,6 +369,9 @@ final class SpeechHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private var cancelled = false
     private var buffer = Data() // delegate queue only
     private var failure: Error? // delegate queue only
+    private var originalURL: URL? // Set before starting; then delegate queue only.
+    private var acceptedURL: URL?
+    private var redirects = 0
     private init(entry: ReviewedSpeechPackage, maximum: Int, range: (Int64, Int64, Int64)?, configuration: URLSessionConfiguration) {
         self.entry = entry; self.maximum = maximum; self.range = range
         self.configuration = configuration.copy() as! URLSessionConfiguration
@@ -381,6 +392,7 @@ final class SpeechHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         lock.lock()
         if cancelled { lock.unlock(); continuation.resume(throwing: CancellationError()); return }
         pending = continuation
+        originalURL = url; acceptedURL = url
         let configuration = self.configuration
         configuration.httpShouldSetCookies = false; configuration.urlCache = nil; configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 60
@@ -398,15 +410,22 @@ final class SpeechHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        guard let url = request.url, entry.permits(url) else {
+        guard redirects < 3, let originalURL, let url = request.url,
+              response.url == acceptedURL, [301, 302, 303, 307, 308].contains(response.statusCode),
+              entry.permitsRedirect(url, from: originalURL) else {
             failure = SpeechPackageError.invalidManifest; completionHandler(nil); task.cancel(); return
         }
-        completionHandler(request)
+        redirects += 1; acceptedURL = url
+        // Build a clean GET instead of forwarding credentials/cookies or losing Range.
+        var redirected = URLRequest(url: url)
+        redirected.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        if let (offset, count, _) = range { redirected.setValue("bytes=\(offset)-\(offset + count - 1)", forHTTPHeaderField: "Range") }
+        completionHandler(redirected)
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
         do {
-            guard let http = response as? HTTPURLResponse, let url = http.url, entry.permits(url),
+            guard let http = response as? HTTPURLResponse, let url = http.url, url == acceptedURL,
                   http.value(forHTTPHeaderField: "Content-Encoding").map({ $0.lowercased() == "identity" }) ?? true else {
                 throw SpeechPackageError.invalidManifest
             }

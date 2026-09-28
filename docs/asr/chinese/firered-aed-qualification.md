@@ -1,6 +1,8 @@
 # FireRedASR2-AED qualification
 
-## Current result: implemented, stopped on live memory warning
+**Latest status:** managed acquisition/recovery subsequently passed, but the September 28 Talk continuation received another memory warning before decode. Read the [current tracker](simplified-talk-qualification-plan.md) and [memory research handoff](firered-memory-research-handoff.md). The historical outcomes and commands below are not current authorization.
+
+## September 20 result: implemented, stopped on live memory warning
 
 2026-09-20. **Not qualified for production or further blind retries.** The exact
 v2 AED file probe passed first; only then was the opt-in recognizer actor added

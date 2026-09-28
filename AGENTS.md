@@ -21,6 +21,14 @@
 - Save scoped evidence under `.build/verification/`, restore changed settings and stop all owned playback/capture/test processes. Separate automated assertions, human listening confirmation and unverified behavior. Physical cleanup never means shutting down the phone.
 - Keep measured timing, qualified optimizations and remaining gaps in [physical E2E lessons](docs/physical-iphone-e2e-lessons.md). Compare identical coverage including cleanup, report build time separately when excluded, and never shorten readiness/safety gates merely to improve a number.
 
+### Launch and failure-prevention checklist
+
+- Immediately before a physical runtime stage, refresh `DEVICE_STAGE=status` after build/handoff delays. A user-confirmed idle phone does not imply Mural has no process. Resolve an existing process with the saved exact-PID `stop-idle` stage only under that idle authorization. If the PID disappears, confirm the fresh inventory is empty; do not keep retrying the stale PID. A new PID requires fresh matching-bundle verification and current idle authorization, never blind substitution. During an explicit exclusive test handoff, keep status, exact-PID stop and runtime adjacent to avoid stale state. Never weaken ownership checks to make Make return success.
+- Read the run's `failure.json`, compact test summary and cleanup result before another command. Distinguish preflight refusal, build failure, app/runtime fault and interrupted host ownership. `make: Error` is not a diagnosis. Do not diagnose a UI symptom from a nearby source bug before inspecting the actual screen/log sequence.
+- After a canceled tool call or lost host, treat cleanup as unconfirmed until saved cleanup and owned-process checks prove otherwise. Do not start another run over orphaned XCTest/console/profiler work. Record ownership-aware recovery separately; it never turns the interrupted original into a pass.
+- For real download integrations, preserve literal observed redirect headers, including empty query values, encoding and quoted ETags. Regress those exact forms through the production HTTP path before a large phone transfer; hand-simplified URLs and a successful curl alone do not qualify the app's policy. Keep host/path/pin restrictions narrow and fail promptly on setup errors.
+- When changing native compilation flags, inspect every affected enum case, UI switch, app entry point, bridge, generator and test contract before building. Use current qualified device APIs for screenshots; capture only the authorized app/surface, never use a screenshot of an unknown foreground app as a process-status check. See the [evidence-backed failure review](docs/physical-iphone-e2e-lessons.md#september-28-session-review-preventable-command-and-integration-mistakes).
+
 ## Testing
 - NEVER write unit tests after you write code.
 - Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact. ie. A video for UI changes, a script with a definitive output for backend stuff
@@ -35,3 +43,7 @@
 - Test distinct behaviors, not gesture counts. Changing, reselecting, retaining across relaunch, and recovering from no results can require similar interactions but prove different outcomes. Do not remove meaningful cases merely because taps or queries repeat.
 - Keep target-driven scrolling and meaningful UI-state waits. Use the bounded test entrypoints and visible progress logs; diagnose the first failure or stall instead of blindly retrying, running overlapping suites, or shortening waits to manufacture a faster pass.
 - Measure build, startup, tests and cleanup together; distinguish reduced scope from faster identical coverage. Reuse a prior pass only when relevant production/test/fixture code, configuration, runtime, profile and exercised state are unchanged; rerun affected acceptance when they change.
+
+## Source delivery
+
+- Use ordinary Git review/commit/push for this repository. Do not start or route delivery through the no-mistakes workflow. Preserve branch history and existing work; no automatic rebase, reset, stash or force push. Only push when the user authorizes it, and distinguish a source/research checkpoint from production qualification.

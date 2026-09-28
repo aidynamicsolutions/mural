@@ -23,6 +23,7 @@ import sys
 import time
 import uuid
 import wave
+import xml.etree.ElementTree as ET
 
 from verify_simulator import Interrupted, interrupted, stop_group, write_json
 
@@ -34,7 +35,7 @@ APP_EXECUTABLE = "Build/Products/Release-iphoneos/Mural.app/Mural"
 EVIDENCE_ROOT = ROOT / ".build/verification/physical-iphone-e2e"
 FAULTS = re.compile(r"asr_memory_warning|ios_memory_warning|tts_safety_stop|thermal_state=[23]\b|"
                     r"asr_(?:preparation|turn|staged_decoder_wait|staged_decoder_speculative)_failed|"
-                    r"OpenAI request attempted|local_reply_failed|model_failed")
+                    r"OpenAI request attempted|local_reply_failed|model_failed|firered_resource_fault|firered_provision_fault|firered_vad_unavailable")
 
 
 def phase_durations(boundaries, ended):
@@ -65,10 +66,10 @@ def playback_request(log, run, index):
     return str(uuid.UUID(requests[0])).upper()
 
 
-def playback_ack_token(log, run, index, playback):
+def playback_ack_token(log, run, index, playback, timeout=5):
     token = playback_request(log, run, index)
     start, end = playback.get("started_monotonic"), playback.get("ended_monotonic")
-    if (start is None or end is None or not 0 <= end - start <= 5 or
+    if (not 0 < timeout <= 21 or start is None or end is None or not 0 <= end - start <= timeout or
             playback.get("exit_code") != 0 or playback.get("send_observed_at_completion") is not False):
         raise ValueError("Refuse acknowledgment before successful bounded playback without early Send")
     return token
@@ -126,14 +127,131 @@ def consumed_ack_copy(copy_log, test_log, run, index, token):
 def validate_request(udid, stage, ready, pair="vi-en"):
     if not re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{16}", udid):
         raise ValueError("DEVICE_UDID must be an explicit freshly discovered physical UDID")
-    if stage not in ("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"):
+    if stage not in ("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision"):
         raise ValueError("Unknown physical stage")
     if pair not in ("vi-en", "zh-CN-en"):
         raise ValueError("Unknown physical test pair")
-    if pair == "zh-CN-en" and stage not in ("prepare", "pair-check"):
-        raise ValueError("FireRed native continuation is blocked; only build preparation and model-free pair-check are available")
+    if pair == "zh-CN-en" and stage not in ("prepare", "pair-check", "resource-check", "resource", "provision"):
+        raise ValueError("FireRed requires an explicit model-free, provisioning or resource stage")
+    if stage in ("resource-check", "resource", "provision") and pair != "zh-CN-en":
+        raise ValueError("Provisioning/resource stages require the explicit Simplified Chinese candidate")
     if stage not in ("prepare", "status") and not ready:
-        raise ValueError("Confirm the private audible window, idle phone and closed mirroring, then set DEVICE_READY=YES")
+        window = "protected download-only window on Wi-Fi" if stage == "provision" else "private audible/model-free window"
+        raise ValueError(f"Confirm the {window}, idle unlocked phone and closed mirroring, then set DEVICE_READY=YES")
+
+
+def provisioning_process(log):
+    pids = set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*firered_provision_only_enabled', log))
+    if len(pids) != 1:
+        raise ValueError('Missing unique provisioning app PID')
+    pid = pids.pop()
+    current = '\n'.join(line for line in log.splitlines() if re.search(rf'Mural\[{pid}(?::\d+)?\]', line))
+    if FAULTS.search(current) or re.search(r'firered_native_begin|asr_trial_capture|model_request|asr_ready|local_talk_model_selected|tts_synthesis', current):
+        raise ValueError('Native work occurred during acquisition-only qualification')
+    return pid, current
+
+
+def provisioning_events(log, *, resumed_offset, resumed_log):
+    """Exact written network coverage and an independently inventoried resumed offset."""
+    pid, current = provisioning_process(log)
+    expected = {'decoder.int8.onnx': 417291928, 'encoder.int8.onnx': 817286833, 'tokens.txt': 79172}
+    pattern = r'speech_package_range file=(\S+) offset=(\d+) bytes=(\d+) total=(\d+)'
+    covered = {name: 0 for name in expected}
+    for name, offset, count, total in re.findall(pattern, current):
+        offset, count, total = int(offset), int(count), int(total)
+        if (name not in expected or total != expected[name] or offset != covered[name]
+                or not 0 < count <= min(4194304, total - offset)):
+            raise ValueError('Network coverage is duplicated, missing or outside the pinned file')
+        covered[name] += count
+    marker = 'firered_provision_verified bytes=1234657933 manifest=a302683c199acb2b37e664fd8ba52d7a5d47503d49dfdff06ba861a264329e3d'
+    if covered != expected or current.count(marker) != 1:
+        raise ValueError('Missing full phone-network coverage or verified activation')
+    resumed = re.findall(pattern, resumed_log)
+    if not 0 < resumed_offset < expected['decoder.int8.onnx'] or not resumed or resumed[0][:2] != ('decoder.int8.onnx', str(resumed_offset)):
+        raise ValueError('Download did not resume at the independently observed drained partial length')
+    return {'provisioning': 'PASS', 'network_bytes_written': sum(covered.values()), 'resumed_offset': resumed_offset,
+            'native_models': 'NOT REQUESTED', 'scope': 'first-download provisioning in an existing installation', 'pid': pid}
+
+
+def provisioning_recovery_events(log, job):
+    pid, current = provisioning_process(log)
+    expected = [('tokens.txt', '0', '79172', '79172')]
+    if re.findall(r'speech_package_range file=(\S+) offset=(\d+) bytes=(\d+) total=(\d+)', current) != expected:
+        raise ValueError('Recovery must transfer only the missing pinned tokens, not redownload the retained graphs')
+    marker = 'firered_provision_verified bytes=1234657933 manifest=a302683c199acb2b37e664fd8ba52d7a5d47503d49dfdff06ba861a264329e3d'
+    if current.count(marker) != 1 or f'speech_setup event=job_started job={job} ' not in current:
+        raise ValueError('Recovery did not resume the known setup and verify/activate its exact package')
+    return {'provisioning_recovery': 'PASS', 'network_bytes_written': 79172,
+            'verified_package_bytes': 1234657933, 'native_models': 'NOT REQUESTED', 'pid': pid,
+            'scope': 'recovery of retained first-download files, not a new empty-location run'}
+
+
+def retained_provisioning_job(source, udid, evidence):
+    """Explicit recovery of this failed test's setup, never arbitrary personal work."""
+    prior = json.loads((source / 'session.json').read_text())
+    if (prior.get('stage') != 'provision' or prior.get('udid') != udid or prior.get('pair') != 'zh-CN-en'
+            or not (source / 'failure.json').is_file()
+            or json.loads((source / 'recovery-cleanup.json').read_text()).get('cleanup') != 'PASS'
+            or json.loads((source / 'managed-preflight.json').read_text()).get('empty') is not True):
+        raise ValueError('Recovery requires the failed, cleaned-up, originally empty provisioning run')
+    _, old = provisioning_process((source / 'mural-device.log').read_text())
+    totals = {'decoder.int8.onnx': 417291928, 'encoder.int8.onnx': 817286833}
+    covered = {name: 0 for name in totals}
+    for name, start, size, total in re.findall(r'speech_package_range file=(\S+) offset=(\d+) bytes=(\d+) total=(\d+)', old):
+        start, size, total = int(start), int(size), int(total)
+        if name not in totals or total != totals[name] or start != covered[name] or not 0 < size <= min(4194304, total-start):
+            raise ValueError('Prior graph transfer evidence changed or is incomplete')
+        covered[name] += size
+    if covered != totals or 'firered_provision_verified ' in old:
+        raise ValueError('Recovery is only for completed graphs with missing tokens and no activation')
+    jobs = re.findall(r'speech_setup event=job_interrupted job=([A-F0-9-]{36}) ', old)
+    if not jobs: raise ValueError('Missing interrupted test-owned setup identity')
+    job = jobs[-1]
+    domain = ['--device', udid, '--domain-type', 'appDataContainer', '--domain-identifier', APP_ID]
+    device_json(['device', 'copy', 'from', *domain, '--source', 'Library/Application Support/Mural/SpeechSetup/job.json',
+                 '--destination', str(evidence / 'retained-setup.json')], evidence / 'retained-setup-copy.json')
+    retained = json.loads((evidence / 'retained-setup.json').read_text())
+    if retained.get('id') != job or retained.get('identity', {}).get('pair') != 'zh-CN-en' or retained.get('downloadsApproved') is not True:
+        raise ValueError('Current setup is not the previously approved test-owned job')
+    root = 'Library/Application Support/Mural/SpeechModels'
+    active = device_json(['device', 'info', 'files', *domain, '--subdirectory', root, '--no-recurse', '--search', 'active-zh-CN-en.json'], evidence / 'retained-active.json')['files']
+    if active: raise ValueError('Package already activated; stop instead of pretending to resume a partial')
+    path = root + '/.downloads/firered-asr2-int8-374cff18-v1-a302683c199acb2b37e664fd8ba52d7a5d47503d49dfdff06ba861a264329e3d/support'
+    files = device_json(['device', 'info', 'files', *domain, '--subdirectory', path, '--no-recurse'], evidence / 'retained-files.json')['files']
+    expected = {**totals, 'tokens.txt': 0}
+    if len(files) != 3 or {f.get('name'): f['metadata']['size'] for f in files} != expected or any(f['resources'].get('isSymbolicLink') or f['resources'].get('isDirectory') for f in files):
+        raise ValueError('Retained inventory differs from completed graphs and empty tokens; preserve and review')
+    write_json(evidence / 'retained-source.json', {'source': str(source), 'job': job,
+        'old_log_sha256': hashlib.sha256((source / 'mural-device.log').read_bytes()).hexdigest(),
+        'action': 'retain graphs, fetch tokens, full rehash, atomic activation; no native load'})
+    return job
+
+
+def managed_fire_red_inventory(udid, evidence):
+    """Read only names/metadata in the exact managed tree; never inspect model contents."""
+    def rows(path, name, label):
+        args = ['device', 'info', 'files', '--device', udid, '--domain-type', 'appDataContainer',
+                '--domain-identifier', APP_ID, '--subdirectory', path, '--no-recurse']
+        if name: args += ['--search', name]
+        return device_json(args, evidence / f'managed-{label}.json')['files']
+    path = ''
+    for index, name in enumerate(('Library', 'Application Support', 'Mural', 'SpeechModels')):
+        found = [row for row in rows(path, name, str(index)) if row.get('name') == name]
+        if not found: return {'empty': True, 'missing_component': name}
+        if len(found) != 1 or found[0]['resources'].get('isSymbolicLink') or not found[0]['resources'].get('isDirectory'):
+            raise ValueError('Unsafe managed package ancestor')
+        path = f'{path}/{name}'.lstrip('/')
+    root_rows = rows(path, None, 'root')
+    if any(row.get('name') == 'active-zh-CN-en.json' for row in root_rows):
+        raise ValueError('Managed FireRed active pointer already exists; agree a preservation-safe arrangement')
+    for group in ('.downloads', 'packages'):
+        directory = next((row for row in root_rows if row.get('name') == group), None)
+        if directory:
+            if directory['resources'].get('isSymbolicLink') or not directory['resources'].get('isDirectory'):
+                raise ValueError('Unsafe managed package directory')
+            if rows(f'{path}/{group}', 'firered', group.strip('.')):
+                raise ValueError('Managed FireRed files already exist; never delete/reuse them for first-download acceptance')
+    return {'empty': True, 'root': path}
 
 
 def check_summary(summary):
@@ -160,6 +278,99 @@ def baseline_events(log):
             raise ValueError(f"Missing/incorrectly ordered current-process event: {event}")
         offset = found + len(event)
     return pid
+
+
+def resource_events(log):
+    if FAULTS.search(log):
+        raise ValueError("Resource/model/lifecycle fault; no retry")
+    pids = set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*local_talk_asr_backend backend=' + re.escape(BACKEND), log))
+    if len(pids) != 1:
+        raise ValueError("Require one fresh candidate process")
+    pid = pids.pop()
+    current = '\n'.join(line for line in log.splitlines() if re.search(rf'Mural\[{pid}(?::\d+)?\]', line))
+    if 'local_talk_model_selected pair=zh-CN-en' not in current:
+        raise ValueError("Missing actual Simplified pair selection")
+    for phase in ('prepare', 'decode'):
+        starts = re.findall(rf'firered_native_begin phase={phase} uptime=([0-9.]+)', current)
+        returns = re.findall(rf'firered_native_return phase={phase} uptime=([0-9.]+) seconds=([0-9.]+) cancelled=false', current)
+        if (len(starts) != 1 or len(returns) != 1 or not 0 < float(returns[0][1]) <= 60
+                or not 0 < float(returns[0][0]) - float(starts[0]) <= 60):
+            raise ValueError("Require exactly one bounded successful native operation per phase")
+    phases = {}
+    for phase, stamp, footprint in re.findall(r'firered_resource phase=([a-z0-9-]+) uptime=([0-9.]+) footprint_bytes=(\d+)', current):
+        if phase == 'sample':
+            continue
+        if phase in phases or int(footprint) <= 0:
+            raise ValueError("Duplicate phase or missing Mach footprint")
+        phases[phase] = float(stamp)
+    names = ['baseline', 'ready', 'turn-complete', 'end-requested', 'owner-drained',
+             'post-drain-2', 'post-drain-10', 'post-drain-30']
+    if any(name not in phases for name in names) or any(phases[b] < phases[a] for a, b in zip(names, names[1:])):
+        raise ValueError("Missing/nonmonotonic resource boundary")
+    idle = phases['end-requested'] - phases['turn-complete']
+    if idle < 360 or any(phases[f'post-drain-{n}'] - phases['owner-drained'] < n for n in (2, 10, 30)):
+        raise ValueError("Incomplete loaded-idle or post-drain interval")
+    release = current.find('asr_memory model=firered-v2-aed-int8 stage=released')
+    drain = current.find('firered_resource phase=owner-drained')
+    final = current.find('firered_resource phase=turn-complete')
+    if (not 0 <= release < drain or current[:final].count('tts_finished') < 2
+            or current[:final].count('model_complete') < 1 or 'local_reply_complete' not in current[:final]):
+        raise ValueError("Missing combined tutor/speech completion or actual recognizer release")
+    return dict(pid=pid, idle_seconds=idle, phases=phases)
+
+
+def capture_readiness(toc, exported, pid):
+    info = ET.fromstring(toc).find('./run/info')
+    if info is None or info.find('./target/process').get('pid') != pid:
+        raise ValueError("Profiler target is not the fresh owned app PID")
+    start = info.findtext('./summary/start-date')
+    end = info.findtext('./summary/end-date')
+    if not start or not end or datetime.fromisoformat(end) <= datetime.fromisoformat(start):
+        raise ValueError("Missing timed baseline capture interval")
+    data = ET.fromstring(exported)
+    stacks = [f for f in data.iter('frame') if f.get('name') and not f.get('name').startswith('<')]
+    vm = [r for r in data.iter('row') if 'address-range' in r.attrib and 'dirty-size' in r.attrib]
+    if not stacks or not vm:
+        raise ValueError("Baseline capture has no useful allocation stacks/VM rows; refuse Prepare")
+    return dict(pid=pid, start=start, end=end, symbolized_frames=len(stacks), vm_rows=len(vm),
+                vm_time_scope='Snapshot(s) within this baseline interval; no exact per-row timestamp exported')
+
+
+def resource_capture_probe(udid, pid, evidence, deadline, monitor):
+    """Prove the capture path on this process before admitting any model work."""
+    options = {"Allocations": {"discardEventsForFreedMemory": False,
+        "discardUnrecordedDataUponStop": True, "identifyVirtualCppObjects": True,
+        "enableNSZombieDetection": False, "onlyTrackVMAllocations": False, "recordReferenceCounts": False,
+        "recordedTypes": [{"action": "record", "enabled": True, "match": "contains", "type": "*"},
+                          *[{"action": "ignore", "enabled": False, "match": "hasPrefix", "type": name}
+                            for name in ("NS", "CF", "Malloc")]]},
+        "Points of Interest": {"excludeOSLogs": True},
+        "VM Tracker": {"automaticSnapshotEnabled": True, "snapshotIntervalInSeconds": 3}}
+    write_json(evidence / 'allocation-options.json', options)
+    command = ['xcrun', 'xctrace', 'record', '--template', 'Allocations', '--instrument', 'VM Tracker',
+               '--device', udid, '--attach', pid, '--recording-options', str(evidence / 'allocation-options.json')]
+    def budget(maximum):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError('Capture-readiness phase exhausted; no model work permitted')
+        return min(maximum, remaining)
+    trace = evidence / 'baseline.trace'
+    run_bounded(command + ['--time-limit', '15s', '--output', str(trace)],
+                evidence / 'baseline-capture.log', budget(30), monitor=monitor)
+    toc = evidence / 'baseline-toc.xml'
+    run_bounded(['xcrun', 'xctrace', 'export', str(trace), '--toc'], toc, budget(10), monitor=monitor)
+    exported = evidence / 'baseline-memory.xml'
+    def bounded_export():
+        monitor()
+        if exported.exists() and exported.stat().st_size > 32 * 1024**2:
+            raise ValueError('Baseline export exceeds bounded inspection size')
+    # The default end selection can export zero VM rows despite recorded snapshots.
+    # Select inside the 15-second baseline, retaining the original trace and interval.
+    run_bounded(['xcrun', 'xctrace', 'export', str(trace), '--time-end', '14s', '--xpath',
+        '/trace-toc/run[@number="1"]/tracks/track/details/detail[@name="Allocations List" or @name="Regions Map"]'],
+        exported, budget(25), monitor=bounded_export)
+    write_json(evidence / 'capture-readiness.json', capture_readiness(toc.read_text(), exported.read_text(), pid))
+    return command
 
 
 def acoustic_events(log, pid, expected_count=1):
@@ -238,7 +449,7 @@ def input_identity(derived, firered=False):
     paths += ["scripts/generate_project.py", "Config/Local.xcconfig"]
     if firered:
         paths += [str(p.relative_to(ROOT)) for p in (ROOT / "Tools/ChineseASR/FireRedProbe").glob("Probe.*")]
-        paths += ["Tools/ChineseASR/FireRedProbe/pin.json"]
+        paths += ["Tools/ChineseASR/FireRedProbe/pin.json", "App/Native/FireRedRuntime.h", "App/Native/FireRedRuntime.mm", "scripts/build_firered_runtime.sh"]
     source = hashlib.sha256()
     for name in sorted(set(filter(None, paths))):
         path = ROOT / name
@@ -252,12 +463,12 @@ def input_identity(derived, firered=False):
     identity = {"source_sha256": source.hexdigest(), "artifacts": {
         str(path.relative_to(derived)): hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}}
     if firered:
-        runtime = ROOT / ".build/firered"
+        runtime = ROOT / ".build/firered-runtime"
         native = sorted((runtime / "ios-build/lib").glob("*.a"))
         framework = runtime / "ort-ios/onnxruntime.xcframework/ios-arm64/onnxruntime.framework"
         native += [framework / "onnxruntime", framework / "Info.plist"]
         native += sorted((framework / "Headers").glob("*.h"))
-        native += [runtime / "sherpa-onnx/sherpa-onnx/c-api/c-api.h"]
+        native += [runtime / "sherpa-onnx/sherpa-onnx/c-api/c-api.h", runtime / "FireRedNotices.txt"]
         if len(list((runtime / "ios-build/lib").glob("*.a"))) != 9:
             raise ValueError("Expected the nine reviewed FireRed static libraries")
         identity["native_inputs"] = {}
@@ -268,6 +479,10 @@ def input_identity(derived, firered=False):
         if pin.read_bytes() != (ROOT / "Tools/ChineseASR/FireRedProbe/pin.json").read_bytes():
             raise ValueError("Bundled FireRed pin differs from reviewed source")
         identity["artifacts"][str(pin.relative_to(derived))] = hashlib.sha256(pin.read_bytes()).hexdigest()
+        notices = products / "Mural.app/FireRedNotices.txt"
+        if notices.read_bytes() != (runtime / "FireRedNotices.txt").read_bytes():
+            raise ValueError("Bundled native notices differ from reviewed runtime build")
+        identity["artifacts"][str(notices.relative_to(derived))] = hashlib.sha256(notices.read_bytes()).hexdigest()
     return identity
 
 
@@ -332,7 +547,7 @@ def compiler_proof(build_log, identity, receipts, firered=False):
         with path.open() as file:
             for line in file:
                 if ("swiftc -module-name Mural " in line and "-D MURAL_COREAI_TALK" in line
-                        and (not firered or re.search(r"-D ?MURAL_FIRERED_FILE_PROBE\b", line))):
+                        and (not firered or re.search(r"-D ?MURAL_FIRERED_RUNTIME\b", line))):
                     compiler = line.strip()
                 if ("clang++ " in line and " -lsherpa-onnx-c-api " in line
                         and " -framework onnxruntime " in line and line.rstrip().endswith("/Mural.app/Mural")):
@@ -383,7 +598,7 @@ def device_json(arguments, path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"), default=os.environ.get("DEVICE_STAGE", "prepare"))
+    parser.add_argument("--stage", choices=("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision"), default=os.environ.get("DEVICE_STAGE", "prepare"))
     parser.add_argument("--check-fixture", type=Path, help="Validate a frozen review manifest only; no phone or playback")
     parser.add_argument("--clip", help="Explicit clip ID for --check-fixture")
     parser.add_argument("--report", type=Path, nargs="?", const=Path("latest"), help="Summarize saved evidence (latest by default); no device operations")
@@ -415,7 +630,14 @@ def main():
     evidence.mkdir(parents=True, exist_ok=False)
     print(f"Physical {args.stage}: {evidence}", flush=True)
     # Native preparation cannot overwrite the qualified ordinary app/runner.
-    firered = pair == "zh-CN-en" and args.stage == "prepare"
+    resource_stage = args.stage in ("resource", "resource-check")
+    resource_run = args.stage == "resource"
+    provision_run = args.stage == "provision"
+    recovery_source = os.environ.get('DEVICE_PROVISION_SOURCE')
+    if recovery_source and not provision_run:
+        raise ValueError('DEVICE_PROVISION_SOURCE is only valid for explicit provisioning recovery')
+    recovery_job = None
+    firered = pair == "zh-CN-en" and (args.stage == "prepare" or resource_stage or provision_run)
     derived = (ROOT / (".build/firered-talk-device-derived-data" if firered else
                        ".build/local-mvp-phase-1-device-derived-data")).resolve()
     derived.mkdir(parents=True, exist_ok=True)
@@ -429,6 +651,8 @@ def main():
                    runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     write_json(evidence / "session.json", session)
     capture = None
+    profiler = None
+    profiler_file = None
     playback = None
     playback_state = {}
     playbacks = []
@@ -467,9 +691,12 @@ def main():
                 ["git", "status", "--short", "--branch"], text=True) + subprocess.check_output(["git", "rev-parse", "HEAD"], text=True))
             (evidence / "implementation.diff").write_bytes(subprocess.check_output(["git", "diff"]))
             project = ROOT / "Mural.xcodeproj"
-            if firered:
-                # Isolated generation avoids exposing probe flags to concurrent ordinary builds.
-                run_bounded([sys.executable, "scripts/generate_project.py", "--firered-file-probe",
+            if firered and args.stage == "prepare":
+                runtime = ROOT / '.build/firered-runtime'
+                if runtime.is_symlink() or not runtime.is_dir() or not (runtime / 'runtime-sha256.txt').is_file():
+                    raise ValueError('Build the checkout-owned pinned runtime with scripts/build_firered_runtime.sh first')
+                # Isolated generation avoids exposing candidate flags to concurrent ordinary builds.
+                run_bounded([sys.executable, "scripts/generate_project.py", "--firered-runtime",
                              "--output-directory", str(evidence / "native-project")],
                             evidence / "generation.log", 30)
                 project = evidence / "native-project/Mural.xcodeproj"
@@ -536,10 +763,32 @@ def main():
                         "acceptance": "NOT RUN; read-only device status"})
             else:
                 fixture = ROOT / ".build/verification/physical-iphone-e2e/fixtures-v1/turn-1.aiff"
-                if args.stage in ("acoustic", "multi", "cancel"):
+                fixture_spec = None
+                playback_timeout = 5
+                if resource_stage:
+                    manifest = ROOT / '.build/verification/simplified-talk-meli-20260928/frozen-manifest-v1.json'
+                    # One predeclared mixed clip, not an output-dependent selection.
+                    if hashlib.sha256(manifest.read_bytes()).hexdigest() != '11704fc265b19de99b899e668d1b3b3de3d87d1b873c31d3e0406c9811f25cbc':
+                        raise ValueError('Frozen reviewed manifest changed; review before qualification')
+                    fixture_spec = reviewed_fixture(manifest, 'M00A-switch')
+                    fixture = Path(fixture_spec['file'])
+                    playback_timeout = fixture_spec['playback_timeout_seconds']
+                    write_json(evidence / 'reviewed-fixture.json', fixture_spec)
+                    if resource_run:
+                        check = Path(os.environ.get('DEVICE_RESOURCE_CHECK', ''))
+                        if not check.is_dir() or not (check / 'result.json').is_file():
+                            raise ValueError('Require a saved matching model-free resource-check first')
+                        prior = json.loads((check / 'session.json').read_text())
+                        if (prior.get('stage') != 'resource-check' or prior.get('udid') != udid
+                                or prior.get('runner_sha256') != session['runner_sha256']
+                                or json.loads((check / 'cleanup.json').read_text()).get('cleanup') != 'PASS'
+                                or json.loads((check / 'result.json').read_text()).get('models') != 'NOT REQUESTED'
+                                or json.loads((check / 'reviewed-fixture.json').read_text()) != fixture_spec):
+                            raise ValueError('Resource-check identity/cleanup/fixture mismatch')
+                if args.stage in ("acoustic", "multi", "cancel") or resource_run:
                     if not os.environ.get("DEVICE_PLACEMENT"):
                         raise ValueError("Record confirmed phone placement with DEVICE_PLACEMENT")
-                    if hashlib.sha256(fixture.read_bytes()).hexdigest() != "1670c9c29ac928b5849ce4fde4dbc31fef3d01497afba7097a506f9984522111":
+                    if not resource_run and hashlib.sha256(fixture.read_bytes()).hexdigest() != "1670c9c29ac928b5849ce4fde4dbc31fef3d01497afba7097a506f9984522111":
                         raise ValueError("Frozen acoustic fixture missing/changed")
                     volume = subprocess.check_output(["osascript", "-e", "get volume settings"], text=True, timeout=10)
                     if "output muted:false" not in volume or "output volume:0," in volume:
@@ -550,10 +799,10 @@ def main():
                                if item.get("coreaudio_default_audio_output_device") == "spaudio_yes"]
                     if len(outputs) != 1 or outputs[0].get("coreaudio_device_transport") != "coreaudio_device_type_builtin":
                         raise ValueError("Require built-in Mac speakers")
-                    write_json(evidence / "acoustic-spec.json", {"text": "I bought three apples on Tuesday.", "voice": "Samantha", "rate": 150,
-                        "fixture": str(fixture), "sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "duration": 1.968345,
-                        "normalization": "case/punctuation/whitespace; user-approved token 3=three; other words exact", "placement": os.environ["DEVICE_PLACEMENT"],
-                        "volume": volume.strip(), "route": outputs, "playback_ack_timeout_seconds": 12,
+                    write_json(evidence / "acoustic-spec.json", {"text": fixture_spec['reference'] if resource_run else "I bought three apples on Tuesday.", "source": "MELI" if resource_run else "Samantha synthetic speech",
+                        "fixture": str(fixture), "sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(), "duration": fixture_spec['duration_seconds'] if resource_run else 1.968345,
+                        "normalization": fixture_spec['scoring'] if resource_run else "case/punctuation/whitespace; user-approved token 3=three; other words exact", "placement": os.environ["DEVICE_PLACEMENT"],
+                        "volume": volume.strip(), "route": outputs, "playback_ack_timeout_seconds": fixture_spec['ack_timeout_seconds'] if resource_run else 12,
                         "trailing_margin_seconds": 0.75, "room_capture": False})
                 fixtures = [fixture]
                 if args.stage in ("multi", "cancel"):
@@ -566,26 +815,39 @@ def main():
                         "normalization": "case/punctuation/whitespace; 3=three only", "relaunch": "exact text/count/order in newest synthetic history record"})
                 explicit = os.environ.get("DEVICE_PREPARED")
                 receipts = [Path(explicit)] if explicit else sorted(EVIDENCE_ROOT.glob("*/prepared.json"), reverse=True)
-                prepared_path = select_prepared(udid, input_identity(derived), receipts)
+                prepared_path = select_prepared(udid, input_identity(derived, firered=firered), receipts)
+                if resource_run:
+                    previous = json.loads((check / 'prepared-source.json').read_text())['receipt']
+                    if json.loads(Path(previous).read_text())['identity'] != json.loads(prepared_path.read_text())['identity']:
+                        raise ValueError('Resource-check used a different prepared executable/runner')
                 write_json(evidence / "prepared-source.json", {"receipt": str(prepared_path)})
                 print(f"Using verified prepared build: {prepared_path.parent.name}", flush=True)
                 # Read-only refusal: never quit someone else's mirror or capture.
                 processes = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True, timeout=10)
-                if any(term in processes for term in ("/DeviceHub.app/", "/iPhone Mirroring.app/", "idevicesyslog -")):
+                if any(term in processes for term in ("/DeviceHub.app/", "/iPhone Mirroring.app/", "idevicesyslog -", "xctrace record")):
                     raise ValueError("Mirroring or device capture already active; resolve ownership before running")
                 before = subprocess.check_output(["xcrun", "devicectl", "device", "info", "processes", "--device", udid,
                                                   "--search", "Mural", "--timeout", "20"], text=True, timeout=25)
                 (evidence / "phone-before.txt").write_text(before)
                 if "Mural.app/Mural" in before:
                     raise ValueError("Existing Mural process: do not replace personal work; close the idle app first")
+                if provision_run:
+                    if recovery_source:
+                        recovery_job = retained_provisioning_job(Path(recovery_source).resolve(), udid, evidence)
+                    else:
+                        write_json(evidence / 'managed-preflight.json', managed_fire_red_inventory(udid, evidence))
                 phases.append(("install", time.monotonic()))
                 run_bounded(["xcrun", "devicectl", "device", "install", "app", "--device", udid,
                              str(derived / "Build/Products/Release-iphoneos/Mural.app"), "--timeout", "60"], evidence / "install.log", 70)
+                if resource_stage and time.monotonic() - started > 60:
+                    raise ValueError('Preflight/install exceeded the approved 60-second phase')
                 phases.append(("launch_and_backend_gate", time.monotonic()))
                 log = evidence / "mural-device.log"
                 capture_file = log.open("w")
                 capture = subprocess.Popen(["xcrun", "devicectl", "device", "process", "launch", "--device", udid,
-                                           "--console", "--environment-variables", '{"OS_ACTIVITY_DT_MODE":"YES"}', APP_ID],
+                                           "--console", "--environment-variables", '{"OS_ACTIVITY_DT_MODE":"YES"}', APP_ID,
+                                           *(["--firered-talk-resource"] if resource_stage else []),
+                                           *(["--firered-provision-only"] if provision_run else [])],
                                            stdout=capture_file, stderr=subprocess.STDOUT, start_new_session=True)
                 write_json(evidence / "capture-process.json", {"pid": capture.pid, "pgid": capture.pid,
                     "started_at": datetime.now(timezone.utc).isoformat(), "udid": udid,
@@ -598,10 +860,55 @@ def main():
                 capture_received = None
                 observed_phases = set()
                 probe_sent = False
+                control_sent = set()
+                probe_wait_started = None
+                abort_reason = None
+                abort_started = None
+                native_begins = {}
+                provision_resume_offset = None
+                provision_resume_log_offset = None
 
                 def check_faults():
                     if FAULTS.search(log.read_text()):
                         raise ValueError("Resource/model/provider fault; stop without retry")
+
+                if resource_stage:
+                    pids = set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*local_talk_asr_backend', log.read_text()))
+                    if len(pids) != 1:
+                        raise ValueError('Require exactly one fresh app PID for profiler attachment')
+                    pid = pids.pop()
+                    phases.append(('capture_readiness', time.monotonic()))
+                    capture_deadline = time.monotonic() + 60
+                    # The backend log is emitted during init, before launch finishes.
+                    # Resolve that exact PID in a fresh device inventory before Instruments
+                    # attaches; never attach by name or broaden to all phone processes.
+                    running = device_json(['device', 'info', 'processes', '--device', udid, '--search', 'Mural'],
+                                          evidence / 'profile-target.json')['runningProcesses']
+                    if not any(row.get('processIdentifier') == int(pid) and
+                               row.get('executable', '').endswith('/Mural.app/Mural') for row in running):
+                        raise ValueError('Fresh console PID is not yet an inspectable Mural process; refuse capture')
+                    profile_command = resource_capture_probe(udid, pid, evidence, capture_deadline, check_faults)
+                    profiler_file = (evidence / 'resource-capture.log').open('w')
+                    profile_command += ['--time-limit', '900s', '--output', str(evidence / 'resource.trace')]
+                    profiler = subprocess.Popen(profile_command, stdout=profiler_file, stderr=subprocess.STDOUT, start_new_session=True)
+                    write_json(evidence / 'profiler-process.json', {'pid': profiler.pid, 'pgid': profiler.pid,
+                        'command': profile_command, 'started_at': datetime.now(timezone.utc).isoformat(),
+                        'identity': subprocess.check_output(['ps', '-p', str(profiler.pid), '-o', 'lstart=,command='], text=True).strip()})
+                    while True:
+                        check_faults()
+                        profile_log = (evidence / 'resource-capture.log').read_text()
+                        if f'Attaching to: Mural ({pid})' in profile_log and 'Ctrl-C to stop the recording' in profile_log:
+                            break
+                        if profiler.poll() is not None or time.monotonic() >= capture_deadline:
+                            raise ValueError('Main trace did not attach within capture readiness budget')
+                        time.sleep(.25)
+                    # Profiler setup can outlast Auto-Lock. Recheck the protected
+                    # human gate before XCTest startup instead of waiting through
+                    # an automation-mode timeout on a phone that already relocked.
+                    capture_lock = device_json(['device', 'info', 'lockState', '--device', udid],
+                                               evidence / 'capture-lock-state.json')
+                    if capture_lock.get('passcodeRequired') is not False or time.monotonic() >= capture_deadline:
+                        raise ValueError('Phone relocked or capture readiness budget expired before XCTest; no models started')
 
                 def acknowledge(index, token):
                     # Only the XCTest runner's temporary container, never Mural data.
@@ -621,22 +928,85 @@ def main():
                             "run": playback_run, "index": index, "token": token,
                             "delivery": "native exact-token receipt precedes devicectl post-copy stat"})
 
+                def request_resource_abort(reason):
+                    nonlocal abort_reason, abort_started
+                    if abort_reason is not None:
+                        return
+                    abort_reason = reason; abort_started = time.monotonic()
+                    if playback is not None:
+                        stop_group(playback)
+                    abort = evidence / 'resource-abort.txt'; abort.write_text(reason)
+                    write_json(evidence / 'resource-fault.json', {'reason': reason, 'action': 'native teardown, no retry'})
+                    run_bounded(['xcrun', 'devicectl', 'device', 'copy', 'to', '--device', udid,
+                        '--source', str(abort), '--destination', f'tmp/mural-resource-abort-{playback_run}.txt',
+                        '--domain-type', 'appDataContainer', '--domain-identifier', TEST_ID + '.xctrunner',
+                        '--timeout', '5'], evidence / 'abort-copy.log', 6)
+
                 def monitor():
-                    nonlocal playback, playback_state, capture_received, probe_sent
+                    nonlocal playback, playback_state, capture_received, probe_sent, probe_wait_started
+                    nonlocal provision_resume_offset, provision_resume_log_offset
                     content = log.read_text()
                     test_log = evidence / "test.log"
                     test_content = test_log.read_text() if test_log.exists() else ""
-                    if FAULTS.search(content):
+                    if resource_stage or provision_run:
+                        fault = FAULTS.search(content)
+                        reason = fault.group(0) if fault else None
+                        if resource_stage and profiler.poll() is not None and 'MURAL_DEVICE_CLEANUP_PASS' not in test_content:
+                            reason = reason or 'Profiler stopped before native cleanup'
+                        for phase in ('prepare', 'decode'):
+                            if f'firered_native_begin phase={phase}' in content and f'firered_native_return phase={phase}' not in content:
+                                native_begins.setdefault(phase, time.monotonic())
+                                if time.monotonic() - native_begins[phase] > 60:
+                                    reason = reason or f'Native {phase} exceeded 60 seconds'
+                        if provision_run and re.search(r'firered_native_begin|asr_trial_capture|model_request|asr_ready|local_talk_model_selected', content):
+                            reason = reason or 'Native work is forbidden during provisioning'
+                        if reason:
+                            request_resource_abort(reason)
+                        if abort_reason:
+                            if time.monotonic() - abort_started > 90:
+                                raise ValueError('Native abort cleanup exceeded 90 seconds; inspect preserved failure')
+                            return
+                    elif FAULTS.search(content):
                         raise ValueError("Resource/model/provider fault; stop without retry")
                     for event in ("asr_ready", "model_complete", "local_ended"):
                         if event in content and event not in observed_phases:
                             observed_phases.add(event)
                             print(f"Device phase: {event}", flush=True)
-                    if args.stage in ("restore-settings", "pair-check") and not probe_sent and f"MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 0 " in test_content:
-                        acknowledge(0, playback_request(test_content, playback_run, 0))
-                        probe_sent = True
-                        write_json(evidence / "sync-probe.json", {"run": playback_run, "ack_sent": True, "playback": "NOT REQUESTED"})
-                    if args.stage in ("acoustic", "multi", "cancel"):
+                    if args.stage in ("restore-settings", "pair-check", "resource-check") and not probe_sent and f"MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 0 " in test_content:
+                        probe_wait_started = probe_wait_started or time.monotonic()
+                        # Model-free qualification must cross the old 12-second wait.
+                        if not resource_stage or time.monotonic() - probe_wait_started >= 13:
+                            acknowledge(0, playback_request(test_content, playback_run, 0))
+                            probe_sent = True
+                            write_json(evidence / "sync-probe.json", {"run": playback_run, "ack_sent": True, "playback": "NOT REQUESTED"})
+                    if provision_run:
+                        if 1 not in control_sent and 'speech_package_range file=decoder.int8.onnx offset=0 ' in content and f'MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 1 ' in test_content:
+                            acknowledge(1, playback_request(test_content, playback_run, 1)); control_sent.add(1)
+                        if 2 not in control_sent and 'MURAL_DEVICE_PROVISION_CANCELLED' in test_content and f'MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 2 ' in test_content:
+                            partial = device_json(['device', 'info', 'files', '--device', udid, '--domain-type', 'appDataContainer',
+                                '--domain-identifier', APP_ID, '--subdirectory',
+                                'Library/Application Support/Mural/SpeechModels/.downloads/firered-asr2-int8-374cff18-v1-a302683c199acb2b37e664fd8ba52d7a5d47503d49dfdff06ba861a264329e3d/support',
+                                '--no-recurse', '--search', 'decoder.int8.onnx'], evidence / 'cancelled-partial.json')['files']
+                            if len(partial) != 1 or partial[0].get('name') != 'decoder.int8.onnx' or partial[0]['resources'].get('isSymbolicLink'):
+                                raise ValueError('Missing safe drained partial file')
+                            provision_resume_offset = partial[0]['metadata']['size']
+                            if not 0 < provision_resume_offset < 417291928:
+                                raise ValueError('Cancellation missed the nonempty partial boundary; preserve files and stop')
+                            provision_resume_log_offset = len(log.read_text())
+                            acknowledge(2, playback_request(test_content, playback_run, 2)); control_sent.add(2)
+                        if 3 not in control_sent and 'firered_provision_verified ' in content and f'MURAL_DEVICE_PLAYBACK_WAIT {playback_run} 3 ' in test_content:
+                            if recovery_job:
+                                provisioning_recovery_events(content, recovery_job)
+                            else:
+                                if provision_resume_offset is None: raise ValueError('Missing interrupted attempt evidence')
+                                provisioning_events(content, resumed_offset=provision_resume_offset, resumed_log=content[provision_resume_log_offset:])
+                            acknowledge(3, playback_request(test_content, playback_run, 3)); control_sent.add(3)
+                    if resource_run:
+                        for index, boundary in ((2, 'turn-complete'), (3, 'owner-drained'), (4, 'post-drain-30')):
+                            if (index not in control_sent and f'firered_resource phase={boundary} ' in content
+                                    and f'MURAL_DEVICE_PLAYBACK_WAIT {playback_run} {index} ' in test_content):
+                                acknowledge(index, playback_request(test_content, playback_run, index)); control_sent.add(index)
+                    if args.stage in ("acoustic", "multi", "cancel") or resource_run:
                         now = time.monotonic()
                         captures = re.findall(r"asr_trial_capture id=([A-Fa-f0-9-]{36})", content)
                         if len(captures) > len(fixtures) or len(captures) != len(set(captures)):
@@ -659,6 +1029,8 @@ def main():
                                         if "ended_monotonic" not in playback_state:
                                             raise ValueError("Previous playback not finished")
                                         stop_group(playback)
+                                    if resource_run and hashlib.sha256(fixture.read_bytes()).hexdigest() != fixture_spec['sha256']:
+                                        raise ValueError('Frozen fixture changed after preparation')
                                     playback = subprocess.Popen(["afplay", str(fixtures[len(playbacks)])], start_new_session=True)
                                     playback_state = dict(pid=playback.pid, turn=captures[-1], started_monotonic=now,
                                                           capture_received_monotonic=capture_received)
@@ -673,11 +1045,11 @@ def main():
                                     playback_state.update(ended_monotonic=now, exit_code=playback.returncode,
                                                           send_observed_at_completion="asr_trial_send" in current)
                                     write_json(evidence / "playback.json", playbacks)
-                                    token = playback_ack_token(test_content, playback_run, len(playbacks), playback_state)
+                                    token = playback_ack_token(test_content, playback_run, len(playbacks), playback_state, timeout=playback_timeout)
                                     acknowledge(len(playbacks), token)
                                     playback_state["ack_transferred_monotonic"] = time.monotonic()
                                     write_json(evidence / "playback.json", playbacks)
-                                elif now - playback_state["started_monotonic"] > 5 or "asr_trial_send" in current:
+                                elif now - playback_state["started_monotonic"] > playback_timeout or "asr_trial_send" in current:
                                     raise ValueError("Playback overrun or early Send")
                     if capture.poll() is not None:
                         test_log = evidence / "test.log"
@@ -688,6 +1060,14 @@ def main():
                                 raise ValueError("Scoped app console stopped before confirmed teardown")
                     if FAULTS.search(log.read_text()):
                         raise ValueError("Resource/model/provider fault; stop without retry")
+                def safe_monitor():
+                    try:
+                        monitor()
+                    except Exception as error:
+                        if not (resource_stage or provision_run) or abort_reason is not None:
+                            raise
+                        request_resource_abort(str(error))
+
                 bundle = evidence / "baseline.xcresult"
                 plans = list((derived / "Build/Products").glob("Mural_iphoneos*.xctestrun"))
                 if len(plans) != 1:
@@ -696,35 +1076,85 @@ def main():
                 test_plan.write_bytes(plistlib.dumps(runtime_test_plan(plans[0], {
                     "MURAL_PHYSICAL_E2E": args.stage,
                     "MURAL_PHYSICAL_PAIR": pair,
+                    "MURAL_PROVISION_RESUME_JOB": recovery_job or "",
                     "MURAL_RESTORE_MEANING": os.environ.get("DEVICE_RESTORE_MEANING", ""),
-                    "MURAL_PLAYBACK_RUN": playback_run})))
+                    "MURAL_PLAYBACK_RUN": playback_run,
+                    "MURAL_RESOURCE_CAPTURE_READY": "YES" if resource_stage else "",
+                    "MURAL_RESOURCE_ACK_SECONDS": str(fixture_spec['ack_timeout_seconds']) if resource_stage else ""})))
                 command = ["xcodebuild", "-xctestrun", str(test_plan), "-destination", f"platform=iOS,id={udid}",
                            "-destination-timeout", "30", "-parallel-testing-enabled", "NO",
                            "-only-testing:MuralUITests/MuralPhysicalDeviceTests/testNativeBaseline",
                            "-resultBundlePath", str(bundle), "-test-timeouts-enabled", "YES",
-                                  "-default-test-execution-time-allowance", "300", "-maximum-test-execution-time-allowance", "300",
+                                  "-default-test-execution-time-allowance", "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300", "-maximum-test-execution-time-allowance", "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300",
                                   "-collect-test-diagnostics", "never", "test-without-building"]
                 pipeline = shlex.join(command) + " 2>&1 | tee " + shlex.quote(str(evidence / "test.log")) + " | xcbeautify --is-ci"
                 test_started = True
                 def halt_playback():
                     if playback is not None:
                         stop_group(playback)
+                    if (resource_stage or provision_run) and 'MURAL_DEVICE_CLEANUP_PASS' not in (evidence / 'test.log').read_text():
+                        # Timeout/cancellation also gets native End/drain opportunity
+                        # before the host terminates its owned test process group.
+                        request_resource_abort(abort_reason or 'Host test ended before confirmed native cleanup')
+                        drain_deadline = time.monotonic() + 60
+                        while time.monotonic() < drain_deadline:
+                            if 'MURAL_DEVICE_CLEANUP_PASS' in (evidence / 'test.log').read_text():
+                                break
+                            time.sleep(.25)
                 phases.append(("native_test_command", time.monotonic()))
-                run_bounded(["bash", "-o", "pipefail", "-c", pipeline], evidence / "test-formatted.log", 420,
+                native_budget = (min(420, started + 480 - time.monotonic()) if recovery_job else
+                                 min(1560, started + 1620 - time.monotonic()) if provision_run else
+                                 min(780, started + 900 - time.monotonic()) if resource_run else 420)
+                if native_budget <= 0:
+                    raise ValueError('Runtime budget exhausted before native test; preserve cleanup reserve')
+                run_bounded(["bash", "-o", "pipefail", "-c", pipeline], evidence / "test-formatted.log", native_budget,
                             env=os.environ.copy(),
-                            monitor=monitor, on_stop=halt_playback)
+                            monitor=safe_monitor, on_stop=halt_playback)
                 phases.append(("result_validation", time.monotonic()))
                 summary = subprocess.check_output(["xcrun", "xcresulttool", "get", "test-results", "summary", "--path", str(bundle), "--compact"], timeout=30)
                 (evidence / "summary.json").write_bytes(summary)
                 check_summary(json.loads(summary))
-                if args.stage in ("restore-settings", "pair-check"):
+                if abort_reason:
+                    raise ValueError(f'Resource run stopped: {abort_reason}')
+                if args.stage in ("restore-settings", "pair-check", "resource-check"):
                     text = (evidence / "test.log").read_text()
-                    outcome = f"MURAL_DEVICE_PAIR_CHECK_PASS {pair}" if args.stage == "pair-check" else "MURAL_DEVICE_RESTORE_ONLY"
+                    outcome = f"MURAL_DEVICE_PAIR_CHECK_PASS {pair}" if args.stage in ("pair-check", "resource-check") else "MURAL_DEVICE_RESTORE_ONLY"
                     if not all(marker in text for marker in (outcome, "MURAL_DEVICE_SETTINGS_RESTORED", "MURAL_DEVICE_CLEANUP_PASS", "MURAL_DEVICE_PLAYBACK_ACK_0")):
                         raise ValueError("Model-free selection/restoration not confirmed")
                     if re.search(r"firered_native_begin|asr_trial_capture|model_request|asr_ready", log.read_text()):
                         raise ValueError("Unexpected model/capture work during model-free verification")
                     write_json(evidence / "result.json", {"settings_restoration": "PASS", "pair": pair, "models": "NOT REQUESTED"})
+                elif provision_run:
+                    text = (evidence / 'test.log').read_text()
+                    if not all(marker in text for marker in ('MURAL_DEVICE_SETTINGS_RESTORED', 'MURAL_DEVICE_CLEANUP_PASS')):
+                        raise ValueError('Missing independent settings restoration/cleanup')
+                    content = log.read_text()
+                    if recovery_job:
+                        if control_sent != {3} or 'MURAL_DEVICE_PROVISION_RECOVERY_UI_PASS' not in text:
+                            raise ValueError('Missing recovery UI evidence')
+                        result = provisioning_recovery_events(content, recovery_job)
+                        result['prior_failed_run'] = recovery_source
+                    else:
+                        if control_sent != {1, 2, 3} or not all(marker in text for marker in ('MURAL_DEVICE_PROVISION_UI_PASS', 'MURAL_DEVICE_PROVISION_CANCELLED')):
+                            raise ValueError('Missing provisioning/cancellation UI evidence')
+                        result = provisioning_events(content, resumed_offset=provision_resume_offset,
+                                                     resumed_log=content[provision_resume_log_offset:])
+                    write_json(evidence / 'result.json', result)
+                elif resource_run:
+                    result = resource_events(log.read_text())
+                    result['turn'] = acoustic_events(log.read_text(), result['pid'])
+                    text = (evidence / 'test.log').read_text()
+                    if ('MURAL_DEVICE_RESOURCE_UI_PASS' not in text or len(playbacks) != 1
+                            or 'ack_transferred_monotonic' not in playbacks[0] or control_sent != {2, 3, 4}):
+                        raise ValueError('Missing resource UI/playback/drain evidence')
+                    import base64
+                    raw = re.findall(r'^MURAL_DEVICE_RESOURCE_RAW_BASE64 (\S+)$', text, re.MULTILINE)
+                    if len(raw) != 1:
+                        raise ValueError('Missing unmodified raw recognition')
+                    result.update(resource='PASS', acoustic_capture='PASS', audible_output='NOT VERIFIED',
+                                  reference_scoring='PENDING separate raw-text review; not a resource assertion',
+                                  raw_recognition=base64.b64decode(raw[0], validate=True).decode('utf-8'))
+                    write_json(evidence / 'result.json', result)
                 else:
                     pid = baseline_events(log.read_text())
                     if "MURAL_DEVICE_BASELINE_UI_PASS" not in (evidence / "test.log").read_text():
@@ -756,8 +1186,32 @@ def main():
                     stop_group(playback)
                 except Exception as error:
                     cleanup_errors.append(str(error))
+            if profiler is not None:
+                try:
+                    if profiler.poll() is None:
+                        profiler.send_signal(signal.SIGINT)
+                    profiler.wait(timeout=60)
+                    if profiler.returncode != 0 or not (evidence / 'resource.trace').exists():
+                        raise ValueError('Resource trace did not finalize successfully')
+                    write_json(evidence / 'trace-finalized.json', {'exit_code': profiler.returncode, 'trace': 'resource.trace'})
+                except Exception as error:
+                    cleanup_errors.append(str(error))
+                finally:
+                    try:
+                        stop_group(profiler)
+                    except Exception as error:
+                        cleanup_errors.append(str(error))
+            if profiler_file:
+                profiler_file.close()
             if capture is not None:
                 try:
+                    if resource_stage and not test_started:
+                        # This fresh owned launch never reached Prepare. Stop only
+                        # its proven PID, never a pre-existing/personal process.
+                        owned = set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*local_talk_asr_backend', log.read_text()))
+                        if len(owned) != 1:
+                            raise ValueError('Pre-test app ownership unconfirmed')
+                        device_json(['device', 'process', 'terminate', '--device', udid, '--pid', owned.pop()], evidence / 'pretest-terminate.json')
                     stop_group(capture)
                 except Exception as error:
                     cleanup_errors.append(str(error))
@@ -771,7 +1225,8 @@ def main():
                         cleanup_errors.append("Owned phone process remains; inspect before another run")
                 except Exception as error:
                     cleanup_errors.append(str(error))
-            phone = "not launched"
+            phone = ("owned launch stopped before native tests" if capture is not None and not cleanup_errors
+                     else "pre-test cleanup unconfirmed" if capture is not None else "not launched")
             if test_started:
                 text = (evidence / "test.log").read_text() if (evidence / "test.log").exists() else ""
                 phone = "ended, drained, terminated" if "MURAL_DEVICE_CLEANUP_PASS" in text else "UNCONFIRMED"
@@ -781,6 +1236,11 @@ def main():
                        "phone": phone, "settings": "restored by XCTest if changed; unconfirmed when teardown missing" if test_started else "unchanged",
                        "playback": "owned afplay stopped" if playback is not None else "Mac playback not started", "room_capture": "not started"})
     ended = time.monotonic()
+    ceiling = 600 if recovery_job else 1740 if provision_run else 1020
+    if (resource_run or provision_run) and ended - started > ceiling:
+        write_json(evidence / 'budget-failure.json', {'seconds': ended - started, 'ceiling': ceiling,
+            'cleanup': 'completed rather than cut off to hide the overrun'})
+        code = 1
     timings = {"total_seconds": ended - started, "stage": args.stage,
                "host_phases_seconds": phase_durations(phases, ended),
                "scope": "Host command through cleanup, excluding report rendering; prepare/build is a separate command",

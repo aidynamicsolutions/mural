@@ -995,12 +995,28 @@ final class MuralPhysicalDeviceTests: XCTestCase {
     private var ownedApp: XCUIApplication?
     private var startedConversation = false
     private var originalMeaning: String?
+    private var cleaningUp = false
+    private var resourceTurnDeadline: TimeInterval?
+    private var resourceStage: Bool {
+        ["resource", "resource-check"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "")
+    }
+
+    private func checkResourceAbort() throws {
+        guard resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision", !cleaningUp else { return }
+        let run = ProcessInfo.processInfo.environment["MURAL_PLAYBACK_RUN"] ?? ""
+        let abort = FileManager.default.temporaryDirectory.appendingPathComponent("mural-resource-abort-\(run).txt")
+        if FileManager.default.fileExists(atPath: abort.path) ||
+            resourceTurnDeadline.map({ ProcessInfo.processInfo.systemUptime >= $0 }) == true {
+            XCTFail("Resource qualification aborted or turn budget exhausted; stop through native teardown")
+            throw NSError(domain: "MuralPhysicalGate", code: 5)
+        }
+    }
 
     private func markTiming(_ phase: String) {
         print("MURAL_DEVICE_TIMING \(phase) \(ProcessInfo.processInfo.systemUptime)")
     }
 
-    private func awaitPlaybackCompletion(_ index: Int) throws {
+    private func awaitPlaybackCompletion(_ index: Int, timeout: TimeInterval = 12, trailing: Bool = true) throws {
         let run = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_PLAYBACK_RUN"])
         _ = try XCTUnwrap(UUID(uuidString: run))
         let token = UUID().uuidString
@@ -1017,11 +1033,12 @@ final class MuralPhysicalDeviceTests: XCTestCase {
             try "stale-token".write(to: receipt, atomically: true, encoding: .utf8)
         }
         print("MURAL_DEVICE_PLAYBACK_WAIT \(run) \(index) \(token)")
-        let deadline = ProcessInfo.processInfo.systemUptime + 12
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         while ProcessInfo.processInfo.systemUptime < deadline {
+            try checkResourceAbort()
             if (try? String(contentsOf: receipt, encoding: .utf8)) == token {
                 print("MURAL_DEVICE_PLAYBACK_ACK_\(index) \(run) \(token)")
-                if index > 0 { Thread.sleep(forTimeInterval: 0.75) }
+                if index > 0 && trailing { Thread.sleep(forTimeInterval: 0.75) }
                 return
             }
             Thread.sleep(forTimeInterval: 0.1)
@@ -1041,6 +1058,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         var ready = false
         let deadline = ProcessInfo.processInfo.systemUptime + 90
         while ProcessInfo.processInfo.systemUptime < deadline {
+            try checkResourceAbort()
             let elements = descendants(try app.snapshot())
             for step in elements where step.identifier.hasPrefix("speech-setup-step-") {
                 if step.value as? String == "Complete" { completed.insert(step.identifier) }
@@ -1075,7 +1093,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         let value = try XCTUnwrap(row.value as? String)
         if preservingOriginal {
             print("MURAL_DEVICE_ORIGINAL_MEANING=\(value)")
-            if value != select { originalMeaning = value } // Before any mutation or failed UI action.
+            originalMeaning = value // Before any mutation; verify restoration even if already selected.
         }
         if let select, select != value {
             XCTAssertTrue(row.isEnabled); row.tap()
@@ -1092,13 +1110,24 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         #if targetEnvironment(simulator)
         throw XCTSkip("Physical device only")
         #else
-        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
+        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
             throw XCTSkip("Use the explicit agent-verify-device entrypoint")
         }
         #endif
     }
 
     private func wait(_ predicate: String, _ element: XCUIElement, seconds: TimeInterval) throws {
+        if (resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision") && !cleaningUp {
+            let deadline = ProcessInfo.processInfo.systemUptime + seconds
+            let condition = NSPredicate(format: predicate)
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                try checkResourceAbort()
+                if condition.evaluate(with: element) { return }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+            XCTFail("Resource UI phase timed out: \(predicate)")
+            throw NSError(domain: "MuralPhysicalGate", code: 6)
+        }
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
             predicate: NSPredicate(format: predicate), object: element)], timeout: seconds)
         guard result == .completed else {
@@ -1131,6 +1160,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
 
     override func tearDownWithError() throws {
         guard let app = ownedApp else { return }
+        cleaningUp = true
         markTiming("cleanup_started")
         if app.buttons["Close"].exists && app.buttons["Close"].isHittable { app.buttons["Close"].tap() }
         try closeTranscriptSheets(app)
@@ -1175,12 +1205,110 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         XCTAssertEqual(labels.filter { turns.contains($0) }, turns, "Exact synthetic turns must persist once and in order")
     }
 
+    private func resourceAcknowledgmentBudget() throws -> TimeInterval {
+        let text = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_RESOURCE_ACK_SECONDS"])
+        let value = try XCTUnwrap(TimeInterval(text))
+        guard value.isFinite, (12...23).contains(value) else {
+            throw NSError(domain: "MuralPhysicalGate", code: 7)
+        }
+        return value
+    }
+
+    private func runResourceConversation(_ app: XCUIApplication, start: XCUIElement) throws {
+        startedConversation = true
+        markTiming("preparation_requested"); start.tap()
+        try waitForPreparedConversation(app)
+        markTiming("ready")
+        resourceTurnDeadline = ProcessInfo.processInfo.systemUptime + 90
+        let record = app.buttons["local-conversation-record-send"]
+        try reveal(record, app: app); record.tap()
+        try wait("label == 'Send'", record, seconds: 90)
+        print("MURAL_DEVICE_RECORD_UI_READY_1")
+        try awaitPlaybackCompletion(1, timeout: resourceAcknowledgmentBudget())
+        XCTAssertEqual(record.label, "Send"); record.tap()
+        try wait("label CONTAINS 'Ready'", app.staticTexts["conversation-status"], seconds: 90)
+        // The host additionally waits for tutor, actual speech completion and all
+        // supporting work, not just this displayed status.
+        try awaitPlaybackCompletion(2, timeout: 90, trailing: false)
+        resourceTurnDeadline = nil
+        markTiming("loaded_idle_started")
+        let idleEnd = ProcessInfo.processInfo.systemUptime + 360
+        while ProcessInfo.processInfo.systemUptime < idleEnd {
+            try checkResourceAbort()
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        let reply = app.staticTexts["target-caption"].label
+        XCTAssertFalse(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let details = app.buttons["On-device details & diagnostics"]
+        try reveal(details, app: app); details.tap()
+        let raw = app.buttons["Raw recognition · not translated"]
+        if !app.staticTexts["local-raw-asr"].exists { try reveal(raw, app: app); raw.tap() }
+        let learner = app.staticTexts["local-raw-asr"].label
+        XCTAssertFalse(learner.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let rawEvidence = XCTAttachment(string: learner); rawEvidence.name = "FireRed raw recognition"
+        rawEvidence.lifetime = .keepAlways; add(rawEvidence)
+        print("MURAL_DEVICE_RESOURCE_RAW_BASE64 \(Data(learner.utf8).base64EncodedString())")
+        try reveal(details, app: app); details.tap()
+        let end = app.buttons["local-conversation-end"]
+        try reveal(end, app: app); markTiming("end_requested"); end.tap()
+        try awaitPlaybackCompletion(3, timeout: 60, trailing: false)
+        try awaitPlaybackCompletion(4, timeout: 40, trailing: false)
+        markTiming("release_observed")
+        let transcript = app.buttons["local-conversation-transcript"]
+        try reveal(transcript, app: app); transcript.tap()
+        try assertRetainedTurns([learner, reply], app: app)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "FireRed native resource transcript"; image.lifetime = .keepAlways; add(image)
+        try closeTranscriptSheets(app)
+        print("MURAL_DEVICE_RESOURCE_UI_PASS")
+    }
+
+    // Acquisition acceptance before implementation: normal consent, nonempty partial
+    // cancellation/drain, explicit retry/resume, verified activation, never Ready.
+    private func runProvisioning(_ app: XCUIApplication, start: XCUIElement) throws {
+        startedConversation = true
+        start.tap()
+        if ProcessInfo.processInfo.environment["MURAL_PROVISION_RESUME_JOB"]?.isEmpty == false {
+            try awaitPlaybackCompletion(3, timeout: 120, trailing: false)
+            try wait("exists == true AND enabled == true", start, seconds: 60)
+            XCTAssertFalse(app.staticTexts["speech-setup-error"].exists)
+            XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
+            let image = XCTAttachment(screenshot: app.screenshot())
+            image.name = "Retained graphs verified and missing tokens recovered"; image.lifetime = .keepAlways; add(image)
+            print("MURAL_DEVICE_PROVISION_RECOVERY_UI_PASS")
+            return
+        }
+        let confirm = app.buttons["speech-download-confirm"]
+        try wait("exists == true", confirm, seconds: 15)
+        try reveal(confirm, app: app); confirm.tap()
+        try awaitPlaybackCompletion(1, timeout: 120, trailing: false) // First persisted network chunk, no playback.
+        let cancel = app.buttons["speech-setup-cancel"]
+        try reveal(cancel, app: app); cancel.tap()
+        try wait("exists == true AND enabled == true", start, seconds: 60)
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
+        print("MURAL_DEVICE_PROVISION_CANCELLED")
+        // This attempt owns the cancelled setup. Never resume an unrelated initial job.
+        try awaitPlaybackCompletion(2, timeout: 30, trailing: false) // Host saves drained partial inventory.
+        try reveal(start, app: app); start.tap()
+        if confirm.waitForExistence(timeout: 10) { try reveal(confirm, app: app); confirm.tap() }
+        try awaitPlaybackCompletion(3, timeout: 900, trailing: false) // Verified activation and native admission stop.
+        try wait("exists == true AND enabled == true", start, seconds: 60)
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists)
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Managed FireRed verified; native preparation deferred"; image.lifetime = .keepAlways; add(image)
+        print("MURAL_DEVICE_PROVISION_UI_PASS")
+    }
+
     func testNativeBaseline() throws {
         let stage = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? ""
         let pair = ProcessInfo.processInfo.environment["MURAL_PHYSICAL_PAIR"] ?? "vi-en"
-        guard pair == "vi-en" || (pair == "zh-CN-en" && stage == "pair-check") else {
+        guard (pair == "vi-en" && !resourceStage) || (pair == "zh-CN-en" && (stage == "pair-check" || stage == "provision" || resourceStage)) else {
             XCTFail("FireRed runtime is blocked pending resource review; unknown pairs are refused")
             throw NSError(domain: "MuralPhysicalGate", code: 4)
+        }
+        if resourceStage {
+            XCTAssertEqual(ProcessInfo.processInfo.environment["MURAL_RESOURCE_CAPTURE_READY"], "YES", "Host must prove useful capture before models")
         }
         let meaning = pair == "zh-CN-en" ? "Simplified Chinese" : "Vietnamese"
         let app = XCUIApplication(bundleIdentifier: "com.kevintruong.mural.dev")
@@ -1224,14 +1352,15 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         }
         XCTAssertEqual(app.staticTexts["conversation-language-pair"].label, "English · \(meaning)")
         let start = app.buttons["local-conversation-start"]
-        XCTAssertEqual(start.label, "Prepare & start", "Refuse paused/pending personal work")
+        let recovery = stage == "provision" && ProcessInfo.processInfo.environment["MURAL_PROVISION_RESUME_JOB"]?.isEmpty == false
+        XCTAssertEqual(start.label, recovery ? "Resume setup" : "Prepare & start", "Refuse unrelated paused/pending personal work")
         try reveal(start, app: app)
         XCTAssertTrue(start.isEnabled)
         let details = app.buttons["On-device details & diagnostics"]
         try reveal(details, app: app); details.tap()
         XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(pair == "zh-CN-en"
             ? "FireRedASR2-AED" : "Core AI GPU-preferred encoder + Core ML decoder (staged)"))
-        if stage == "pair-check" {
+        if stage == "pair-check" || stage == "resource-check" {
             // Never Prepare or inspect personal history. Exercise the actual pair,
             // scrolled diagnostics and nonce transport before admitting native work.
             originalMeaning = originalMeaning ?? meaning
@@ -1239,7 +1368,8 @@ final class MuralPhysicalDeviceTests: XCTestCase {
             try reveal(details, app: app); details.tap()
             try reveal(start, app: app)
             XCTAssertEqual(start.label, "Prepare & start")
-            try awaitPlaybackCompletion(0)
+            let acknowledgment = resourceStage ? try resourceAcknowledgmentBudget() : 12
+            try awaitPlaybackCompletion(0, timeout: acknowledgment, trailing: false)
             let image = XCTAttachment(screenshot: app.screenshot())
             image.name = "Model-free selected pair \(pair)"; image.lifetime = .keepAlways; add(image)
             print("MURAL_DEVICE_PAIR_CHECK_PASS \(pair)")
@@ -1247,6 +1377,14 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         }
         details.tap()
         try reveal(start, app: app)
+        if stage == "provision" {
+            try runProvisioning(app, start: start)
+            return
+        }
+        if stage == "resource" {
+            try runResourceConversation(app, start: start)
+            return
+        }
         startedConversation = true
         markTiming("preparation_requested")
         start.tap()

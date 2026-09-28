@@ -10,10 +10,12 @@ import shutil
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--firered-file-probe', action='store_true',
                     help='Include the local-only native file probe; regenerate normally after building.')
+parser.add_argument('--firered-runtime', action='store_true',
+                    help='Link the gated Talk runtime without the development file-probe UI.')
 parser.add_argument('--output-directory', type=Path,
                     help='Generate an isolated project without modifying checkout project or signing settings.')
 args = parser.parse_args()
-firered = args.firered_file_probe
+firered = args.firered_file_probe or args.firered_runtime
 root = Path(__file__).resolve().parents[1]
 output = args.output_directory.resolve() if args.output_directory else root
 existing_project = root/'Mural.xcodeproj'/'project.pbxproj'
@@ -43,7 +45,7 @@ for file in sorted([*(root/'App').rglob('*.swift'), root/'Tools/CoreAI/W8Identit
     ref = add(path, 'PBXFileReference', lastKnownFileType='sourcecode.swift', path=path, sourceTree='<group>')
     refs.append(ref); sources.append(add(path+'build','PBXBuildFile',fileRef=ref))
 if firered:
-    path = 'Tools/ChineseASR/FireRedProbe/Probe.mm'
+    path = 'Tools/ChineseASR/FireRedProbe/Probe.mm' if args.firered_file_probe else 'App/Native/FireRedRuntime.mm'
     ref = add(path, 'PBXFileReference', lastKnownFileType='sourcecode.cpp.objcpp', path=path, sourceTree='<group>')
     refs.append(ref); sources.append(add(path+'build', 'PBXBuildFile', fileRef=ref))
     pin = add('fireredPin', 'PBXFileReference', lastKnownFileType='text.json',
@@ -79,10 +81,10 @@ targetSettings = {'MURAL_APP_BUNDLE_IDENTIFIER':'no.william.mural','PRODUCT_BUND
 targetSettings.update({'CODE_SIGN_ENTITLEMENTS':'$(MURAL_APPLE_ENTITLEMENTS)',
                       'SWIFT_ACTIVE_COMPILATION_CONDITIONS':'$(inherited) $(MURAL_APPLE_SWIFT_FLAGS)'})
 if firered:
-    runtime = '$(SRCROOT)/.build/firered'
+    runtime = '$(SRCROOT)/.build/firered' if args.firered_file_probe else '$(SRCROOT)/.build/firered-runtime'
     targetSettings.update({
-        'SWIFT_ACTIVE_COMPILATION_CONDITIONS': '$(inherited) $(MURAL_APPLE_SWIFT_FLAGS) MURAL_FIRERED_FILE_PROBE',
-        'SWIFT_OBJC_BRIDGING_HEADER': 'Tools/ChineseASR/FireRedProbe/Probe.h',
+        'SWIFT_ACTIVE_COMPILATION_CONDITIONS': '$(inherited) $(MURAL_APPLE_SWIFT_FLAGS) MURAL_FIRERED_RUNTIME' + (' MURAL_FIRERED_FILE_PROBE' if args.firered_file_probe else ''),
+        'SWIFT_OBJC_BRIDGING_HEADER': 'Tools/ChineseASR/FireRedProbe/Probe.h' if args.firered_file_probe else 'App/Native/FireRedRuntime.h',
         'GCC_PREPROCESSOR_DEFINITIONS': ['$(inherited)', 'MURAL_FIRERED_EMBEDDED=1'],
         'CLANG_CXX_LANGUAGE_STANDARD': 'c++20',
         'HEADER_SEARCH_PATHS': [runtime+'/sherpa-onnx', runtime+'/ort-ios/onnxruntime.xcframework/ios-arm64/onnxruntime.framework/Headers'],
@@ -94,6 +96,11 @@ if firered:
                          '-lkissfft-float', '-framework', 'onnxruntime', '-lc++'],
     })
     objects[resources]['files'].append(add('fireredPinBuild', 'PBXBuildFile', fileRef=pin))
+    if args.firered_runtime and not args.firered_file_probe:
+        nativeNotices = add('fireredNotices', 'PBXFileReference', lastKnownFileType='text',
+                            path='.build/firered-runtime/FireRedNotices.txt', sourceTree='<group>')
+        objects[group]['children'].append(nativeNotices)
+        objects[resources]['files'].append(add('fireredNoticesBuild', 'PBXBuildFile', fileRef=nativeNotices))
 def configs(prefix, settings):
     ids=[]
     for name in ['Debug','Release']:

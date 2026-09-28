@@ -184,7 +184,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         #if MURAL_VAD_PROBE
         case vadOnly = "Silero VAD only (no ASR)"
         #endif
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         case fireRed = "FireRed v2 CN-EN (probe)"
         #endif
 
@@ -192,7 +192,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
             switch self {
             case .phoWhisper: .vietnameseEnglish
             case .breeze: .taiwanMandarinEnglish
-            #if MURAL_FIRERED_FILE_PROBE
+            #if MURAL_FIRERED_RUNTIME
             case .fireRed: .mainlandMandarinEnglish
             #endif
             default: nil
@@ -205,7 +205,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
             #if MURAL_VAD_PROBE
             case .vadOnly: false
             #endif
-            #if MURAL_FIRERED_FILE_PROBE
+            #if MURAL_FIRERED_RUNTIME
             case .fireRed: false
             #endif
             default: true
@@ -457,20 +457,24 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         if ttsBackend == .supertonic, !neuralTTS.isReady { return false }
         return fireRedDiagnosticAllowsRecord && (asr != nil || whisper != nil || parakeet != nil || breeze != nil || fireRed != nil) && asrTask == nil && !speechBusy
     }
-    var canPrepare: Bool { asrTask == nil && fireRedDiagnosticAllowsPrepare && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil }
-    private var fireRedDiagnosticAllowsPrepare: Bool {
-        #if MURAL_FIRERED_FILE_PROBE
-        if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && !fireRedDiagnosticStarted }
+    var canPrepare: Bool { canPrepare(model: asrModel) }
+    private func canPrepare(model: ASRModel) -> Bool {
+        // Talk selects its requested model only after admission. The diagnostic
+        // restriction must check that request, not the engine's idle default.
+        #if MURAL_FIRERED_RUNTIME
+        if FireRedEnglishRecognizer.memoryDiagnostic, model != .fireRed || fireRedDiagnosticStarted { return false }
         #endif
-        return true
+        return asrTask == nil && !speechBusy && asr == nil && whisper == nil && parakeet == nil && breeze == nil && fireRed == nil
     }
     private var fireRedDiagnosticAllowsRecord: Bool {
-        #if MURAL_FIRERED_FILE_PROBE
-        if FireRedEnglishRecognizer.memoryDiagnostic { return asrModel == .fireRed && fireRedDiagnosticTurns < 2 }
+        #if MURAL_FIRERED_RUNTIME
+        if FireRedEnglishRecognizer.memoryDiagnostic {
+            return asrModel == .fireRed && fireRedDiagnosticTurns < (FireRedEnglishRecognizer.resourceDiagnostic ? 1 : 2)
+        }
         #endif
         return true
     }
-    #if MURAL_FIRERED_FILE_PROBE
+    #if MURAL_FIRERED_RUNTIME
     private var fireRedDiagnosticStarted = false
     private var fireRedDiagnosticTurns = 0
     private var fireRedDiagnosticTask: Task<Void, Never>?
@@ -480,6 +484,9 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         guard FireRedEnglishRecognizer.memoryDiagnostic else { return }
         fireRedDiagnosticStarted = true
         FireRedEnglishRecognizer.diagnosticMemory("owner-baseline")
+        // Combined Talk is observed by its coordinator, including tutor/support/TTS
+        // drain. Do not reuse the old ASR-only 420-second watchdog or drain claim.
+        if FireRedEnglishRecognizer.resourceDiagnostic { return }
         let deadline = ProcessInfo.processInfo.systemUptime + 420
         fireRedDiagnosticTask = Task { [weak self] in
             defer { self?.fireRedDiagnosticTask = nil }
@@ -554,7 +561,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
     isolated deinit {
         ttsConversationMonitor?.cancel()
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         fireRedDiagnosticTask?.cancel()
         #endif
         if let memoryWarningObserver { NotificationCenter.default.removeObserver(memoryWarningObserver) }
@@ -664,7 +671,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         capture?.finish(throwing: CancellationError()); capture = nil
         asrTask?.cancel()
         stagedDecoderWarmup?.cancel()
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         if asrModel == .fireRed {
             logger.notice("firered_stop_requested uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) draining=\(self.asrTask != nil, privacy: .public)")
         }
@@ -759,7 +766,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         case .vietnameseEnglish: return .phoWhisper
         case .taiwanMandarinEnglish: return .breeze
         case .mainlandMandarinEnglish:
-            #if MURAL_FIRERED_FILE_PROBE
+            #if MURAL_FIRERED_RUNTIME
             return .fireRed
             #else
             throw SpeechError.unavailableRecognizer("Simplified Chinese speech requires the FireRed development build. No other recognizer or cloud fallback was selected.")
@@ -789,9 +796,11 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         if pair == .mainlandMandarinEnglish {
             guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
-            // Developer assets only in this candidate. Existence is not verification or readiness.
-            return ["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"].allSatisfy {
-                manager.fileExists(atPath: FireRedEnglishRecognizer.developmentDirectory.appending(path: $0).path)
+            // Only an atomically activated, pinned managed package is eligible. Never
+            // import/fall back to developer assets. Full hashes still precede native load.
+            guard let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") else { return false }
+            return SpeechPackagePins.fireRedFiles.allSatisfy {
+                manager.fileExists(atPath: folder.appending(path: URL(filePath: $0.path).lastPathComponent).path)
             }
         }
         if pair == .taiwanMandarinEnglish {
@@ -825,8 +834,16 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         await ttsCleanup?.value
     }
 
+    func waitForResourceDrain() async {
+        await waitForSetupDrain()
+        await audioRelease?.value
+    }
+
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
     func prepareConversation(model: ASRModel = .phoWhisper) async throws {
+        guard !FireRedEnglishRecognizer.provisioningOnly else {
+            throw SpeechError.unavailableRecognizer("Native models are prohibited during download qualification.")
+        }
         try await SpeechSetupReporting.checkAdmission()
         guard let pair = model.conversationPair else { throw SpeechError.busy }
         rawASRText = ""
@@ -839,7 +856,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         }
         await ttsCleanup?.value
         try Task.checkCancellation()
-        guard canPrepare else { throw SpeechError.busy }
+        guard canPrepare(model: model) else { throw SpeechError.busy }
         selectASR(model)
         guard asrModel == model else { throw SpeechError.busy }
         logger.notice("local_talk_model_selected pair=\(pair.rawValue, privacy: .public) model=\(self.asrModel.rawValue, privacy: .public) backend=\(self.selectedConversationASRBackend, privacy: .public)")
@@ -867,6 +884,10 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 try Task.checkCancellation() // A cancelled SDK error is not permission to start a fallback.
                 // The outer setup owner can remain alive while its child was interrupted.
                 try await SpeechSetupReporting.checkAdmission()
+                if FireRedEnglishRecognizer.resourceDiagnostic {
+                    logger.fault("firered_resource_fault reason=voice-preparation")
+                    throw error
+                }
                 let failure = error as NSError
                 logger.error("tts_fallback backend=supertonic reason=preparation domain=\(failure.domain, privacy: .public) code=\(failure.code, privacy: .public)")
                 if pair == .vietnameseEnglish { ttsConversationMonitor?.cancel(); ttsConversationMonitor = nil }
@@ -913,7 +934,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
     func prepareASR(repairDownload: Bool = false) {
         guard canPrepare else { return }
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         startFireRedMemoryDiagnostic()
         #endif
         lastRecordingHadNoSpeech = false
@@ -956,7 +977,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 #if MURAL_VAD_PROBE
                 case .vadOnly: throw SpeechError.busy // Handled above; never resolve ASR assets.
                 #endif
-                #if MURAL_FIRERED_FILE_PROBE
+                #if MURAL_FIRERED_RUNTIME
                 case .fireRed:
                     directory = try await FireRedEnglishRecognizer.localDirectory()
                 #endif
@@ -991,7 +1012,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 #if MURAL_VAD_PROBE
                 case .vadOnly: throw SpeechError.busy
                 #endif
-                #if MURAL_FIRERED_FILE_PROBE
+                #if MURAL_FIRERED_RUNTIME
                 case .fireRed:
                     let recognizer = FireRedEnglishRecognizer()
                     try await recognizer.prepare(directory: directory)
@@ -1057,7 +1078,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                     ? "PhoWhisper speech preparation failed. Try Prepare & start again or check available iPhone storage. No backend was changed. (\(error.localizedDescription))"
                     : "Speech models could not be prepared. Connect to Wi-Fi and try Prepare again. If cached assets are incomplete, use Repair download. (\(error.localizedDescription))"
                 if selected == .breeze { self.asrError = "Breeze speech preparation failed. Try Prepare & start again or check available iPhone storage. No cloud fallback was used. (\(error.localizedDescription))" }
-                #if MURAL_FIRERED_FILE_PROBE
+                #if MURAL_FIRERED_RUNTIME
                 if selected == .fireRed { self.asrError = "FireRed v2 AED preparation failed. Stop and report this error; no download or fallback. (\(error.localizedDescription))" }
                 #endif
                 self.asrState = .failed
@@ -1068,7 +1089,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
 
     func record() {
         guard canRecord else { return }
-        #if MURAL_FIRERED_FILE_PROBE
+        #if MURAL_FIRERED_RUNTIME
         if FireRedEnglishRecognizer.memoryDiagnostic { fireRedDiagnosticTurns += 1 }
         #endif
         let manager = asr, whisper = whisper, parakeet = parakeet, breeze = breeze, fireRed = fireRed
