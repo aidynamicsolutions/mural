@@ -13,7 +13,17 @@ make agent-verify-device DEVICE_STAGE=prepare
 make agent-verify-device DEVICE_STAGE=pair-check DEVICE_PAIR=zh-CN-en DEVICE_READY=YES
 ```
 
-This checks normal Settings, FireRed diagnostics, scrolling, fresh nonce transport and original meaning preference restoration/readback. It never presses Prepare, plays speech or opens history. `DEVICE_PAIR` defaults to `vi-en`; Chinese native stages are explicitly refused pending the resource gate. If recovering a failed model-free run, pass `DEVICE_RESTORE_MEANING` only from its recorded original preference. Evidence: `.build/verification/physical-iphone-e2e/20260928-083908-39499/` (one native pass, cleanup PASS). See the [qualification plan](../../../../docs/asr/chinese/simplified-talk-qualification-plan.md) for the approved one-turn resource design, remaining runtime prerequisites and pending MELI reference review.
+This checks normal Settings, FireRed diagnostics, scrolling, fresh nonce transport and original meaning preference restoration/readback. It never presses Prepare, plays speech or opens history. `DEVICE_PAIR` defaults to `vi-en`; Chinese native runtime stages are explicitly refused pending the resource gate. Build-only native preparation is available and does not authorize loading. If recovering a failed model-free run, pass `DEVICE_RESTORE_MEANING` only from its recorded original preference. Evidence: `.build/verification/physical-iphone-e2e/20260928-083908-39499/` (one native pass, cleanup PASS). See the [qualification plan](../../../../docs/asr/chinese/simplified-talk-qualification-plan.md) for the approved one-turn resource design, remaining runtime prerequisites and the frozen, human-reviewed MELI references.
+
+Native-linked candidate preparation, without touching the ordinary generated project or installed phone app:
+
+```sh
+make agent-verify-device DEVICE_STAGE=prepare DEVICE_PAIR=zh-CN-en
+python3 scripts/verify_device.py --check-fixture \
+  .build/verification/simplified-talk-meli-20260928/frozen-manifest-v1.json --clip M00A-switch
+```
+
+The native build uses isolated generation and separate DerivedData while preserving the explicit Core AI flag, existing signing identities and shared locks. It checks actual compiler/linker commands, linked sherpa/ORT symbols, the bundled pin and native input/artifact hashes. Evidence: `20260928-085643-78359` (build and cleanup PASS, no installation/models). Fixture validation only admits reviewed unchanged mono PCM and computes recording-cap-safe budgets; it does not yet connect those budgets to acoustic XCTest. No FireRed resource-stage runtime is available yet. See the plan's automated saved-trace analysis before any new model load; the previous file-size export failure is not a requirement for manual Instruments work.
 
 For ordinary-build UI regression, run the existing `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed` and `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain` on an exclusively owned iOS 27 simulator. The first checks Settings English + Vietnamese/Traditional Chinese/Simplified Chinese, selected headings and backend identities, and the explicit unavailable-FireRed alert. The second changes the next Settings language during synthetic cancellation drain: Start stays disabled and diagnostics must still name the OLD job's Breeze backend until drain completes. Record video under `.build/verification/`; preview drain is not native acceptance.
 

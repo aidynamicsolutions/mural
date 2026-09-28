@@ -12,7 +12,7 @@ from pathlib import Path
 
 from verify_device import (validate_request, check_summary, baseline_events, acoustic_events, run_bounded,
                            compiler_proof, select_prepared, idle_process, cancellation_events, APP_EXECUTABLE,
-                           phase_durations, native_phase_durations, playback_ack_token, runtime_test_plan, consumed_ack_copy)
+                           phase_durations, native_phase_durations, playback_ack_token, runtime_test_plan, consumed_ack_copy, reviewed_fixture)
 
 
 def refuses(operation):
@@ -71,7 +71,9 @@ if __name__ == "__main__":
     validate_request(udid, "pair-check", True, pair="vi-en")
     refuses(lambda: validate_request(udid, "pair-check", False, pair="zh-CN-en"))
     refuses(lambda: validate_request(udid, "pair-check", True, pair="zh-TW-en"))
-    for stage in ("prepare", "baseline", "acoustic", "multi", "cancel", "restore-settings"):
+    # Native build preparation is model-free; no native runtime admission.
+    validate_request(udid, "prepare", False, pair="zh-CN-en")
+    for stage in ("baseline", "acoustic", "multi", "cancel", "restore-settings"):
         refuses(lambda: validate_request(udid, stage, True, pair="zh-CN-en"))
     validate_request(udid, "prepare", False)
     validate_request(udid, "baseline", True)
@@ -127,6 +129,56 @@ if __name__ == "__main__":
     refuses(lambda: cancellation_events(cancelled + "\n" + prefix + f"asr_trial_send id={turn}", "123"))
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        # Fixture admission failure matrix: unreviewed/empty reference or scoring,
+        # hash drift, duplicate ID, escaping paths, stereo audio, wrong duration,
+        # or a playback/ACK budget that consumes the 30-second recording cap.
+        import hashlib
+        import json
+        import wave
+        wav = root / "clip.wav"
+        with wave.open(str(wav), "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(b'\0\0' * (8 * 16000))
+        clip = dict(id="test", file="clip.wav", sha256=hashlib.sha256(wav.read_bytes()).hexdigest(),
+                    reviewed=True, reviewer="host-test-only", reference="test reference",
+                    duration_seconds=8.0)
+        manifest = root / "fixtures.json"
+        data = dict(scoring="NFC; no script conversion", clips=[clip])
+        manifest.write_text(json.dumps(data))
+        admitted = reviewed_fixture(manifest, "test")
+        assert admitted["playback_timeout_seconds"] == 11
+        assert admitted["ack_timeout_seconds"] == 18
+        assert admitted["reference"] == "test reference"
+        for change in ({"reviewed": False}, {"reviewed": "true"}, {"reviewer": ""},
+                       {"reference": ""}, {"sha256": "0" * 64}, {"file": "../clip.wav"},
+                       {"duration_seconds": 7.0}, {"duration_seconds": float("nan")}):
+            manifest.write_text(json.dumps({**data, "clips": [{**clip, **change}]}))
+            refuses(lambda: reviewed_fixture(manifest, "test"))
+        manifest.write_text(json.dumps({**data, "scoring": ""}))
+        refuses(lambda: reviewed_fixture(manifest, "test"))
+        manifest.write_text(json.dumps({**data, "clips": [clip, clip]}))
+        refuses(lambda: reviewed_fixture(manifest, "test"))
+        for channels, seconds in ((2, 8), (1, 22)):
+            with wave.open(str(wav), "wb") as audio:
+                audio.setparams((channels, 2, 16000, 0, "NONE", "not compressed"))
+                audio.writeframes(b'\0\0' * channels * seconds * 16000)
+            manifest.write_text(json.dumps({**data, "clips": [{**clip, "duration_seconds": seconds,
+                "sha256": hashlib.sha256(wav.read_bytes()).hexdigest()}]}))
+            refuses(lambda: reviewed_fixture(manifest, "test"))
+        # Isolated generation must preserve the ordinary project/signing settings,
+        # anchor source/package paths to the checkout and preserve locked versions.
+        checkout = Path(__file__).resolve().parent.parent
+        protected = [checkout / "Mural.xcodeproj/project.pbxproj", checkout / "Config/Local.xcconfig"]
+        before = [p.read_bytes() if p.exists() else None for p in protected]
+        subprocess.run([sys.executable, str(checkout / "scripts/generate_project.py"),
+                        "--firered-file-probe", "--output-directory", str(root)], check=True)
+        generated = (root / "Mural.xcodeproj/project.pbxproj").read_text()
+        assert 'MURAL_FIRERED_FILE_PROBE' in generated and 'Probe.mm' in generated
+        assert f'projectDirPath = "{checkout}"' in generated
+        assert f'relativePath = "{checkout}"' in generated
+        assert [p.read_bytes() if p.exists() else None for p in protected] == before
+        resolved_path = "Mural.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+        assert (root / resolved_path).read_bytes() == (checkout / resolved_path).read_bytes()
         # Prepared-run failure matrix: wrong runner/app, wrong format, extra targets,
         # relocated __TESTROOT__, source mutation, lost environment and screen evidence.
         import plistlib
@@ -169,6 +221,14 @@ if __name__ == "__main__":
         refuses(lambda: select_prepared(udid, {**identity, "source_sha256": "changed"}, [receipt]))
         refuses(lambda: select_prepared("00008150-0000000000000000", identity, [receipt]))
         refuses(lambda: compiler_proof(new_log, {**identity, "artifacts": {APP_EXECUTABLE: "changed"}}, [receipt]))
+        # Native proof may never reuse ordinary compiler flags, even at the same
+        # claimed hash; both actual flags must occur in the app invocation.
+        refuses(lambda: compiler_proof(new_log, identity, [receipt], firered=True))
+        old_log.write_text("swiftc -module-name Mural -DMURAL_FIRERED_FILE_PROBE -D MURAL_COREAI_TALK -O\n")
+        refuses(lambda: compiler_proof(new_log, identity, [receipt], firered=True))
+        linker = "clang++ -lsherpa-onnx-c-api -framework onnxruntime -o /build/Release-iphoneos/Mural.app/Mural\n"
+        old_log.write_text(old_log.read_text() + linker)
+        assert compiler_proof(new_log, identity, [receipt], firered=True)["linker_command"] == linker.strip()
         old_log.write_text("Requested OTHER_SWIFT_FLAGS=-D MURAL_COREAI_TALK\n")
         refuses(lambda: compiler_proof(new_log, identity, [receipt]))
         pidfile = root / "child.pid"

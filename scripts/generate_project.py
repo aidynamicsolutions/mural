@@ -5,15 +5,20 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--firered-file-probe', action='store_true',
                     help='Include the local-only native file probe; regenerate normally after building.')
-firered = parser.parse_args().firered_file_probe
+parser.add_argument('--output-directory', type=Path,
+                    help='Generate an isolated project without modifying checkout project or signing settings.')
+args = parser.parse_args()
+firered = args.firered_file_probe
 root = Path(__file__).resolve().parents[1]
+output = args.output_directory.resolve() if args.output_directory else root
 existing_project = root/'Mural.xcodeproj'/'project.pbxproj'
 existing_team = re.search(r'DEVELOPMENT_TEAM\s*=\s*"?([A-Z0-9]+)', existing_project.read_text()) if existing_project.exists() else None
-if existing_team:
+if existing_team and args.output_directory is None:
     local_settings = root/'Config'/'Local.xcconfig'
     local_settings.parent.mkdir(exist_ok=True)
     contents = local_settings.read_text() if local_settings.exists() else '// Personal signing settings. Do not commit.\n'
@@ -58,7 +63,7 @@ product = add('product','PBXFileReference',explicitFileType='wrapper.application
 testProduct = add('testProduct','PBXFileReference',explicitFileType='wrapper.cfbundle',path='MuralUITests.xctest',sourceTree='BUILT_PRODUCTS_DIR')
 products = add('products','PBXGroup',children=[product,testProduct],name='Products',sourceTree='<group>')
 group = add('main','PBXGroup',children=refs+[products],sourceTree='<group>')
-corePackage = add('corePackage','XCLocalSwiftPackageReference',relativePath='.')
+corePackage = add('corePackage','XCLocalSwiftPackageReference',relativePath=str(root) if output != root else '.')
 rtcPackage = add('rtcPackage','XCRemoteSwiftPackageReference',repositoryURL='https://github.com/stasel/WebRTC.git',requirement={'kind':'exactVersion','version':'152.0.0'})
 asrPackage = add('asrPackage','XCRemoteSwiftPackageReference',repositoryURL='https://github.com/FluidInference/FluidAudio.git',requirement={'kind':'exactVersion','version':'0.15.7'})
 whisperPackage = add('whisperPackage','XCRemoteSwiftPackageReference',repositoryURL='https://github.com/argmaxinc/argmax-oss-swift.git',requirement={'kind':'exactVersion','version':'1.1.0'})
@@ -105,15 +110,20 @@ testSources = add('testSources','PBXSourcesBuildPhase',buildActionMask=214748364
 proxy = add('testProxy','PBXContainerItemProxy',containerPortal=uid('project'),proxyType=1,remoteGlobalIDString=target,remoteInfo='Mural')
 dependency=add('testDependency','PBXTargetDependency',target=target,targetProxy=proxy)
 testTarget=add('testTarget','PBXNativeTarget',buildConfigurationList=configs('tests',{'MURAL_TEST_BUNDLE_IDENTIFIER':'no.william.mural.uitests','PRODUCT_BUNDLE_IDENTIFIER':'$(MURAL_TEST_BUNDLE_IDENTIFIER)','PRODUCT_NAME':'$(TARGET_NAME)','GENERATE_INFOPLIST_FILE':'YES','TEST_TARGET_NAME':'Mural','TARGETED_DEVICE_FAMILY':'1','CODE_SIGN_STYLE':'Automatic'}),buildPhases=[testSources],buildRules=[],dependencies=[dependency],name='MuralUITests',productName='MuralUITests',productReference=testProduct,productType='com.apple.product-type.bundle.ui-testing')
-project=add('project','PBXProject',attributes={'BuildIndependentTargetsInParallel':'YES','LastUpgradeCheck':'2640','TargetAttributes':{target:{'CreatedOnToolsVersion':'26.4'},testTarget:{'CreatedOnToolsVersion':'26.4','TestTargetID':target}}},buildConfigurationList=configs('project',common),compatibilityVersion='Xcode 14.0',developmentRegion='en',hasScannedForEncodings=0,knownRegions=['en','nb','Base'],mainGroup=group,packageReferences=[corePackage,rtcPackage,asrPackage,whisperPackage],productRefGroup=products,projectDirPath='',projectRoot='',targets=[target,testTarget])
-folder=root/'Mural.xcodeproj';folder.mkdir(exist_ok=True)
+project=add('project','PBXProject',attributes={'BuildIndependentTargetsInParallel':'YES','LastUpgradeCheck':'2640','TargetAttributes':{target:{'CreatedOnToolsVersion':'26.4'},testTarget:{'CreatedOnToolsVersion':'26.4','TestTargetID':target}}},buildConfigurationList=configs('project',common),compatibilityVersion='Xcode 14.0',developmentRegion='en',hasScannedForEncodings=0,knownRegions=['en','nb','Base'],mainGroup=group,packageReferences=[corePackage,rtcPackage,asrPackage,whisperPackage],productRefGroup=products,projectDirPath=str(root) if output != root else '',projectRoot='',targets=[target,testTarget])
+folder=output/'Mural.xcodeproj';folder.mkdir(parents=True, exist_ok=True)
+if output != root:
+    resolved = Path('project.xcworkspace/xcshareddata/swiftpm/Package.resolved')
+    (folder/resolved).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(root/'Mural.xcodeproj'/resolved, folder/resolved)
 folder.joinpath('project.pbxproj').write_text('// !$*UTF8*$!\n'+encode({'archiveVersion':1,'classes':{},'objectVersion':60,'objects':objects,'rootObject':project})+'\n')
 scheme=folder/'xcshareddata'/'xcschemes';scheme.mkdir(parents=True,exist_ok=True)
+container = str(folder) if output != root else 'Mural.xcodeproj'
 scheme.joinpath('Mural.xcscheme').write_text(f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2640" version="1.3">
-<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="Mural.app" BlueprintName="Mural" ReferencedContainer="container:Mural.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction>
-<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{testTarget}" BuildableName="MuralUITests.xctest" BlueprintName="MuralUITests" ReferencedContainer="container:Mural.xcodeproj"/></TestableReference></Testables></TestAction>
-<LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="Mural.app" BlueprintName="Mural" ReferencedContainer="container:Mural.xcodeproj"/></BuildableProductRunnable></LaunchAction>
+<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="Mural.app" BlueprintName="Mural" ReferencedContainer="container:{container}"/></BuildActionEntry></BuildActionEntries></BuildAction>
+<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{testTarget}" BuildableName="MuralUITests.xctest" BlueprintName="MuralUITests" ReferencedContainer="container:{container}"/></TestableReference></Testables></TestAction>
+<LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{target}" BuildableName="Mural.app" BlueprintName="Mural" ReferencedContainer="container:{container}"/></BuildableProductRunnable></LaunchAction>
 <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"/>
 <AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>''')

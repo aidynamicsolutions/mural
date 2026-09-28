@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
@@ -21,6 +22,7 @@ import subprocess
 import sys
 import time
 import uuid
+import wave
 
 from verify_simulator import Interrupted, interrupted, stop_group, write_json
 
@@ -72,6 +74,45 @@ def playback_ack_token(log, run, index, playback):
     return token
 
 
+def reviewed_fixture(manifest, clip_id):
+    """Validate a reviewer-frozen PCM clip without playing audio or contacting a phone."""
+    manifest = manifest.resolve()
+    raw = manifest.read_bytes()
+    data = json.loads(raw)
+    matches = [clip for clip in data["clips"] if clip.get("id") == clip_id]
+    if len(matches) != 1:
+        raise ValueError("Require one explicitly selected fixture")
+    clip = matches[0]
+    review_fields = (clip.get("reviewer"), clip.get("reference"), data.get("scoring"))
+    if (clip.get("reviewed") is not True
+            or any(not isinstance(value, str) or not value.strip() for value in review_fields)):
+        raise ValueError("Fixture reference, reviewer and scoring must be frozen before inference")
+    path = (manifest.parent / clip["file"]).resolve()
+    if not path.is_relative_to(manifest.parent):
+        raise ValueError("Fixture path escapes the reviewed packet")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != clip["sha256"]:
+        raise ValueError("Reviewed fixture bytes changed")
+    with wave.open(str(path), "rb") as audio:
+        if audio.getnchannels() != 1 or audio.getsampwidth() != 2 or audio.getcomptype() != "NONE":
+            raise ValueError("Require reviewed mono PCM16 participant audio")
+        rate, frames = audio.getframerate(), audio.getnframes()
+        if len(audio.readframes(frames)) != frames * 2:
+            raise ValueError("Truncated PCM fixture")
+    duration = frames / rate
+    declared = clip.get("duration_seconds")
+    if (not isinstance(declared, (int, float)) or not math.isfinite(declared)
+            or duration <= 0 or abs(duration - declared) > 1 / rate):
+        raise ValueError("Fixture duration differs from frozen frame boundaries")
+    playback = math.ceil(duration + 3)
+    acknowledgment = playback + 7  # Six-second host copy bound plus trailing margin.
+    if 5 + acknowledgment + 2 > 30:  # Fresh capture/UI gate and Send headroom.
+        raise ValueError("Fixture budgets exceed the existing 30-second recording cap")
+    return {**clip, "file": str(path), "duration_seconds": duration,
+            "manifest_sha256": hashlib.sha256(raw).hexdigest(), "scoring": data["scoring"],
+            "playback_timeout_seconds": playback, "ack_timeout_seconds": acknowledgment,
+            "trailing_margin_seconds": 0.75}
+
+
 def consumed_ack_copy(copy_log, test_log, run, index, token):
     # devicectl stats the destination after writing; XCTest can already have
     # consumed/unlinked it. Prove exact nonce delivery, never forgive other errors.
@@ -89,8 +130,8 @@ def validate_request(udid, stage, ready, pair="vi-en"):
         raise ValueError("Unknown physical stage")
     if pair not in ("vi-en", "zh-CN-en"):
         raise ValueError("Unknown physical test pair")
-    if pair == "zh-CN-en" and stage != "pair-check":
-        raise ValueError("FireRed native continuation is blocked; only model-free pair-check is available")
+    if pair == "zh-CN-en" and stage not in ("prepare", "pair-check"):
+        raise ValueError("FireRed native continuation is blocked; only build preparation and model-free pair-check are available")
     if stage not in ("prepare", "status") and not ready:
         raise ValueError("Confirm the private audible window, idle phone and closed mirroring, then set DEVICE_READY=YES")
 
@@ -190,11 +231,14 @@ def run_bounded(command, log, timeout, env=None, monitor=None, on_stop=None):
                     signal.signal(sig, handler)
 
 
-def input_identity(derived):
+def input_identity(derived, firered=False):
     # Hash build inputs and executable artifacts, not phone data/model caches.
     paths = subprocess.check_output(["git", "ls-files", "-z", "App", "Core", "Sources", "Config", "UITests",
                                      "Mural.xcodeproj", "Package.swift", "Package.resolved"], cwd=ROOT).decode().split("\0")
     paths += ["scripts/generate_project.py", "Config/Local.xcconfig"]
+    if firered:
+        paths += [str(p.relative_to(ROOT)) for p in (ROOT / "Tools/ChineseASR/FireRedProbe").glob("Probe.*")]
+        paths += ["Tools/ChineseASR/FireRedProbe/pin.json"]
     source = hashlib.sha256()
     for name in sorted(set(filter(None, paths))):
         path = ROOT / name
@@ -205,8 +249,26 @@ def input_identity(derived):
                  products / "MuralUITests-Runner.app/MuralUITests-Runner",
                  products / "MuralUITests-Runner.app/PlugIns/MuralUITests.xctest/MuralUITests"]
     artifacts += sorted((derived / "Build/Products").glob("Mural_iphoneos*.xctestrun"))
-    return {"source_sha256": source.hexdigest(), "artifacts": {
+    identity = {"source_sha256": source.hexdigest(), "artifacts": {
         str(path.relative_to(derived)): hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}}
+    if firered:
+        runtime = ROOT / ".build/firered"
+        native = sorted((runtime / "ios-build/lib").glob("*.a"))
+        framework = runtime / "ort-ios/onnxruntime.xcframework/ios-arm64/onnxruntime.framework"
+        native += [framework / "onnxruntime", framework / "Info.plist"]
+        native += sorted((framework / "Headers").glob("*.h"))
+        native += [runtime / "sherpa-onnx/sherpa-onnx/c-api/c-api.h"]
+        if len(list((runtime / "ios-build/lib").glob("*.a"))) != 9:
+            raise ValueError("Expected the nine reviewed FireRed static libraries")
+        identity["native_inputs"] = {}
+        for path in native:
+            with path.open("rb") as file:
+                identity["native_inputs"][str(path.relative_to(ROOT))] = hashlib.file_digest(file, "sha256").hexdigest()
+        pin = derived / "Build/Products/Release-iphoneos/Mural.app/pin.json"
+        if pin.read_bytes() != (ROOT / "Tools/ChineseASR/FireRedProbe/pin.json").read_bytes():
+            raise ValueError("Bundled FireRed pin differs from reviewed source")
+        identity["artifacts"][str(pin.relative_to(derived))] = hashlib.sha256(pin.read_bytes()).hexdigest()
+    return identity
 
 
 def idle_process(processes, app_url, pid):
@@ -251,7 +313,7 @@ def runtime_test_plan(source, environment):
     return plan
 
 
-def compiler_proof(build_log, identity, receipts):
+def compiler_proof(build_log, identity, receipts, firered=False):
     app_hash = identity["artifacts"][APP_EXECUTABLE]
     logs = [(build_log, False)]
     for receipt in receipts:
@@ -266,11 +328,18 @@ def compiler_proof(build_log, identity, receipts):
     for path, reused in logs:
         if not path.is_file():
             continue
+        compiler = linker = None
         with path.open() as file:
             for line in file:
-                if "swiftc -module-name Mural " in line and "-D MURAL_COREAI_TALK" in line:
-                    return {"app_sha256": app_hash, "log": str(path), "compiler_command": line.strip(),
-                            "reused_from": str(path) if reused else None}
+                if ("swiftc -module-name Mural " in line and "-D MURAL_COREAI_TALK" in line
+                        and (not firered or re.search(r"-D ?MURAL_FIRERED_FILE_PROBE\b", line))):
+                    compiler = line.strip()
+                if ("clang++ " in line and " -lsherpa-onnx-c-api " in line
+                        and " -framework onnxruntime " in line and line.rstrip().endswith("/Mural.app/Mural")):
+                    linker = line.strip()
+        if compiler and (not firered or linker):
+            return {"app_sha256": app_hash, "log": str(path), "compiler_command": compiler,
+                    "linker_command": linker, "reused_from": str(path) if reused else None}
     raise ValueError("No actual Core AI compiler invocation proves these executable bytes; requested flags alone are insufficient")
 
 
@@ -315,8 +384,17 @@ def device_json(arguments, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check"), default=os.environ.get("DEVICE_STAGE", "prepare"))
+    parser.add_argument("--check-fixture", type=Path, help="Validate a frozen review manifest only; no phone or playback")
+    parser.add_argument("--clip", help="Explicit clip ID for --check-fixture")
     parser.add_argument("--report", type=Path, nargs="?", const=Path("latest"), help="Summarize saved evidence (latest by default); no device operations")
     args = parser.parse_args()
+    if args.check_fixture:
+        if not args.clip or args.report:
+            raise ValueError("Fixture check requires --clip and cannot be combined with --report")
+        print(json.dumps(reviewed_fixture(args.check_fixture, args.clip), ensure_ascii=False, indent=2))
+        return 0
+    if args.clip:
+        raise ValueError("--clip requires --check-fixture")
     if args.report:
         if args.report == Path("latest"):
             runs = list(EVIDENCE_ROOT.glob("*/session.json"))
@@ -336,7 +414,10 @@ def main():
                     f".build/verification/physical-iphone-e2e/{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}").resolve()
     evidence.mkdir(parents=True, exist_ok=False)
     print(f"Physical {args.stage}: {evidence}", flush=True)
-    derived = (ROOT / ".build/local-mvp-phase-1-device-derived-data").resolve()
+    # Native preparation cannot overwrite the qualified ordinary app/runner.
+    firered = pair == "zh-CN-en" and args.stage == "prepare"
+    derived = (ROOT / (".build/firered-talk-device-derived-data" if firered else
+                       ".build/local-mvp-phase-1-device-derived-data")).resolve()
     derived.mkdir(parents=True, exist_ok=True)
     locks = Path(pwd.getpwuid(os.getuid()).pw_dir) / "Library/Caches/ios-verification"
     locks.mkdir(parents=True, exist_ok=True)
@@ -356,7 +437,10 @@ def main():
     code = 1
     cleanup_errors = []
     with ExitStack() as stack:
-        for path in (locks / f"{udid}.lock", derived / ".mural-build.lock"):
+        lock_paths = [locks / f"{udid}.lock", derived / ".mural-build.lock"]
+        if firered:
+            lock_paths.append(ROOT / ".build/local-mvp-phase-1-device-derived-data/.mural-build.lock")
+        for path in lock_paths:
             lock = stack.enter_context(path.open("a+"))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             lock.seek(0); lock.truncate(); json.dump(session, lock); lock.flush()
@@ -382,11 +466,21 @@ def main():
             (evidence / "source.txt").write_text(subprocess.check_output(
                 ["git", "status", "--short", "--branch"], text=True) + subprocess.check_output(["git", "rev-parse", "HEAD"], text=True))
             (evidence / "implementation.diff").write_bytes(subprocess.check_output(["git", "diff"]))
-            base = ["xcodebuild", "-project", "Mural.xcodeproj", "-scheme", "Mural", "-configuration", "Release",
+            project = ROOT / "Mural.xcodeproj"
+            if firered:
+                # Isolated generation avoids exposing probe flags to concurrent ordinary builds.
+                run_bounded([sys.executable, "scripts/generate_project.py", "--firered-file-probe",
+                             "--output-directory", str(evidence / "native-project")],
+                            evidence / "generation.log", 30)
+                project = evidence / "native-project/Mural.xcodeproj"
+            base = ["xcodebuild", "-project", str(project), "-scheme", "Mural", "-configuration", "Release",
                     "-destination", f"platform=iOS,id={udid}", "-destination-timeout", "30", "-derivedDataPath", str(derived),
                     f"MURAL_APP_BUNDLE_IDENTIFIER={APP_ID}", f"MURAL_TEST_BUNDLE_IDENTIFIER={TEST_ID}",
                     "OTHER_SWIFT_FLAGS=$(inherited) -D MURAL_COREAI_TALK", "-allowProvisioningUpdates", "-parallel-testing-enabled", "NO",
                     "-only-testing:MuralUITests/MuralPhysicalDeviceTests/testNativeBaseline"]
+            if firered:
+                base += ["-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
+                         "-clonedSourcePackagesDirPath", str(ROOT / ".build/local-mvp-phase-1-device-derived-data/SourcePackages")]
             if args.stage == "prepare":
                 command = base + ["build-for-testing"]
                 pipeline = shlex.join(command) + " 2>&1 | tee " + shlex.quote(str(evidence / "build.log")) + " | xcbeautify --is-ci"
@@ -394,9 +488,15 @@ def main():
                 phases.append(("signed_build", time.monotonic()))
                 run_bounded(["bash", "-o", "pipefail", "-c", pipeline], evidence / "build-formatted.log", 900)
                 phases.append(("artifact_validation", time.monotonic()))
-                identity = input_identity(derived)
+                identity = input_identity(derived, firered=firered)
                 receipts = sorted(EVIDENCE_ROOT.glob("*/prepared.json"), reverse=True)
-                proof = compiler_proof(evidence / "build.log", identity, receipts)
+                proof = compiler_proof(evidence / "build.log", identity, receipts, firered=firered)
+                if firered:
+                    symbols = subprocess.check_output(["nm", "-gU", str(derived / APP_EXECUTABLE)], text=True, timeout=30)
+                    (evidence / "native-symbols.txt").write_text(symbols)
+                    for symbol in ("_SherpaOnnxCreateOfflineRecognizer", "_SherpaOnnxDecodeOfflineStream", "_OrtGetApiBase"):
+                        if not re.search(rf"\bT {re.escape(symbol)}$", symbols, re.MULTILINE):
+                            raise ValueError(f"Required linked native symbol missing: {symbol}")
                 write_json(evidence / "compiler-proof.json", proof)
                 if proof["reused_from"]:
                     print("Incremental build: reused compiler proof for identical app executable bytes", flush=True)
@@ -406,7 +506,8 @@ def main():
                         if plistlib.load(file)["CFBundleIdentifier"] != expected:
                             raise ValueError(f"Incorrect signed bundle identity: {relative}")
                     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(products / relative)], check=True, timeout=30)
-                write_json(evidence / "prepared.json", {"udid": udid, "identity": identity})
+                write_json(evidence / "prepared.json", {"udid": udid, "identity": identity,
+                    "variant": "firered-coreai" if firered else "coreai", "derived": str(derived)})
                 write_json(evidence / "result.json", {"build": "PASS", "native_control": "NOT RUN", "models": "NOT RUN"})
             elif args.stage in ("status", "stop-idle"):
                 rows = device_json(["device", "info", "processes", "--device", udid, "--search", "Mural"], evidence / "phone-processes.json")["runningProcesses"]
