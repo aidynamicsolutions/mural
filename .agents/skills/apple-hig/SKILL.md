@@ -1,92 +1,86 @@
 ---
 name: apple-hig
 description: >
-  Apple Human Interface Guidelines reference (Updated for OS 27 releases).
-  Provides authoritative
-  platform-specific design rules, component specifications, exact
-  measurements, and interaction patterns for iOS, iPadOS, macOS, tvOS,
-  visionOS, and watchOS. Use when designing, reviewing, or auditing any
-  Apple platform UI, or when asked about specific HIG components,
-  sizing, system behaviors, frameworks (HealthKit, SiriKit, ARKit, etc.),
-  or platform conventions. Also use when the user is designing any
-  digital interface and could benefit from established design principles,
-  even without an explicit Apple platform context.
+  Apply Apple Human Interface Guidelines when designing, implementing, or
+  reviewing Apple-platform UI. Includes a compact foundation and task-specific
+  references for iOS, iPadOS, macOS, tvOS, visionOS, and watchOS, updated for
+  OS 27 releases. Use for platform conventions, accessibility, layout, controls,
+  and design questions; load detailed guidance according to the affected UI,
+  not incidental words in the app's domain.
 ---
 
-# Apple HIG Skill
+# Apple HIG
 
-Reference 156 distilled HIG files in `distilled/` via the routing index at `routing-index.md`.
+Apply the foundation below to UI work. Use the references to resolve relevant
+questions, not as a mandatory reading sequence. Non-UI work needs HIG detail
+only when it changes a user-facing contract.
 
-## Loading Protocol
+## Foundation
 
-### Step 1 — Parse Task Context
+- Prefer familiar native controls and platform behavior. Make hierarchy,
+  action labels, feedback, and recovery clear. Keep destructive actions
+  distinguishable and protect people from accidental data loss.
+  References: [design principles](distilled/design-principles.md),
+  [buttons](distilled/buttons.md), [feedback](distilled/feedback.md).
+- Preserve accessible names, roles, values, states, and interaction alternatives.
+  Do not rely on color alone. A control's visible outline, layout bounds,
+  accessibility frame, and effective hit region are not interchangeable.
+  References: [accessibility](distilled/accessibility.md),
+  [VoiceOver](distilled/voiceover.md).
+- Support readable, adaptable text and layout, including Dynamic Type,
+  localization, right-to-left content, safe areas, and available window space.
+  References: [typography](distilled/typography.md), [layout](distilled/layout.md),
+  [right-to-left](distilled/right-to-left.md).
+- Use system-aware colors and materials, with sufficient contrast across
+  applicable appearances. Respect accessibility preferences such as Reduce
+  Motion and reduced transparency when the affected presentation uses them.
+  References: [color](distilled/color.md), [materials](distilled/materials.md),
+  [dark mode](distilled/dark-mode.md), [motion](distilled/motion.md).
+- Request sensitive access in context, explain its purpose, and preserve user
+  control. Apply privacy guidance when the feature handles sensitive data or
+  permissions, not merely because the app belongs to a particular category.
+  Reference: [privacy](distilled/privacy.md).
 
-From the user's request, identify:
-- **Platform(s):** ios / ipados / macos / tvos / visionos / watchos
-- **Components or patterns** mentioned (buttons, tab bars, sheets, etc.)
-- **Frameworks or SDKs** referenced (HealthKit, SiriKit, ARKit, etc.)
-- **Task type:** design / review / spec / audit / guidance
+These are review principles, not a requirement to open every linked file or
+redesign unaffected parts of the app.
 
-### Step 2 — Load Tier 1 (always, every invocation)
+## Select relevant detail
 
-Read all 16 files listed in `routing-index.md` under `## tier-1`:
+- Identify the affected platform, component, interaction, and uncertainty from
+  the request and implementation. A spacing edit and a navigation redesign
+  need different depth even if both involve the same screen.
+- Search [routing-index.md](routing-index.md) or go directly to a known relevant
+  file in `distilled/`. Tiers and keyword matches identify candidates, not
+  mandatory loads. Check the file's `platforms` and the applicable section
+  before applying its advice.
+- Load relevant sections and expand when a decision, risk, or dependency needs
+  more context. Treat `related:` entries as optional leads, not automatic
+  expansion. Incidental words such as "exercise" do not require workout,
+  HealthKit, or Digital Crown guidance for an ordinary iPhone button change.
+- Reuse guidance still available and applicable in context. Retrieve missing,
+  changed, or uncertain guidance as needed instead of rereading a fixed bundle
+  on every turn. There is no fixed reference quota: a broad audit or cross-platform
+  feature can warrant broad reading.
 
-`accessibility`, `branding`, `color`, `dark-mode`, `design-principles`,
-`icons`, `images`, `inclusion`, `layout`, `materials`, `motion`,
-`privacy`, `right-to-left`, `sf-symbols`, `typography`, `writing`
+## Apply guidance accurately
 
-These apply universally. Load them before answering.
+- Preserve platform, OS availability, input method, and measurement context.
+  Distinguish visible spacing from hit-region padding, defaults from minimums,
+  and recommendations from requirements. Do not present a project design
+  choice as an Apple mandate.
+- When citing a numeric rule or API, identify its applicable source and use its
+  actual value and qualifiers. Do not infer a universal constant from an
+  approximate or platform-specific example.
+- Distilled files are summaries. If they conflict, omit relevant context, or
+  cannot substantiate a consequential decision, check the primary Apple source
+  using [sosumi-docs](../sosumi-docs/SKILL.md). State uncertainty rather than
+  inventing a rule. Source checks should answer the unresolved question, not
+  start an unrelated documentation sweep.
+- Verify the changed UI with the project's verification skill. Reading HIG is
+  design input, not evidence that the implementation looks or behaves correctly.
 
-### Step 3 — Load Platform File (Tier 2)
+## Maintaining the index
 
-Read `routing-index.md` → `## tier-2 platform-map`.
-For each detected platform, load its `designing-for-[platform]` file.
-If "game" or "gaming" is mentioned, also load `designing-for-games`.
-
-### Step 4 — Keyword Scan (Tier 3)
-
-Read `routing-index.md` → `## tier-3 trigger-map`.
-Normalize the user request to lowercase. Match trigger strings as
-standalone words, phrases, or API symbols; never match a trigger merely
-because it appears inside an unrelated word. For example, `AR` doesn't
-match "tab bar," and `AI` doesn't match "explain." Load every matching
-file. Load each file at most once.
-
-### Step 5 — Related Expansion
-
-For each **tier-2 and tier-3** file loaded, read its `related:` frontmatter.
-Load any listed files not yet loaded — one hop only.
-
-### Step 6 — Tier 4 On-Demand
-
-Read `routing-index.md` → `## tier-4 trigger-map (on-demand)`.
-Use the same standalone word/phrase/API-symbol matching rule. Load a
-tier-4 file only on direct keyword match, or if named in a loaded file's
-`related:` list. These are niche — avoid loading broadly.
-
-### Step 7 — Answer
-
-Apply all loaded content. If a topic isn't covered by loaded files,
-name the specific file that would cover it and offer to load it.
-
----
-
-## Non-Negotiables
-
-- **Cite exact values.** State pt sizes, pixel densities, margins, and
-  timing values as they appear in the distilled files. Never approximate.
-- **Distinguish platforms.** When behavior differs across platforms,
-  state each platform's rule explicitly. Never flatten to "generally."
-- **No invention.** Every rule, measurement, and API name must trace to
-  a loaded distilled file. If unsure, say so and name the source file.
-- **Terse and direct.** This is a reference skill, not a tutorial.
-  No pedagogical framing. State the rule.
-
----
-
-## File Locations
-
-- Distilled reference files: `distilled/[topic].md`
-- Routing index: `routing-index.md`
-- Frontmatter schema: each distilled file contains `topic`, `tier`,
-  `platforms`, `category`, `triggers`, and `related` fields.
+`routing-index.md` is generated from distilled frontmatter. Change
+`scripts/generate_routing_index.py` or the relevant frontmatter, then regenerate;
+never edit the generated index by hand.

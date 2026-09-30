@@ -2,7 +2,9 @@
 
 _Auto-generated from frontmatter by `scripts/generate_routing_index.py`. Do not edit manually._
 
-## tier-1 (always load)
+Topic candidates, not a reading checklist. Apply the task and platform filters in [SKILL.md](SKILL.md); follow related links only when relevant.
+
+## tier-1 foundation references (on demand)
 
 accessibility, branding, color, dark-mode, design-principles, icons, images, inclusion, layout, materials, motion, privacy, right-to-left, sf-symbols, typography, writing
 

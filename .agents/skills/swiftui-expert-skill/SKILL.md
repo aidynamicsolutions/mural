@@ -8,33 +8,34 @@ description: Use when writing, reviewing, or refactoring SwiftUI code for iOS or
 
 ## Operating Rules
 
-- Consult `references/latest-apis.md` at the start of every task to avoid deprecated APIs
+- Consult relevant sections of `references/latest-apis.md` when choosing, replacing, or checking an uncertain API. Reuse applicable guidance already in context; no whole-file read is required for unrelated edits
 - Prefer native SwiftUI APIs over UIKit/AppKit bridging unless bridging is necessary
 - Focus on correctness and performance; do not enforce specific architectures (MVVM, VIPER, etc.)
 - Encourage separating business logic from views for testability without mandating how
-- Follow Apple's Human Interface Guidelines and API design patterns
+- Apply the compact foundation in [apple-hig](../apple-hig/SKILL.md) and Apple's API design patterns; load detailed HIG references for the affected platform, component and unresolved questions
 - Only adopt Liquid Glass when explicitly requested by the user (see `references/liquid-glass.md`)
 - Present performance optimizations as suggestions, not requirements
 - Use `#available` gating with sensible fallbacks for version-specific APIs
 
 ## Task Workflow
 
+Scope guidance and checks to the requested outcome, affected code and relevant risks. The router and checklist are aids, not a mandatory audit of every topic. Expand when a dependency, uncertainty or observed defect warrants it; do not refactor unrelated code merely because a pattern appears nearby.
+
 ### Review existing SwiftUI code
-- Read the code under review and identify which topics apply
-- Flag deprecated APIs (compare against `references/latest-apis.md`)
-- Run the Topic Router below for each relevant topic
-- Validate `#available` gating and fallback paths for iOS 26+ features
+- Read the code under review and identify applicable risks and topics
+- Check API availability or deprecation where relevant; distinguish hard deprecation from informational soft deprecation
+- Use the Topic Router to resolve relevant questions, reusing guidance still available and applicable
+- Validate availability gating and fallback paths against the deployment target when affected
 
 ### Improve existing SwiftUI code
-- Audit current implementation against the Topic Router topics
-- Replace deprecated APIs with modern equivalents from `references/latest-apis.md`
-- Refactor hot paths to reduce unnecessary state updates
-- Extract complex view bodies into separate subviews
-- Suggest image downsampling when `UIImage(data:)` is encountered (optional optimization, see `references/image-optimization.md`)
+- Inspect the affected implementation and select references needed for the change
+- Prefer current APIs for new code; check hard-deprecated usage in the changed path and follow `references/soft-deprecation.md` for existing soft-deprecated APIs. Do not bundle unrelated migrations into a feature or bug fix
+- Refactor hot paths or extract subviews when needed for the requested behavior, maintainability, or an evidenced performance issue, not as automatic extra work
+- Investigate image downsampling when image size or decoding is relevant to an observed issue (see `references/image-optimization.md`)
 
 ### Implement new SwiftUI feature
 - Design data flow first: identify owned vs injected state
-- Structure views for optimal diffing (extract subviews early)
+- Structure views with clear ownership and identity; extract subviews where they clarify the feature or isolate meaningful updates
 - Apply correct animation patterns (implicit vs explicit, transitions)
 - Use `Button` for all tappable elements; add accessibility grouping and labels
 - Gate version-specific APIs with `#available` and provide fallbacks
@@ -90,7 +91,7 @@ Full reference: `references/trace-analysis.md`. Summary of the composition patte
 
 ### Topic Router
 
-Consult the reference file for each topic relevant to the current task:
+Consult relevant sections when they answer a question or inform an affected risk. These links are candidates, not a reading checklist:
 
 | Topic | Reference |
 |-------|-----------|
@@ -123,7 +124,7 @@ Consult the reference file for each topic relevant to the current task:
 
 ## Correctness Checklist
 
-These are hard rules -- violations are always bugs:
+Review applicable items in the affected code. Consider ownership, deployment target and actual behavior before treating a pattern as a defect; this checklist does not require a whole-feature audit:
 
 - [ ] `@State` properties are `private`
 - [ ] `@Binding` only where a child modifies parent state
@@ -143,7 +144,7 @@ These are hard rules -- violations are always bugs:
 
 ## References
 
-- `references/latest-apis.md` -- **Read first for every task.** Deprecated-to-modern API transitions (iOS 15+ through iOS 26+)
+- `references/latest-apis.md` -- On-demand deprecated-to-modern API lookup (iOS 15+ through iOS 26+)
 - `references/state-management.md` -- Property wrappers, data flow, `@Observable` migration
 - `references/view-structure.md` -- View extraction, container patterns, `@ViewBuilder`
 - `references/performance-patterns.md` -- Hot-path optimization, update control, `_logChanges()`

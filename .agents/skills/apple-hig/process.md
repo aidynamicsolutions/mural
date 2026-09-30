@@ -6,7 +6,7 @@ This document is the operating procedure for updating this skill against the cur
 
 - Initial repository corpus: 150 distilled files in `distilled/`.
 - Current working corpus: 156 distilled files in `distilled/` after adding verified current-source topics.
-- Existing skill contract: `SKILL.md` loads tier 1 foundations, platform files, trigger matches, one-hop related files, then on-demand niche files.
+- Current local skill contract: `SKILL.md` supplies a compact foundation, then task/platform-specific lookups. Tiers, trigger matches and related links are candidates, not mandatory loads. Corpus refreshes must preserve this selective policy rather than restore the historical all-foundations/one-hop loading protocol.
 - Existing distillation standard: about 75% compression while preserving measurements, API names, platform differences, do/do-not directives, and specific behavioral rules.
 - Apple source root: `https://developer.apple.com/design/human-interface-guidelines/`.
 - Apple JSON root: `https://developer.apple.com/tutorials/data/design/human-interface-guidelines.json`.
@@ -159,7 +159,7 @@ Each verifier checks:
 - Source coverage: no substantive rule, exact value, API, platform distinction, or prohibition was lost.
 - Compression quality: file is distilled, not bloated or tutorial-like.
 - Trigger quality: likely user requests route to the file.
-- Related quality: one-hop expansion would load necessary adjacent context.
+- Related quality: optional links expose useful adjacent context when the task warrants it, without requiring automatic expansion.
 - Drift risk: no stale guidance from the old file remains if Apple changed it.
 
 Verification outcomes:

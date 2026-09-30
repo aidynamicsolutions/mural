@@ -1,5 +1,7 @@
 # apple-hig
 
+This project copy uses the task-selective policy in [SKILL.md](SKILL.md). The reference corpus is retained; upstream installation/packaging notes below are not instructions to replace local policy or reload the full corpus.
+
 [![Watch the demo](https://img.youtube.com/vi/UGaSV21ff18/maxresdefault.jpg)](https://www.youtube.com/watch?v=UGaSV21ff18)
 
 ## Copy-Paste Install Prompt
@@ -25,7 +27,7 @@ This branch updates the skill against the Apple Human Interface Guidelines corpu
 Highlights:
 
 - 156 distilled HIG topic files
-- 16 tier-1 foundation files loaded on every invocation
+- 16 detailed foundation references, available on demand behind the compact foundation in `SKILL.md`
 - Restored Design Principles coverage as a tier-1, easy-triggered reference
 - Updated routing index with 1,057 trigger keywords
 - Current-source review completed for every inventoried source page
@@ -35,7 +37,7 @@ Highlights:
 
 | Tier | Role | Count |
 |------|------|-------|
-| 1 | Foundations (always loaded) | 16 files |
+| 1 | Detailed foundations (on demand) | 16 files |
 | 2 | Platform overviews | 7 files |
 | 3 | Components, patterns, technologies | 103 files |
 | 4 | Niche and platform-specific controls | 30 files |
@@ -46,15 +48,13 @@ Platforms covered: iOS, iPadOS, macOS, tvOS, visionOS, watchOS.
 
 ## How It Works
 
-`SKILL.md` defines a 7-step loading protocol:
+[SKILL.md](SKILL.md) defines a compact foundation plus selective reference lookup:
 
-1. Parse the request for platform(s), component names, and framework references
-2. Load all 16 tier-1 foundation files (always, every invocation)
-3. Load the matching `designing-for-[platform]` file based on detected platform
-4. Keyword-scan the request against `routing-index.md` and load all tier-3 matches
-5. Expand one hop through each loaded file's `related:` frontmatter
-6. Load tier-4 files only on direct keyword match
-7. Answer citing exact values from loaded files
+- Apply the foundation to affected UI, without opening every foundation file.
+- Identify the actual platform, component, interaction and unresolved question.
+- Search the routing index or open a known relevant reference. Tiers, keyword matches and `related:` links identify candidates, not mandatory loads.
+- Read relevant sections and broaden when uncertainty or risk calls for it. Reuse guidance still available and applicable in context.
+- Preserve platform/availability and measurement qualifiers. Check primary Apple sources when a summary cannot substantiate a consequential decision.
 
 The `routing-index.md` file maps 1,057 trigger keywords to their corresponding reference files across all four tiers.
 
@@ -93,11 +93,11 @@ apple-hig/
 
 The packaging script writes forward-slash paths only, omits directory metadata, validates archive paths, and excludes hidden files, macOS resource forks, `sources/`, `scripts/`, `process.md`, `.gitignore`, raw Apple captures, rendered pages, caches, and git metadata. Those files are useful for repo review and future maintenance, but they are not required for an installed skill and should not be loaded by production agents.
 
-To test locally, unzip or install the `apple-hig/` folder into your agent skills directory, then ask Apple platform design questions that should trigger tier-1 foundations, platform files, and component-specific files.
+To test locally, ask Apple platform design questions that exercise the compact foundation and relevant platform/component lookups. Confirm incidental domain words do not trigger unrelated reading, while broad audits can still load broader guidance.
 
 ## Token Budget
 
-The floor cost per invocation is approximately 33,600 rough tokens (tier-1 files plus the routing index). Typical queries load 20 to 30 files and land between roughly 34,000 and 55,000 tokens, within a practical budget on a 200k context window.
+There is no required full-corpus or foundation-bundle load. Context use starts with `SKILL.md` and grows with the references needed for the question. The previous mandatory foundation/index policy had an estimated 33,600-token floor; that is historical overhead, not the current loading target. No fixed file quota applies to complex tasks.
 
 ## Distillation Method
 
