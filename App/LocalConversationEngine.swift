@@ -543,6 +543,9 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     override init() {
         super.init()
         logger.notice("local_talk_asr_backend backend=\(Self.conversationASRBackend, privacy: .public)")
+        #if MURAL_BREEZE_MEMORY_POC && !targetEnvironment(simulator)
+        logger.notice("breeze_memory_poc enabled=true thermal_stop_retained=true")
+        #endif
         synthesizer.delegate = self
         synthesizer.usesApplicationAudioSession = true
         memoryWarningObserver = NotificationCenter.default.addObserver(
@@ -551,10 +554,10 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     let previousState = self.asrState.rawValue
-                    self.stop()
+                    // A system warning alone must not interrupt Talk or discard its active
+                    // recording/model work. Actual sampled memory and thermal stops remain separate.
                     VietnameseEnglishRecognizer.logMemory(stage: "memory-warning", model: self.asrModel.rawValue)
-                    self.logger.warning("asr_memory_warning stopped=true uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
-                    self.onSafetyStop?(.memoryPressure)
+                    self.logger.warning("asr_memory_warning stopped=false continuing=true model=\(self.asrModel.rawValue, privacy: .public) uptime=\(ProcessInfo.processInfo.systemUptime, privacy: .public) previous_state=\(previousState, privacy: .public) decoder_prewarm_active=\(self.stagedDecoderWarmupActive, privacy: .public)")
                 }
             }
     }
@@ -764,13 +767,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     static func conversationModel(for pair: LocalSpeechPair) throws -> ASRModel {
         switch pair {
         case .vietnameseEnglish: return .phoWhisper
-        case .taiwanMandarinEnglish: return .breeze
-        case .mainlandMandarinEnglish:
-            #if MURAL_FIRERED_RUNTIME
-            return .fireRed
-            #else
-            throw SpeechError.unavailableRecognizer("Simplified Chinese speech requires the FireRed development build. No other recognizer or cloud fallback was selected.")
-            #endif
+        case .taiwanMandarinEnglish, .mainlandMandarinEnglish: return .breeze
         }
     }
 
@@ -778,35 +775,25 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         switch pair {
         case .vietnameseEnglish: return conversationASRBackend
         case .taiwanMandarinEnglish: return "Breeze PAL8 · WhisperKit / Core ML"
-        case .mainlandMandarinEnglish:
-            return FireRedEnglishRecognizer.available
-                ? "FireRedASR2-AED INT8 · sherpa-onnx / ONNX Runtime · CPU, one thread (candidate)"
-                : "FireRedASR2-AED · not included in this build"
+        case .mainlandMandarinEnglish: return "Breeze PAL8 · Simplified display · raw recognition retained"
         }
     }
 
+    private var preparedConversationPair: LocalSpeechPair?
     var selectedConversationASRBackend: String {
-        guard let pair = asrModel.conversationPair else { return asrModel.rawValue }
+        guard let pair = preparedConversationPair ?? asrModel.conversationPair else { return asrModel.rawValue }
         return Self.backendDescription(for: pair)
     }
 
     func hasConversationAssets(for pair: LocalSpeechPair) throws -> Bool {
         _ = try Self.conversationModel(for: pair) // Reject an unavailable backend before resolving any assets.
         let manager = FileManager.default
-        if pair == .mainlandMandarinEnglish {
+        if pair.recognitionAssetPair == .taiwanMandarinEnglish {
             guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
-            // Only an atomically activated, pinned managed package is eligible. Never
-            // import/fall back to developer assets. Full hashes still precede native load.
-            guard let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") else { return false }
-            return SpeechPackagePins.fireRedFiles.allSatisfy {
-                manager.fileExists(atPath: folder.appending(path: URL(filePath: $0.path).lastPathComponent).path)
-            }
-        }
-        if pair == .taiwanMandarinEnglish {
-            guard try LocalSpeechProvisioning.hardware() == "iPhone18,3",
-                  ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
-            let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") ??
+            // Same location and full-verification owner as existing Traditional Chinese.
+            // Never touch active-zh-CN-en.json or load the retained FireRed package.
+            let folder = try LocalSpeechProvisioning.installedDirectory(for: .taiwanMandarinEnglish, component: "support") ??
                 URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(BreezeEnglishRecognizer.identity)")
             return manager.fileExists(atPath: folder.appending(path: "manifest.json").path)
         }
@@ -840,12 +827,13 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     }
 
     /// Await the existing single ASR owner, including its defer cleanup, before TTS.
-    func prepareConversation(model: ASRModel = .phoWhisper) async throws {
+    func prepareConversation(model: ASRModel = .phoWhisper, pair requestedPair: LocalSpeechPair? = nil) async throws {
         guard !FireRedEnglishRecognizer.provisioningOnly else {
             throw SpeechError.unavailableRecognizer("Native models are prohibited during download qualification.")
         }
         try await SpeechSetupReporting.checkAdmission()
-        guard let pair = model.conversationPair else { throw SpeechError.busy }
+        guard let pair = requestedPair ?? model.conversationPair,
+              try Self.conversationModel(for: pair) == model else { throw SpeechError.busy }
         rawASRText = ""
         preparationProgress = .init(.checkingVoice)
         if let warmup = stagedDecoderWarmup {
@@ -859,6 +847,11 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         guard canPrepare(model: model) else { throw SpeechError.busy }
         selectASR(model)
         guard asrModel == model else { throw SpeechError.busy }
+        preparedConversationPair = pair
+        // Fail before microphone readiness if the bundled script dictionaries are unavailable.
+        try await ChineseScriptRenderer.shared.prepare(for: pair)
+        try Task.checkCancellation()
+        try await SpeechSetupReporting.checkAdmission()
         logger.notice("local_talk_model_selected pair=\(pair.rawValue, privacy: .public) model=\(self.asrModel.rawValue, privacy: .public) backend=\(self.selectedConversationASRBackend, privacy: .public)")
         if pair != .vietnameseEnglish {
             stopForTTSSafety(footprint: 0, thermal: ttsThermalState)
@@ -925,6 +918,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     func selectASR(_ model: ASRModel) {
         guard !asrBusy, !speechBusy, !modelWorkDraining, model != asrModel else { return }
         stop() // Release weights, never delete either model's cached assets.
+        preparedConversationPair = nil
         asrModel = model; asrState = .idle
         asrText = ""; asrError = nil; asrNotice = nil
         preparationDetail = ""

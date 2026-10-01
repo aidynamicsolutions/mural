@@ -39,8 +39,14 @@ public enum LocalSpeechPair: String, Codable, CaseIterable, Sendable {
         switch self {
         case .vietnameseEnglish: "phowhisper"
         case .taiwanMandarinEnglish: "breeze-asr25-pal8-v1"
-        case .mainlandMandarinEnglish: "firered-v2-aed-int8"
+        case .mainlandMandarinEnglish: "breeze-asr25-pal8-v1"
         }
+    }
+
+    /// Both writing systems share the SAME verified Breeze files, not two loaded recognizers.
+    /// Keep the conversation/support pair (and its historical records) distinct from asset ownership.
+    public var recognitionAssetPair: LocalSpeechPair {
+        self == .mainlandMandarinEnglish ? .taiwanMandarinEnglish : self
     }
     public var conversationTitle: String {
         switch self {
@@ -55,7 +61,7 @@ public enum LocalSpeechPair: String, Codable, CaseIterable, Sendable {
         switch self {
         case .vietnameseEnglish: "vi-staged-coreai-fp8-pal8-g16-v1:validated-decoder-v1"
         case .taiwanMandarinEnglish: "breeze-asr25-pal8-v1:validated-eager-v1"
-        case .mainlandMandarinEnglish: "firered-v2-aed-int8:sherpa-1.13.8:ort-1.28.2:cpu-1:talk-candidate-v1"
+        case .mainlandMandarinEnglish: "breeze-asr25-pal8-v1:validated-eager-v1:tw2s-han-1d8105a0-v1"
         }
     }
 

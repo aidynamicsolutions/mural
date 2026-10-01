@@ -66,6 +66,13 @@ struct RootView: View {
             keepAwakeDuringPreparation(preparing)
         }
         .onDisappear { keepAwakeDuringPreparation(false) }
+        #if DEBUG && targetEnvironment(simulator)
+        .task {
+            if ProcessInfo.processInfo.arguments.contains("--preview-breeze-script") {
+                await coordinator.prepareBreezeSimplifiedPreview()
+            }
+        }
+        #endif
         #if DEBUG
         .task {
             if AudioVerification.requested { await AudioVerification.run(coordinator) }
@@ -190,6 +197,7 @@ struct TalkView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("A little help · \(coordinator.localSpeechPair.supportLanguage)").font(.caption)
                     Text(help).font(.subheadline).textSelection(.enabled)
+                        .accessibilityIdentifier("local-learning-assistance-text")
                 }.accessibilityIdentifier("local-learning-assistance")
             }
             if shouldShowWordHint {
@@ -199,7 +207,7 @@ struct TalkView: View {
             if let user = coordinator.userPassage {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("YOU").font(.system(.caption2, design: .rounded, weight: .medium))
-                    Text(coordinator.isLocal ? user.text : String(user.text.suffix(160))).font(.caption).textSelection(.enabled)
+                    Text(coordinator.isLocal ? user.displayText : String(user.text.suffix(160))).font(.caption).textSelection(.enabled)
                 }.foregroundStyle(MuralColor.secondary).multilineTextAlignment(.center).padding(.top, 3)
             }
             if coordinator.working { ProgressView("Checking that for you…").font(.caption).tint(MuralColor.secondary) }
@@ -516,9 +524,16 @@ struct LookupView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 20) {
                 Text(item.word).font(.system(.largeTitle, design: .rounded, weight: .medium))
+                    .accessibilityIdentifier("word-lookup-selected")
                 Text(item.sentence).font(.title3).foregroundStyle(MuralColor.secondary)
-                if let explanation { Text(explanation).font(.body).textSelection(.enabled) }
-                else if let error { Text(error).foregroundStyle(MuralColor.secondary) }
+                if let explanation {
+                    Text(explanation).font(.body).textSelection(.enabled)
+                        .accessibilityIdentifier("word-lookup-explanation")
+                }
+                else if let error {
+                    Text(error).foregroundStyle(MuralColor.secondary)
+                        .accessibilityIdentifier("word-lookup-error")
+                }
                 else { ProgressView("Finding the meaning…") }
                 Spacer()
             }.padding(28).frame(maxWidth: .infinity, alignment: .leading).background(MuralColor.cream)

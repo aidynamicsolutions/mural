@@ -1,6 +1,19 @@
 # Chinese-English ASR: two separate work items
 
-## Current Simplified Talk checkpoint, September 28
+## Breeze Simplified display: accepted MVP PoC
+
+The user selected reuse of Breeze for both Chinese writing modes. See
+[breeze-simplified-implementation-20260928.md](breeze-simplified-implementation-20260928.md)
+for the raw-preserving OpenCC display layer, shared-asset routing, patch checks and
+focused native acceptance. The user accepts live mixed speech, Simplified meanings/lookup/
+on-screen Help, English reply audio and stable ordinary turns on the installed build.
+Retained native raw/persistence/edit and real converter tests complement that smoke. This
+is a bounded Simplified MVP checkpoint, not broad accuracy/lifetime safety qualification;
+a fresh Traditional spoken session remains unchecked. See the document's MVP closeout.
+Use ordinary Breeze/paired verification, not the historical FireRed Chinese runner
+commands below. Preserve all old failed evidence and downloaded models.
+
+## Historical FireRed checkpoint, September 28
 
 Managed FireRed download/cancel/resume/integrity/activation is implemented and phone-verified within the existing installation. The runtime-only candidate remains opt-in. The approved native continuation received an iOS memory warning during recording before decode; no automatic retry or ordinary promotion. The user reports good brief native-Mandarin-speaker accuracy and now prioritizes memory reduction.
 

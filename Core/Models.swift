@@ -19,6 +19,9 @@ public struct Fragment: Codable, Identifiable, Equatable, Sendable {
     public var turnID: UUID?
     /// Exact recognizer result before display whitespace handling. Never replace with teaching text.
     public var rawASRText: String?
+    /// Derived display only. Canonical text, ASR bytes, roles and learning evidence are unchanged.
+    /// Optional so old backups remain readable; never retroactively generated from current Settings.
+    public var scriptPresentation: ChineseScriptPresentation?
     public var playbackStartMS: Int?
     public var playbackEndMS: Int?
     public var playbackCompleted: Bool?
@@ -161,6 +164,7 @@ public struct SessionRecord: Codable, Identifiable, Sendable {
     public mutating func correctFragment(id: String, text: String) {
         guard let index = fragments.firstIndex(where: { $0.id == id }) else { return }
         fragments[index].previousTexts.append(fragments[index].text)
+        fragments[index].scriptPresentation = nil // An explicit edit invalidates only the derived view.
         fragments[index].text = text; fragments[index].revision += 1
         translations.removeAll(); invalidateChangedAssessments()
     }
@@ -240,6 +244,7 @@ public struct Archive: Codable, Sendable {
             guard Set(s.fragments.map(\.id)).count == s.fragments.count,
                   s.fragments.allSatisfy({ $0.startMS >= 0 && $0.endMS >= $0.startMS && $0.text.count <= 50_000 &&
                       ($0.rawASRText.map { $0.count <= 50_000 } ?? true) &&
+                      ($0.scriptPresentation == nil || (s.localSpeechPair == .mainlandMandarinEnglish && $0.hasScriptPresentation)) &&
                       (0...1_000_000).contains($0.revision) && validDate($0.receivedAt) &&
                       ($0.playbackStartMS.map { $0 >= 0 } ?? true) &&
                       ($0.playbackEndMS == nil || ($0.playbackStartMS != nil && $0.playbackEndMS! >= $0.playbackStartMS!)) &&

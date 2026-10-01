@@ -35,7 +35,7 @@ import MuralCore
     }
     private var setupIdentity: SpeechSetupJob.Identity {
         let pair = selectedLocalSpeechPair
-        let package = SpeechPackageCatalog.entries.filter { $0.pair == pair }
+        let package = SpeechPackageCatalog.entries.filter { $0.pair == pair.recognitionAssetPair }
             .map { "\($0.id):\($0.manifestSHA256)" }.sorted().joined(separator: ";")
         return .init(pair: pair,
             preparationContract: pair.preparationContract,
@@ -79,7 +79,7 @@ import MuralCore
     private func shouldShowDetailedSpeechSetup(for pair: LocalSpeechPair) -> Bool {
         guard speechPreparationSucceeded(for: pair) else { return true }
         #if DEBUG && targetEnvironment(simulator)
-        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" { return false }
+        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" || speechSetupPreview == "memory-ceiling-drain" { return false }
         #endif
         do {
             if try !localAudio.hasConversationAssets(for: pair) { return true }
@@ -517,7 +517,7 @@ import MuralCore
         #if DEBUG && targetEnvironment(simulator)
         if let preview = speechSetupPreview, preview != "unavailable" {
             needsSpeechDownload = preview != "cached" && preview != "resume"
-                && preview != "memory-warning" && preview != "memory-warning-drain"
+                && preview != "memory-warning" && preview != "memory-warning-drain" && preview != "memory-ceiling-drain"
                 && !previewDownloadPublished
             return needsSpeechDownload ? SpeechDownloadOffer(recognitionBytes: 64_000_000,
                 recognitionStorageBytes: 128_000_000, availableBytes: 1_000_000_000, needsVoice: preview == "voice", needsSpeechDetection: false) : nil
@@ -670,7 +670,7 @@ import MuralCore
                                     }
                                     self.reportSetupProgress(.init(stage), jobID: jobID)
                                 }) {
-                                    try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair))
+                                    try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair), pair: pair)
                                 }
                             }
                         }
@@ -847,7 +847,24 @@ import MuralCore
                     self.localPhase = .ready
                     return
                 }
-                try self.appendLocal(text, speaker: .user, sessionID: id, rawASRText: self.localAudio.rawASRText)
+                // Persist the native result FIRST. Conversion cancellation/failure cannot lose speech.
+                let fragmentID = try self.appendLocal(text, speaker: .user, sessionID: id, rawASRText: self.localAudio.rawASRText)
+                let pair = self.localSpeechPair // Frozen session choice, not mutable Settings.
+                if pair == .mainlandMandarinEnglish {
+                    self.localPhase = .thinking
+                    let projection = try await ChineseScriptRenderer.shared.presentation(for: text, pair: pair)
+                    try self.checkLocal(id)
+                    guard UIApplication.shared.applicationState == .active,
+                          self.localSpeechPair == pair,
+                          let index = self.session?.fragments.firstIndex(where: { $0.id == fragmentID }),
+                          self.session?.fragments[index].text.utf8.elementsEqual(text.utf8) == true else {
+                        throw CancellationError()
+                    }
+                    self.session?.fragments[index].scriptPresentation = projection
+                    self.saveIfEligible()
+                    guard self.store.error == nil else { throw LocalPersistenceError.failed }
+                    self.localLogger.notice("breeze_script_display policy=tw2s-han-1d8105a0-v1 raw_preserved=true pair=zh-CN-en")
+                }
                 await self.replyLocal(sessionID: id)
             } catch {
                 guard !Task.isCancelled, self.session?.id == id, self.isRunning else { return }
@@ -1362,7 +1379,7 @@ import MuralCore
                   self.localPhase == .preparing, self.session?.id == id else { return }
             do {
                 #if DEBUG && targetEnvironment(simulator)
-                if self.speechSetupPreview == "resume" || self.speechSetupPreview == "memory-warning" || self.speechSetupPreview == "memory-warning-drain" {
+                if self.speechSetupPreview == "resume" || self.speechSetupPreview == "memory-warning" || self.speechSetupPreview == "memory-warning-drain" || self.speechSetupPreview == "memory-ceiling-drain" {
                     self.previewSetupProgress = .init(.preparingSpeech)
                     try await Task.sleep(for: .seconds(2))
                     try self.checkLocal(id)
@@ -1376,7 +1393,7 @@ import MuralCore
                     return
                 }
                 #endif
-                try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair))
+                try await self.localAudio.prepareConversation(model: LocalConversationEngine.conversationModel(for: pair), pair: pair)
                 try self.checkLocal(id)
                 self.markSpeechPreparationSucceeded(for: pair)
                 self.memoryPressurePaused = false
@@ -1417,6 +1434,41 @@ import MuralCore
         error = nil; notice = nil
         resumeLocal(allowingMemoryPressureResume: true)
     }
+    #if DEBUG && targetEnvironment(simulator)
+    /// Existing --preview creates an in-memory LearningStore. Exercise the REAL script
+    /// converter, archive codec and transcript views; this is not microphone/ASR evidence.
+    func prepareBreezeSimplifiedPreview() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("--preview"), args.contains("--preview-breeze-script"), !localResourcesBusy else { return }
+        do {
+            let raw = "  後天 book a flight，謝謝！怎么 API\n"
+            var spoken = Fragment(speaker: .user, text: raw.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  startMS: 2, endMS: 3, turnID: UUID())
+            spoken.rawASRText = raw
+            spoken.scriptPresentation = try await ChineseScriptRenderer.shared.presentation(for: spoken.text, pair: .mainlandMandarinEnglish)
+            try Task.checkCancellation()
+            var record = SessionRecord(languageID: "en", title: "Script display fixture")
+            record.localSpeechPair = .mainlandMandarinEnglish
+            record.append(Fragment(speaker: .assistant, text: "Assistant 後天 API", startMS: 0, endMS: 1, turnID: UUID()))
+            record.append(Fragment(speaker: .user, text: "Typed 後天 API", startMS: 1, endMS: 2, typed: true, turnID: UUID()))
+            record.append(spoken)
+            record.endedAt = .now
+            var fixture = Archive(); fixture.sessions = [record]
+            let restored = try Archive.decode(fixture.encoded())
+            guard let restoredRecord = restored.sessions.first else { throw ChineseScriptPresentation.Failure.invalidConversion }
+            store.updatePreferences {
+                $0.learningLanguageID = "en"; $0.meaningLanguage = "Simplified Chinese"
+                $0.localSpeechPair = .mainlandMandarinEnglish
+            }
+            session = restoredRecord; mode = .local; sessionMode = .local; state = .ended; localPhase = .ended
+            store.save(restoredRecord) // in-memory preview only
+        } catch {
+            self.error = "Script fixture failed: " + error.localizedDescription
+        }
+    }
+
+    #endif
+
     #if DEBUG && targetEnvironment(simulator)
     // UI-only fixture: no catalog override, native model, network, microphone or personal data.
     // The real coordinator still owns confirmation, cancellation, drain and session admission.
@@ -1468,8 +1520,13 @@ import MuralCore
         try checkSetupAdmission(sessionID: sessionID)
         try saveSetup { try setup.complete(.voice, boundary: .voicePrepared) }
         reportSetupProgress(.init(.preparingEncoder), jobID: jobID)
+        if speechSetupPreview == "memory-warning-setup" {
+            // Exercise the production observer while the setup owner is still admitted.
+            NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+            NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+        }
         if !previewSetupInterrupted, let scenario = speechSetupPreview,
-           ["thermal-setup", "audio-setup", "route-setup", "memory-setup"].contains(scenario) {
+           ["thermal-setup", "audio-setup", "route-setup", "memory-ceiling-setup"].contains(scenario) {
             previewSetupInterrupted = true
             holdingSetupPreviewDrain = true
             let drainRevision = previewSetupDrain.revision
@@ -1485,7 +1542,8 @@ import MuralCore
                 NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification, object: nil,
                     userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
             default:
-                NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+                // A real safety-stop callback, without allocating gigabytes in a UI fixture.
+                localAudio.stopForTTSSafety(footprint: 3_000_000_000, thermal: .nominal)
             }
             // Test releases this non-cooperative child explicitly, independent of UI automation speed.
             await Task { try? await previewSetupDrain.wait(after: drainRevision) }.value
@@ -1512,13 +1570,20 @@ import MuralCore
         state = .active; localPhase = .ready
         previewSetupProgress = nil
         _ = try appendLocal("Hi! What did you do today?", speaker: .assistant, sessionID: sessionID)
-        if speechSetupPreview == "resume" || speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
+        if let scenario = speechSetupPreview,
+           ["resume", "memory-warning", "memory-warning-drain", "memory-ceiling-drain"].contains(scenario) {
             _ = try appendLocal("I went for a walk by the river.", speaker: .user, sessionID: sessionID)
             _ = try appendLocal("That sounds peaceful. What did you enjoy most?", speaker: .assistant, sessionID: sessionID)
         }
-        if speechSetupPreview == "memory-warning" || speechSetupPreview == "memory-warning-drain" {
-            NotificationCenter.default.post(name: Notification.Name("UIApplicationDidReceiveMemoryWarningNotification"), object: nil)
-            if speechSetupPreview == "memory-warning-drain" {
+        if let scenario = speechSetupPreview,
+           ["memory-warning", "memory-warning-drain", "memory-ceiling-drain"].contains(scenario) {
+            if scenario == "memory-ceiling-drain" {
+                localAudio.stopForTTSSafety(footprint: 3_000_000_000, thermal: .nominal)
+            } else {
+                NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+                NotificationCenter.default.post(name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+            }
+            if scenario.hasSuffix("-drain") {
                 await Task.detached { try? await Task.sleep(for: .seconds(4)) }.value
             }
         }

@@ -8,6 +8,157 @@ Both optimization rounds are implemented and physically qualified. The first mat
 
 The iPhone is the closest source of truth for the actual microphone, recognition, tutor, speech and native lifecycle paths. That does not make every phone test comprehensive: automated TTS events are not listening evidence, and recording cancellation is not background or inference cancellation. Simulator UI checks remain useful and do not need to be duplicated when the phone scenario already proves the affected behavior.
 
+## Breeze Simplified MVP closeout: user acceptance
+
+The user confirms the installed ordinary build handles a live mixed Mandarin/English
+turn with names/numbers, Simplified meanings/word lookup and several ordinary turns without
+unexpected Pause/Resume. Separate closeout confirmation accepts on-screen Simplified Help,
+audible English replies and no Chinese Help playback. Retained exact-UUID native reopen /
+explicit edit / raw retention and fresh real OpenCC/persistence/boundary checks complement
+that human evidence. The tested Simplified MVP PoC is accepted; do not manufacture another
+acoustic run to replace valid user feedback or restart accepted warm-start investigation.
+
+A fresh Traditional spoken session remains unverified. Failed prerecorded/support/profile
+runs stay failed, and neither broad accuracy nor sustained memory/thermal safety is proved.
+These are source/feature acceptance boundaries, not hidden passes. See the
+[MVP closeout](asr/chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow).
+Private closeout evidence: `.build/verification/breeze-simplified-closeout-20260930/`.
+
+The optional profiler monitor had its Breeze check nested under the resource/provisioning
+branch. Source review moved the shared premature-exit check to all profiler stages, without
+interrupting an already-requested native drain. A focused host regression rejects early
+exit 0/1, permits deliberate termination intent only, and retains final trace exit/cleanup
+validation. This is not a new passing native profiler scenario or a latency optimization.
+
+## Breeze warning UX follow-up: September 30
+
+A UIKit notification is not itself a model failure. The ordinary observer called stop,
+then the coordinator exposed Resume; retained native events show that transition within
+about 20 ms. User live English smoke feedback was positive, but their subsequent Resume
+report was not separately log-correlated. Normal Talk now keeps notification-only events
+non-blocking and content-free logged, preserving actual sampled-ceiling/thermal/model stops.
+
+Five distinct model-free UI requirements passed across focused runs; host fault checks
+passed. Initial enabled-Record assertions were unsuitable for a fixture with no ASR model:
+inspect the actual Ready/no-Resume screenshot and engine prerequisite before editing
+production code or widening timeouts. Corrected checks retain notification/setup/turn
+preservation and separate hard-stop/drain recovery requirements. Failed attempts remain saved.
+
+The receipt is hitting and skipping prewarm. Breeze load/validation still took
+161.432-172.361 s versus about one second for asset verification. Do not diagnose this
+as a missing receipt, claim warm resident models, or disable loading validation.
+Measure individual model loads before choosing a latency optimization.
+
+Signed Core AI Release preparation took 30.00 s including cleanup; actual compiler,
+converter/resources and strict identities passed. Initial idle confirmation timed out.
+A later fresh authorized handoff installed the exact ordinary artifact in place, retaining
+the existing runner. Model-free `breeze-finish` passed 1 test / 0 failures / 0 skips in
+98.54 s through cleanup, with native dictionary and On-device / English / Simplified
+Chinese readback. No ASR models/microphone were requested; updated native warning
+continuation remains unverified, not PASS.
+Evidence: `.build/verification/breeze-memory-warning-nonblocking-20260930/`.
+
+### Separate Breeze model-load diagnosis
+
+The existing production component fences establish encoder loading at 141-150 s,
+decoder at 18-22 s, Mel at 0.064-0.066 s and remaining validation under 8 ms, across three
+retained receipt-hit runs. The new host report retains complete and failed/incomplete
+boundaries separately. This identifies the actual `MLModel.load` bottleneck, not a cache
+miss or a new optimization gain. Core AI's Vietnamese GPU flag does not change Breeze's
+CPU/Neural Engine configuration.
+
+Repeated reinstallations change the sandbox's absolute model path; Apple's specialization
+cache is path/configuration-sensitive. The sandbox-relative receipt does not own that cache.
+Use the actual Core ML `cached` / `prepare and cache` trace label before diagnosing
+recompilation or choosing compute changes. Keep manifest/native validation intact.
+
+The preparation-only Core ML/Time Profiler stage remains blocked at model-free qualification.
+App RPC availability did not imply Instruments readiness: initial exact-PID attachment failed
+while Instruments listed the phone offline. A data-capable USB connection enabled capture.
+The new native setup whitelist missed its stage and skipped; the required skip was caught,
+retained and fixed. The corrected run then failed UI automation initialization before the
+test body. Both saved preflight and later status show unlocked, so do not blame Auto-Lock
+without intermediate evidence. No models were requested or automatically replayed. The
+trace has the Core ML schema but no load events; it cannot classify the encoder cache.
+Original cleanup failures stay failed. Exact-PID recovery where needed, finalized captures,
+no remaining owned host processes and fresh empty phone inventories are recorded separately.
+
+User follow-up closes the immediate startup investigation for the PoC: without reinstalling,
+they ended the conversation, fully quit the app, reopened it and reached ready after
+Prepare & start in approximately **five seconds**. This is human-reported whole-readiness
+timing, not a matched automated comparison or a traced cache label. It strongly supports
+the installation-related cold-load explanation; the user accepts slow first preparation
+after reinstall as testing behavior. Do not repeat profiling or propose CPU/GPU/quantization
+changes solely for that known post-install cost. Label cold and unchanged-install warm runs
+separately, preserve readiness budgets/validation, and reopen only for a warm regression,
+a relevant changed model/runtime/compute contract or explicit cold-start optimization.
+The failed profiler qualification remains failed and deferred, not retroactively passed.
+Avoid unnecessary reinstalls of identical artifacts only after identity/cleanup qualification;
+never substitute model re-export, quantization, skipped validation or forced receipts.
+Evidence: `.build/verification/breeze-load-profile-20260930/` and the
+[feature checkpoint](asr/chinese/breeze-simplified-implementation-20260928.md#september-30-breeze-load-profile-encoder-bottleneck-confirmed-cache-cause-unconfirmed).
+
+## Breeze Simplified display checkpoint: September 30
+
+The [feature checkpoint](asr/chinese/breeze-simplified-implementation-20260928.md#local-qualification-checkpoint-september-30)
+records host/OpenCC and model-free UI qualification, not acoustic acceptance. The ordinary
+signed Core AI Release preparation took 56.77 s including cleanup (54.78 s signed build),
+separate from runtime. Actual compiler flags, converter linkage, all dictionaries and notices
+were verified; no ASR weights were fetched and no phone model was loaded by verification.
+
+Incremental Xcode built the new MuralCore notice but initially retained the old bundle copy
+inside the simulator app. Inspect actual embedded resources, not only package build outputs.
+Preserve the failed run and invalidate only the proven stale build-product copy under the
+canonical DerivedData lock; never repair this by touching sources or deleting device caches.
+The simulator's four requested checks passed across bounded runs, retaining the combined
+run's budget failure and the original resource failure separately.
+
+The paired installer refused a newly reopened matching Mural process after the initial
+exact-PID idle stop. Fresh idle confirmation timed out, so installation and native testing
+remain pending. Keep status, exact-PID stop and installation adjacent after the handoff;
+preserve a new process rather than assuming earlier idle authorization describes its state.
+No native ASR/rendering, voice/support, history edit, warning or thermal result is claimed.
+Private evidence: `.build/verification/breeze-simplified-20260930-122221/`.
+
+### Resumed Breeze qualification and dictionary regression
+
+The [resumed checkpoint](asr/chinese/breeze-simplified-implementation-20260928.md#september-30-resumed-native-checkpoint-display-poc-passed-acoustic-qualification-incomplete)
+supersedes the pending-install status above without converting historical failures to passes.
+One reviewed Mandarin acoustic turn passed native and host script/raw/English-byte assertions
+in 260.27 s through cleanup. Actual ASR readiness/load remained 169.56 / 168.50 s despite
+retained assets/receipt hits; recorded footprint peaked at 2,035,239,568 bytes, thermal
+nominal/fair. An active warning continued only in the explicitly authorized memory diagnostic.
+This is not a memory optimization, lifetime proof or removal of thermal stops.
+
+Native exact-UUID reopen/preference freeze/explicit edit/raw retention passed separately
+in 111.64 s without another ASR load. Reduced coverage/load count is not a faster identical
+acoustic/persistence journey. Main/runner identities and personal/model data were preserved.
+
+A native support assertion exposed pinned TWVariantsRev mapping Simplified 么 to 幺.
+Do not rewrite expected Simplified text to match that dictionary behavior: reproduce with
+real dependency goldens, preserve ambiguous literal input, keep Traditional 麼 conversion
+and valid 幺 unchanged. Eleven goldens, persistence, synthetic UI and a real on-phone
+converter regression now pass with the original pin/options. No saved projection is rewritten.
+The English-only acoustic attempt still returned wrong words; the corrected attempt returned
+no words, with the actual No speech recognized notice. Stop and retain these failures rather
+than altering ASR/VAD settings or blindly replaying. Fail promptly on absent recognition;
+a Ready control alone is not proof of a completed recognized/replied turn.
+
+Console teardown may precede delivery of the final stdout cleanup marker. Emit deliberate
+termination intent before the native operation, while retaining final settings readback,
+not-running assertions, exact test counts and cleanup as independent gates. Protected
+UI-automation startup refusals remain separate from app/model failures and need human action.
+The failed corrected support run's recording export contained a pending-attachment error,
+not movie bytes; retain scoped hierarchy/log evidence and mark motion evidence unavailable.
+
+Ordinary Core AI Release is restored, final On-device / English / Simplified Chinese readback
+and model-free native dictionary check passed in 51.92 s. Build remains separate: latest
+runner preparation 20.36 s including cleanup, identical corrected main executable. All owned
+work ended; no physical shutdown. Native lookup/Help, fresh reply listening (user could not
+confirm), technical-name/number accuracy and a new Traditional acoustic session remain open.
+No new Vietnamese acoustic result is claimed. Private evidence remains under
+`.build/verification/breeze-simplified-20260930-122221/`.
+
 ## Measured baseline
 
 Qualified environment: paired iPhone 17, iOS 27.2, Xcode 27, signed Core AI Release, retained recognition and Supertonic3 assets/caches. Mac-generated Samantha speech at rate 150 traveled through the speakers and real phone microphone. No injected transcript or fake model reply.
@@ -237,3 +388,53 @@ The managed native continuation `20260928-125336-34898` received an iOS memory w
 - Detailed allocation export hit its finite bound and cleanup permission error. Preserve both failures; do not broaden exports indefinitely, waive ownership checks or guess longer timeouts as a fix. Diagnose the finalization issue offline and qualify any repair model-free before considering another expensive native run.
 
 The warning cause remains inconclusive. Further loading needs a concrete reviewed causal experiment, not unchanged repetition. See the [qualification tracker](asr/chinese/simplified-talk-qualification-plan.md) and private `simplified-managed-20260928/resource-analysis/` artifacts.
+
+
+## September 30: Breeze memory-warning diagnostic, qualification incomplete
+
+- Reuse the existing runner/main-app identities; the runner is not a second Mural data
+  sandbox. The user explicitly approved automation of new test conversations and Mac
+  speaker input. Preserve assets, pointers, signing, voices and personal history.
+- A receipt hit did not make Breeze loading fast: native preparation measured about
+  168 seconds, mostly AudioEncoder loading. Borrowing the VI 90-second readiness wait
+  failed. The measured Breeze wait is now 200 seconds, retaining the existing 300-second
+  XCTest and 420-second host budgets. This is corrected measurement, not a speedup.
+- Teardown must recognize both Cancel setup and End. The shared selector correction
+  passed two model-free simulator checks, cleanup PASS/Shutdown, before another model
+  scenario. Separate native recovery restored/read back the logged original preference;
+  it did not turn the original failed/unconfirmed-cleanup run into a pass.
+- Normal policy stopped on a real iOS memory warning after decode. An explicitly
+  authorized isolated MURAL_BREEZE_MEMORY_POC build logged warnings without pausing
+  active Breeze. Thermal/model/time stops and the existing memory ceiling remained.
+  Actual compiler commands, app bytes, exact OpenCC pins/resources/notices and signatures
+  distinguish the diagnostic from ordinary Core AI Release. No production qualification
+  follows from bypassing a warning.
+- Diagnostic memory-poc-acoustic: one native test PASS, warning observed, real reply
+  completed and separately human-confirmed audible English. Peak process footprint
+  2,039,777,864 bytes; thermal states 0/1; ASR load 166.08 seconds, preparation 167.08.
+  Whole runtime through cleanup 286.56 seconds; initial diagnostic build was separate,
+  124.81 seconds. Different scope/instrumentation prevents a speedup comparison.
+- The reviewed mixed clip produced English instead of its Mandarin words. Display
+  matched raw recognition, so this did not exercise Han conversion. Script rendering
+  cannot fix recognition. Keep word accuracy, raw/display equality, Simplified meanings,
+  human audibility and persistence/edit judgments separate.
+- Whole-application swipeDown was followed by an unrelated-app interruption and a
+  resume preparation, so the full host check failed despite the completed spoken phase.
+  Do not weaken the single-preparation/frozen-pair assertion to hide it. A bounded
+  content-coordinate gesture and foreground guard are compiled; their new model-free
+  regression must pass before another acoustic check. Do not inspect unrelated-app
+  recording frames. The source video decodes fully; only scoped Mural appearance was
+  visually reviewed, not the complete transition.
+- For custom evidence roots, explicit DEVICE_PREPARED also selects prior compiler proof
+  during preparation. Byte-identical app requirements remain; source hashes now include
+  untracked delivery files. No cache clearing or timestamp manipulation to force compile.
+- Restore the ordinary binary before handing the phone back or asking for a later test
+  window. Here the user withdrew readiness before restoration, then device status was
+  unavailable: no further phone mutation is permitted. Clearly report the terminated
+  diagnostic still installed, queued normal restoration, last read-back preference and
+  missing gates. Never hide that installation behind a generic cleanup PASS.
+
+Private evidence: .build/verification/breeze-simplified-20260930-122221/. Corrected runner
+builds and host checks passed; the new scrolling regression, Mandarin-dominant F00A clip,
+lookup/Help, durable reopen/edit and Traditional native confirmation are pending. No
+quantization, model re-export, broad soak, push or OS thermal override occurred.

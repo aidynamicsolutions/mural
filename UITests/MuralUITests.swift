@@ -1,6 +1,89 @@
 import XCTest
+import MuralCore
+
+private func ownedTalkStopButton(_ app: XCUIApplication) -> XCUIElement {
+    let cancel = app.buttons["speech-setup-cancel"]
+    return cancel.exists ? cancel : app.buttons["local-conversation-end"]
+}
+
+private func replaceTranscriptText(_ text: String, input: XCUIElement, app: XCUIApplication) {
+    input.tap()
+    input.press(forDuration: 1)
+    let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.buttons["Select All"]
+    XCTAssertTrue(selectAll.waitForExistence(timeout: 5), "Use native selection; do not assume the caret starts at the end")
+    selectAll.tap()
+    input.typeText(text)
+    XCTAssertEqual(input.value as? String, text)
+}
 
 final class MuralUITests: XCTestCase {
+    func testBreezeSimplifiedDisplayPreservesRawRolesAndEnglish() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--preview", "--preview-existing-user", "--preview-breeze-script"]
+        app.launch()
+        defer { app.terminate() }
+        let transcript = app.buttons["local-conversation-transcript"]
+        guard transcript.waitForExistence(timeout: 15) else {
+            XCTFail("Real converter/archive fixture did not complete")
+            return
+        }
+        for _ in 0..<8 where !transcript.isHittable { app.swipeUp() }
+        guard transcript.isHittable else { XCTFail("Transcript is not reachable"); return }
+        transcript.tap()
+        XCTAssertTrue(app.staticTexts["后天 book a flight，谢谢！怎么 API"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Assistant 後天 API"].exists, "Assistant role must not be script-converted")
+        XCTAssertTrue(app.staticTexts["Typed 後天 API"].exists, "Typed wording must remain exact")
+        let disclosure = app.descendants(matching: .any).matching(identifier: "transcript-script-original").firstMatch
+        for _ in 0..<8 where !disclosure.isHittable { app.swipeUp() }
+        guard disclosure.isHittable else { XCTFail("Raw-recognition disclosure is not reachable"); return }
+        disclosure.tap()
+        let originals = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "後天 book a flight，謝謝！怎么 API"))
+        XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5), "Raw Traditional recognition must remain inspectable")
+        keepScreenshot("Breeze Simplified display, unchanged roles and raw disclosure", app: app)
+        disclosure.tap()
+        XCTAssertTrue(app.staticTexts["后天 book a flight，谢谢！怎么 API"].exists)
+        let transcriptView = app.scrollViews.matching(NSPredicate(format: "identifier BEGINSWITH 'transcript-session-'" )).firstMatch
+        let sessionID = String(transcriptView.identifier.dropFirst("transcript-session-".count))
+        _ = try XCTUnwrap(UUID(uuidString: sessionID))
+        app.navigationBars["Our conversation"].buttons["Done"].tap()
+        app.tabBars.buttons["Words"].tap()
+        let history = app.buttons["Past conversations"]
+        for _ in 0..<8 where !history.isHittable { app.swipeUp() }
+        history.tap()
+        let savedSession = app.buttons["history-session-\(sessionID)"]
+        XCTAssertTrue(savedSession.waitForExistence(timeout: 5)); savedSession.tap()
+        let savedTranscript = app.scrollViews["transcript-session-\(sessionID)"]
+        let edit = savedTranscript.buttons.matching(identifier: "Edit").element(boundBy: 1) // This fixture's spoken passage, not its typed passage.
+        for _ in 0..<8 where !edit.isHittable { app.swipeUp() }
+        edit.tap()
+        let input = app.descendants(matching: .any).matching(identifier: "transcript-edit-text").firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "后天 book a flight，谢谢！怎么 API")
+        replaceTranscriptText("Explicit API Kevin 17 edit.", input: input, app: app)
+        app.navigationBars["What you said"].buttons["Save"].tap()
+        XCTAssertTrue(savedTranscript.staticTexts["Explicit API Kevin 17 edit."].waitForExistence(timeout: 5))
+        XCTAssertFalse(savedTranscript.staticTexts["后天 book a flight，谢谢！怎么 API"].exists)
+        let original = savedTranscript.buttons["transcript-script-original"].firstMatch
+        XCTAssertTrue(original.label.contains("edited wording"))
+        for _ in 0..<8 where !original.isHittable { app.swipeUp() }
+        original.tap()
+        XCTAssertTrue(originals.firstMatch.waitForExistence(timeout: 5))
+        keepScreenshot("Explicit edit removes projection and retains original recognition", app: app)
+    }
+
+    func testSimplifiedBreezeMissingAssetsDoesNotOfferFireRed() {
+        let app = setupPreview("unavailable", meaningLanguage: "Simplified Chinese")
+        defer { restorePremium(app) }
+        let error = app.staticTexts["speech-setup-error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertTrue(error.label.contains("isn’t available to download"))
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists)
+        XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
+        XCTAssertTrue(localRecognizer(app).label.contains("breeze-asr25-pal8-v1"))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains("Simplified display"))
+        keepScreenshot("Missing shared Breeze is not a FireRed download request", app: app)
+    }
+
     private func setConversationMode(_ selection: String, app: XCUIApplication) {
         let settings = app.buttons["Settings"]
         for _ in 0..<8 where !settings.isHittable { app.swipeDown() }
@@ -103,16 +186,12 @@ final class MuralUITests: XCTestCase {
 
         setMeaningLanguage("Simplified Chinese", app: app)
         XCTAssertEqual(languagePair.label, "English · Simplified Chinese")
-        XCTAssertTrue(localRecognizer(app).label.contains("firered-v2-aed-int8"))
-        let simplifiedStart = app.buttons["local-conversation-start"]
-        for _ in 0..<8 where !simplifiedStart.isHittable { app.swipeUp() }
-        simplifiedStart.tap()
-        let unavailable = app.alerts["A little interruption"]
-        XCTAssertTrue(unavailable.waitForExistence(timeout: 5))
-        XCTAssertTrue(unavailable.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "requires the FireRed development build")).firstMatch.exists)
-        XCTAssertFalse(app.buttons["local-conversation-record-send"].exists)
-        keepScreenshot("Simplified Chinese fails closed without native linkage", app: app)
-        unavailable.buttons["OK"].tap()
+        XCTAssertTrue(localRecognizer(app).label.contains("breeze-asr25-pal8-v1"))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains("Simplified display"))
+        XCTAssertFalse(app.buttons["local-speech-pair"].exists)
+        // No Prepare here: the changed Settings mapping is model-free. Missing shared
+        // Breeze assets are covered through the setup fixture in the companion check.
+        keepScreenshot("Meaning language selects Breeze plus Simplified display", app: app)
 
         setMeaningLanguage("French", app: app)
         XCTAssertEqual(languagePair.label, "English · French")
@@ -154,7 +233,8 @@ final class MuralUITests: XCTestCase {
         XCTAssertTrue(app.buttons["local-conversation-end"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["conversation-status"].label.contains("Ready"))
         XCTAssertFalse(app.staticTexts["speech-setup-stage"].exists)
-        app.buttons["local-conversation-end"].tap()
+        XCTAssertEqual(ownedTalkStopButton(app).identifier, "local-conversation-end")
+        ownedTalkStopButton(app).tap()
         XCTAssertTrue(app.buttons["local-conversation-start"].waitForExistence(timeout: 5))
     }
     func testSpeechSetupCancelKeepsAdmissionClosedUntilDrain() {
@@ -168,7 +248,8 @@ final class MuralUITests: XCTestCase {
         XCTAssertFalse(app.progressIndicators["speech-setup-download-progress"].exists)
         keepScreenshot("Native setup has no fake percentage", app: app)
         XCTAssertGreaterThanOrEqual(app.buttons["speech-setup-cancel"].frame.height, 44)
-        app.buttons["speech-setup-cancel"].tap()
+        XCTAssertEqual(ownedTalkStopButton(app).identifier, "speech-setup-cancel")
+        ownedTalkStopButton(app).tap()
         XCTAssertEqual(stage.label, "Setup cancelled")
         let start = app.buttons["local-conversation-start"]
         XCTAssertTrue(start.exists)
@@ -255,8 +336,30 @@ final class MuralUITests: XCTestCase {
         XCTAssertFalse(app.buttons["speech-download-confirm"].exists) // The verified fixture inventory survives.
         XCTAssertTrue(app.staticTexts["speech-setup-error"].waitForExistence(timeout: 8))
     }
-    func testMemoryPressurePausesSpeechUntilExplicitResumeAndPreservesTurns() {
-        let app = setupPreview("memory-warning-drain")
+    func testMemoryWarningKeepsTalkActiveAndPreservesTurns() {
+        // The real notifications fire after two synthetic turns. Ready is shown only after
+        // the four-second child drains. No ASR model is loaded, so microphone readiness is not asserted.
+        let app = setupPreview("memory-warning-drain", meaningLanguage: "Simplified Chinese")
+        defer { restorePremium(app) }
+        let status = app.staticTexts["conversation-status"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Ready · Tap Record"), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        XCTAssertTrue(app.buttons["local-conversation-record-send"].exists)
+        XCTAssertFalse(app.buttons["local-memory-pressure-resume"].exists)
+        XCTAssertFalse(app.staticTexts["conversation-notice"].exists)
+        XCTAssertFalse(app.alerts["A little interruption"].exists)
+        XCTAssertTrue(app.staticTexts["I went for a walk by the river."].exists)
+        XCTAssertTrue(app.staticTexts["That sounds peaceful. What did you enjoy most?"].exists)
+        keepScreenshot("Memory warning leaves Talk active without Resume", app: app)
+        app.buttons["local-conversation-end"].tap()
+        app.buttons["local-conversation-transcript"].tap()
+        XCTAssertTrue(app.staticTexts["I went for a walk by the river."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["That sounds peaceful. What did you enjoy most?"].exists)
+        app.buttons["Done"].tap()
+    }
+
+    func testMemoryCeilingPausesSpeechUntilExplicitResumeAndPreservesTurns() {
+        let app = setupPreview("memory-ceiling-drain")
         defer { restorePremium(app) }
 
         let status = app.staticTexts["conversation-status"]
@@ -451,7 +554,24 @@ final class MuralUITests: XCTestCase {
     func testThermalInterruptionDuringApprovedSetup() { verifySetupInterruption("thermal-setup") }
     func testAudioInterruptionDuringApprovedSetup() { verifySetupInterruption("audio-setup") }
     func testRouteInterruptionDuringApprovedSetup() { verifySetupInterruption("route-setup") }
-    func testMemoryInterruptionDuringApprovedSetup() { verifySetupInterruption("memory-setup") }
+    func testMemoryCeilingInterruptionDuringApprovedSetup() { verifySetupInterruption("memory-ceiling-setup") }
+
+    func testMemoryWarningDuringApprovedSetupDoesNotInterrupt() {
+        let app = setupPreview("memory-warning-setup", meaningLanguage: "Simplified Chinese")
+        defer { restorePremium(app) }
+        XCTAssertTrue(app.buttons["speech-download-confirm"].waitForExistence(timeout: 5))
+        app.buttons["speech-download-confirm"].tap()
+        let status = app.staticTexts["conversation-status"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Ready · Tap Record"), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 15), .completed)
+        XCTAssertTrue(app.buttons["local-conversation-record-send"].exists)
+        XCTAssertFalse(app.buttons["local-memory-pressure-resume"].exists)
+        XCTAssertFalse(app.buttons["speech-setup-cancel"].exists)
+        XCTAssertFalse(app.staticTexts["speech-setup-error"].exists)
+        XCTAssertFalse(app.alerts["A little interruption"].exists)
+        keepScreenshot("Memory warning does not cancel approved speech setup", app: app)
+        app.buttons["local-conversation-end"].tap()
+    }
 
     private func verifySetupInterruption(_ scenario: String) {
         let app = setupPreview(scenario)
@@ -995,6 +1115,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
     private var ownedApp: XCUIApplication?
     private var startedConversation = false
     private var originalMeaning: String?
+    private var originalMeaningVisible: Bool?
     private var cleaningUp = false
     private var resourceTurnDeadline: TimeInterval?
     private var resourceStage: Bool {
@@ -1002,7 +1123,8 @@ final class MuralPhysicalDeviceTests: XCTestCase {
     }
 
     private func checkResourceAbort() throws {
-        guard resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision", !cleaningUp else { return }
+        guard resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision" ||
+            ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"]?.hasPrefix("breeze-") == true, !cleaningUp else { return }
         let run = ProcessInfo.processInfo.environment["MURAL_PLAYBACK_RUN"] ?? ""
         let abort = FileManager.default.temporaryDirectory.appendingPathComponent("mural-resource-abort-\(run).txt")
         if FileManager.default.fileExists(atPath: abort.path) ||
@@ -1110,14 +1232,15 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         #if targetEnvironment(simulator)
         throw XCTSkip("Physical device only")
         #else
-        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
+        guard ["baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision", "breeze-check", "breeze-acoustic", "breeze-multi", "breeze-traditional", "breeze-history", "breeze-support", "breeze-finish", "breeze-profile-check", "breeze-profile"].contains(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] ?? "") else {
             throw XCTSkip("Use the explicit agent-verify-device entrypoint")
         }
         #endif
     }
 
     private func wait(_ predicate: String, _ element: XCUIElement, seconds: TimeInterval) throws {
-        if (resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision") && !cleaningUp {
+        if (resourceStage || ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "provision" ||
+            ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"]?.hasPrefix("breeze-") == true) && !cleaningUp {
             let deadline = ProcessInfo.processInfo.systemUptime + seconds
             let condition = NSPredicate(format: predicate)
             while ProcessInfo.processInfo.systemUptime < deadline {
@@ -1136,11 +1259,20 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         }
     }
 
+    private func scrollOwnedContent(_ app: XCUIApplication, towardTop: Bool) {
+        // Keep touches in content, away from Notification Center and the Home edge.
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardTop ? 0.35 : 0.65))
+        let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardTop ? 0.65 : 0.35))
+        from.press(forDuration: 0.1, thenDragTo: to)
+    }
+
     private func reveal(_ element: XCUIElement, app: XCUIApplication) throws {
         for _ in 0..<12 {
+            guard app.state == .runningForeground else {
+                throw NSError(domain: "MuralPhysicalGate", code: 7, userInfo: [NSLocalizedDescriptionKey: "Mural left the foreground; refuse gestures on another app"])
+            }
             if element.isHittable { return }
-            if element.exists && element.frame.midY < app.frame.midY { app.swipeDown() }
-            else { app.swipeUp() }
+            scrollOwnedContent(app, towardTop: element.exists && element.frame.midY < app.frame.midY)
         }
         guard element.isHittable else {
             XCTFail("Missing physical control: \(element.identifier)")
@@ -1162,11 +1294,15 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         guard let app = ownedApp else { return }
         cleaningUp = true
         markTiming("cleanup_started")
+        if startedConversation && app.buttons["speech-setup-cancel"].exists {
+            let cancel = ownedTalkStopButton(app)
+            try reveal(cancel, app: app); cancel.tap()
+        }
         if app.buttons["Close"].exists && app.buttons["Close"].isHittable { app.buttons["Close"].tap() }
         try closeTranscriptSheets(app)
         app.tabBars.buttons["Talk"].tap()
         if startedConversation {
-            let end = app.buttons["local-conversation-end"]
+            let end = ownedTalkStopButton(app)
             if end.exists { try reveal(end, app: app); end.tap() }
             let idle = app.buttons["new-conversation"].exists
                 ? app.buttons["new-conversation"] : app.buttons["local-conversation-start"]
@@ -1176,7 +1312,12 @@ final class MuralPhysicalDeviceTests: XCTestCase {
             _ = try meaningSetting(app, select: originalMeaning)
             XCTAssertEqual(try meaningSetting(app), originalMeaning)
             print("MURAL_DEVICE_SETTINGS_RESTORED")
+            if ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"] == "breeze-finish" {
+                print("MURAL_DEVICE_FINAL_MEANING=\(originalMeaning)")
+            }
         }
+        if originalMeaningVisible != nil { try meaningVisibility(app, restoring: true) }
+        print("MURAL_DEVICE_TERMINATE_REQUESTED")
         app.terminate()
         XCTAssertEqual(app.state, .notRunning)
         print("MURAL_DEVICE_CLEANUP_PASS")
@@ -1298,6 +1439,279 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         let image = XCTAttachment(screenshot: app.screenshot())
         image.name = "Managed FireRed verified; native preparation deferred"; image.lifetime = .keepAlways; add(image)
         print("MURAL_DEVICE_PROVISION_UI_PASS")
+    }
+
+    private func meaningVisibility(_ app: XCUIApplication, restoring: Bool = false) throws {
+        let settings = app.buttons["Settings"]
+        try reveal(settings, app: app); settings.tap()
+        let toggle = app.switches["Meaning subtitles"]
+        try reveal(toggle, app: app)
+        let value = try XCTUnwrap(toggle.value as? String) == "1"
+        if originalMeaningVisible == nil { originalMeaningVisible = value }
+        let desired = restoring ? try XCTUnwrap(originalMeaningVisible) : true
+        if value != desired { toggle.tap() }
+        XCTAssertEqual(toggle.value as? String, desired ? "1" : "0")
+        app.buttons["Done"].tap()
+    }
+
+    private func keepBreezeScreen(_ name: String, app: XCUIApplication) throws {
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = name; image.lifetime = .keepAlways; add(image)
+    }
+
+    private func verifyBreezeHistoryEdit(_ app: XCUIApplication, sessionID: String,
+                                         expectedTurns: [String], rawTurns: [String]) throws {
+        var turns = expectedTurns
+        print("MURAL_DEVICE_MODEL_PHASE_COMPLETE")
+        _ = try meaningSetting(app, select: "Traditional Chinese") // Future Settings must not rewrite this saved Simplified session.
+        app.terminate(); app.launch(); startedConversation = false
+        app.tabBars.buttons["Words"].tap()
+        let history = app.buttons["Past conversations"]
+        try reveal(history, app: app); history.tap()
+        let savedSession = app.buttons["history-session-\(sessionID)"]
+        XCTAssertTrue(savedSession.waitForExistence(timeout: 5)); savedSession.tap()
+        try assertRetainedTurns(turns, app: app)
+        let savedTranscript = app.scrollViews["transcript-session-\(sessionID)"]
+        let originals = savedTranscript.buttons.matching(identifier: "transcript-script-original")
+        XCTAssertEqual(originals.count, rawTurns.count)
+        for index in 0..<originals.count {
+            let original = originals.element(boundBy: index)
+            try reveal(original, app: app); original.tap()
+            XCTAssertTrue(savedTranscript.staticTexts.matching(NSPredicate(format: "label == %@", rawTurns[index])).firstMatch.exists)
+            original.tap()
+        }
+        try keepBreezeScreen("Saved Simplified display retained after preference change and relaunch", app: app)
+        let firstEdit = savedTranscript.buttons["Edit"].firstMatch
+        try reveal(firstEdit, app: app); firstEdit.tap()
+        let input = app.descendants(matching: .any).matching(identifier: "transcript-edit-text").firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, turns[0], "Editor starts from displayed wording")
+        replaceTranscriptText("Breeze verification edit API Kevin 17.", input: input, app: app)
+        app.navigationBars["What you said"].buttons["Save"].tap()
+        try wait("exists == false", app.navigationBars["What you said"], seconds: 5)
+        turns[0] = "Breeze verification edit API Kevin 17."
+        try assertRetainedTurns(turns, app: app)
+        let raw = savedTranscript.buttons["transcript-script-original"].firstMatch
+        try reveal(raw, app: app)
+        XCTAssertTrue(raw.label.contains("edited wording"), "Stale Simplified projection must be gone")
+        raw.tap()
+        XCTAssertTrue(savedTranscript.staticTexts.matching(NSPredicate(format: "label == %@", rawTurns[0])).firstMatch.exists)
+        raw.tap()
+        try closeTranscriptSheets(app)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["Words"].tap(); try reveal(history, app: app); history.tap()
+        XCTAssertTrue(savedSession.waitForExistence(timeout: 5)); savedSession.tap()
+        try assertRetainedTurns(turns, app: app)
+        try reveal(raw, app: app)
+        XCTAssertTrue(raw.label.contains("edited wording"))
+        raw.tap()
+        XCTAssertTrue(savedTranscript.staticTexts.matching(NSPredicate(format: "label == %@", rawTurns[0])).firstMatch.exists)
+        try keepBreezeScreen("Explicit edit persisted with original recognition retained", app: app)
+        try closeTranscriptSheets(app)
+        app.tabBars.buttons["Talk"].tap()
+        print("MURAL_DEVICE_BREEZE_EDIT_PERSISTENCE_PASS")
+    }
+
+    @MainActor func testNativeBreezeDisplay() async throws {
+        let stage = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"])
+        XCTAssertTrue(["breeze-check", "breeze-acoustic", "breeze-multi", "breeze-traditional", "breeze-history", "breeze-support", "breeze-finish", "breeze-profile-check", "breeze-profile"].contains(stage))
+        XCTAssertEqual(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_PAIR"], "breeze-zh-CN-en")
+        let app = XCUIApplication(bundleIdentifier: "com.kevintruong.mural.dev")
+        XCTAssertNotEqual(app.state, .notRunning)
+        app.activate(); ownedApp = app; markTiming("activated")
+        XCTAssertTrue(app.staticTexts["conversation-language-pair"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["local-conversation-end"].exists, "Refuse active personal Talk")
+        XCTAssertFalse(app.buttons["local-conversation-transcript"].exists, "Refuse retained personal Talk")
+        XCTAssertTrue(app.staticTexts["conversation-language-pair"].label.hasPrefix("English · "))
+        let traditional = stage == "breeze-traditional"
+        let meaning = traditional ? "Traditional Chinese" : "Simplified Chinese"
+        _ = try meaningSetting(app, select: meaning, preservingOriginal: true)
+        if stage == "breeze-check", let restore = ProcessInfo.processInfo.environment["MURAL_RESTORE_MEANING"], !restore.isEmpty {
+            originalMeaning = restore // Exact logged preference from this verification's failed teardown.
+        }
+        if stage == "breeze-finish" {
+            originalMeaning = "Simplified Chinese" // Explicit final preference from the feature handoff, not test restoration.
+        }
+        let start = app.buttons["local-conversation-start"]
+        XCTAssertEqual(start.label, "Prepare & start", "Refuse pending or paused personal setup")
+        let details = app.buttons["On-device details & diagnostics"]
+        try reveal(details, app: app); details.tap()
+        XCTAssertTrue(app.staticTexts["local-recognizer"].label.contains("breeze-asr25-pal8-v1"))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(traditional ? "WhisperKit / Core ML" : "Breeze PAL8 · Simplified display"))
+        details.tap()
+        if stage == "breeze-history" {
+            let encoded = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_BREEZE_HISTORY_BASE64"])
+            let data = try XCTUnwrap(Data(base64Encoded: encoded))
+            let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let sessionID = try XCTUnwrap(fixture["session"] as? String)
+            _ = try XCTUnwrap(UUID(uuidString: sessionID))
+            let savedTurns = try XCTUnwrap(fixture["turns"] as? [[String: String]])
+            let raw = try savedTurns.map { try XCTUnwrap($0["raw"]) }
+            let turns = try savedTurns.flatMap { [try XCTUnwrap($0["display"]), try XCTUnwrap($0["reply"])] }
+            try awaitPlaybackCompletion(0, trailing: false)
+            try verifyBreezeHistoryEdit(app, sessionID: sessionID, expectedTurns: turns, rawTurns: raw)
+            print("MURAL_DEVICE_BREEZE_UI_PASS")
+            return
+        }
+        if ["breeze-check", "breeze-finish", "breeze-profile-check"].contains(stage) {
+            if stage == "breeze-finish" {
+                let source = "怎麼 怎么 幺妹 軟體 滑鼠 API 17"
+                let projection = try await ChineseScriptRenderer.shared.presentation(for: source, pair: .mainlandMandarinEnglish)
+                XCTAssertEqual(projection?.text, "怎么 怎么 幺妹 软体 滑鼠 API 17")
+                XCTAssertEqual(projection?.sourceText, source)
+                print("MURAL_DEVICE_BREEZE_NATIVE_DICTIONARY_PASS")
+            }
+            for choice in ["Traditional Chinese", "Vietnamese", "Simplified Chinese"] {
+                _ = try meaningSetting(app, select: choice)
+                try reveal(details, app: app); details.tap()
+                XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(choice == "Vietnamese"
+                    ? "Core AI GPU-preferred encoder + Core ML decoder (staged)" : "Breeze PAL8"))
+                details.tap()
+            }
+            try reveal(details, app: app); details.tap()
+            scrollOwnedContent(app, towardTop: false); scrollOwnedContent(app, towardTop: false)
+            try reveal(start, app: app)
+            XCTAssertTrue(start.isHittable, "Return to setup above expanded diagnostics without leaving Mural")
+            try reveal(details, app: app); details.tap()
+            try awaitPlaybackCompletion(0, trailing: false)
+            try keepBreezeScreen("Breeze model-free pair and runner transport", app: app)
+            print("MURAL_DEVICE_BREEZE_UI_PASS")
+            return
+        }
+        if ["breeze-multi", "breeze-support"].contains(stage) { try meaningVisibility(app) }
+        if stage == "breeze-profile" {
+            // Host confirms the activated app still has the exact profiled PID.
+            // No model is requested until that fresh nonce is acknowledged.
+            try awaitPlaybackCompletion(0, trailing: false)
+        }
+        startedConversation = true
+        try reveal(start, app: app); markTiming("preparation_requested"); start.tap()
+        let record = app.buttons["local-conversation-record-send"]
+        // Measured retained-file Breeze load was 167.76 s despite a receipt hit.
+        // A VI-specific 90 s setup wait is not its contract. The existing 300 s
+        // XCTest / 420 s host budgets and all fault/recording gates still apply.
+        try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 200)
+        XCTAssertFalse(app.buttons["speech-download-confirm"].exists, "Never acquire ASR weights in this verification")
+        markTiming("ready")
+        if stage == "breeze-profile" {
+            try keepBreezeScreen("Breeze preparation-only profile: ready without recording", app: app)
+            let end = app.buttons["local-conversation-end"]
+            try reveal(end, app: app); markTiming("end_requested"); end.tap()
+            try wait("exists == true AND enabled == true", app.buttons["new-conversation"], seconds: 60)
+            print("MURAL_DEVICE_BREEZE_PROFILE_PASS")
+            print("MURAL_DEVICE_BREEZE_UI_PASS")
+            return
+        }
+        let budget = try XCTUnwrap(TimeInterval(ProcessInfo.processInfo.environment["MURAL_BREEZE_ACK_SECONDS"] ?? ""))
+        XCTAssertTrue((12...23).contains(budget))
+        var rawTurns: [String] = [], turns: [String] = []
+        for index in 1...(stage == "breeze-multi" ? 2 : 1) {
+            try reveal(record, app: app); record.tap()
+            try wait("label == 'Send'", record, seconds: 10)
+            print("MURAL_DEVICE_RECORD_UI_READY_\(index)")
+            try awaitPlaybackCompletion(index, timeout: budget)
+            XCTAssertEqual(record.label, "Send"); markTiming("turn_\(index)_send_requested"); record.tap()
+            try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 90)
+            markTiming("turn_\(index)_response_ready")
+            try reveal(details, app: app); details.tap()
+            let disclosure = app.buttons["Raw recognition · not translated"]
+            if !app.staticTexts["local-raw-asr"].exists {
+                guard disclosure.waitForExistence(timeout: 5) else {
+                    try keepBreezeScreen("Breeze did not complete a recognized turn", app: app)
+                    let notice = app.staticTexts["conversation-notice"]
+                    let message = notice.exists ? notice.label : "no original recognition available"
+                    XCTFail("Breeze recognition incomplete: \(message)")
+                    return
+                }
+                try reveal(disclosure, app: app); disclosure.tap()
+            }
+            let raw = app.staticTexts["local-raw-asr"].label
+            XCTAssertFalse(raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            let canonical = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let projection = try await ChineseScriptRenderer.shared.presentation(for: canonical,
+                pair: traditional ? .taiwanMandarinEnglish : .mainlandMandarinEnglish)
+            let display = projection?.text ?? canonical
+            try reveal(details, app: app); details.tap()
+            let reply = app.staticTexts["target-caption"].label
+            XCTAssertFalse(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            rawTurns.append(raw); turns += [display, reply]
+            let text = try JSONSerialization.data(withJSONObject: ["raw": raw, "display": display, "reply": reply])
+            print("MURAL_DEVICE_BREEZE_TURN \(text.base64EncodedString())")
+        }
+        let hierarchy = XCTAttachment(string: String(describing: try app.snapshot().dictionaryRepresentation))
+        hierarchy.name = "New Breeze conversation Talk hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+        if ["breeze-multi", "breeze-support"].contains(stage) {
+            let meaningCaption = app.staticTexts["meaning-caption"]
+            try wait("exists == true AND label != '' AND NOT label CONTAINS 'Finding'", meaningCaption, seconds: 60)
+            let meaningProjection = try await ChineseScriptRenderer.shared.presentation(for: meaningCaption.label, pair: .mainlandMandarinEnglish)
+            XCTAssertEqual(meaningProjection?.text, meaningCaption.label, "Meaning must already be Simplified, not rewritten by the display layer")
+            var support = ["meaning": meaningCaption.label]
+            if stage == "breeze-support" {
+                let caption = app.staticTexts["target-caption"]
+                try reveal(caption, app: app)
+                let word = caption.links.firstMatch // Actual Link role confirmed in the native hierarchy.
+                try wait("exists == true", word, seconds: 5)
+                try reveal(word, app: app); word.tap()
+                let lookup = app.navigationBars["A little meaning"]
+                try wait("exists == true", lookup, seconds: 10)
+                let explanation = app.staticTexts["word-lookup-explanation"]
+                try wait("exists == true AND label != ''", explanation, seconds: 45)
+                XCTAssertFalse(app.staticTexts["word-lookup-error"].exists)
+                let selected = app.staticTexts["word-lookup-selected"].label
+                XCTAssertTrue(turns.last?.contains(selected) == true)
+                let projected = try await ChineseScriptRenderer.shared.presentation(for: explanation.label, pair: .mainlandMandarinEnglish)
+                XCTAssertEqual(projected?.text, explanation.label, "Lookup must already be Simplified")
+                support["word"] = selected; support["lookup"] = explanation.label
+                try keepBreezeScreen("Native Simplified English-word lookup", app: app)
+                lookup.buttons["Done"].tap()
+                markTiming("lookup_complete")
+            }
+            let help = app.buttons["A little help"]
+            try reveal(help, app: app); try wait("enabled == true", help, seconds: 60); help.tap()
+            let assistance = app.descendants(matching: .any).matching(identifier: "local-learning-assistance").firstMatch
+            try wait("exists == true", assistance, seconds: 60)
+            try reveal(assistance, app: app)
+            let helpText = app.staticTexts["local-learning-assistance-text"]
+            try wait("exists == true AND label != ''", helpText, seconds: 45)
+            let helpProjection = try await ChineseScriptRenderer.shared.presentation(for: helpText.label, pair: .mainlandMandarinEnglish)
+            XCTAssertEqual(helpProjection?.text, helpText.label, "On-screen Help must already be Simplified")
+            support["help"] = helpText.label
+            if stage == "breeze-support" {
+                let data = try JSONSerialization.data(withJSONObject: support)
+                print("MURAL_DEVICE_BREEZE_SUPPORT_BASE64 \(data.base64EncodedString())")
+                markTiming("help_complete")
+            }
+            let helpEvidence = XCTAttachment(string: String(describing: try assistance.snapshot().dictionaryRepresentation))
+            helpEvidence.name = "Simplified on-screen Help"; helpEvidence.lifetime = .keepAlways; add(helpEvidence)
+            try keepBreezeScreen("Simplified meanings and on-screen Help", app: app)
+        }
+        let end = app.buttons["local-conversation-end"]
+        try reveal(end, app: app); markTiming("end_requested"); end.tap()
+        try wait("exists == true AND enabled == true", app.buttons["new-conversation"], seconds: 60)
+        let transcriptButton = app.buttons["local-conversation-transcript"]
+        try reveal(transcriptButton, app: app); transcriptButton.tap()
+        try assertRetainedTurns(turns, app: app)
+        let transcript = app.scrollViews.matching(NSPredicate(format: "identifier BEGINSWITH 'transcript-session-'" )).firstMatch
+        XCTAssertTrue(transcript.exists)
+        let sessionID = String(transcript.identifier.dropFirst("transcript-session-".count))
+        _ = try XCTUnwrap(UUID(uuidString: sessionID))
+        print("MURAL_DEVICE_BREEZE_SESSION \(sessionID)")
+        if !traditional {
+            let originals = transcript.buttons.matching(identifier: "transcript-script-original")
+            XCTAssertEqual(originals.count, rawTurns.count)
+            for index in 0..<originals.count {
+                let original = originals.element(boundBy: index)
+                try reveal(original, app: app); original.tap()
+                XCTAssertTrue(transcript.staticTexts.matching(NSPredicate(format: "label == %@", rawTurns[index])).firstMatch.exists)
+                original.tap()
+            }
+        }
+        try keepBreezeScreen("Native Breeze display and original recognition", app: app)
+        try closeTranscriptSheets(app)
+        if stage == "breeze-multi" {
+            try verifyBreezeHistoryEdit(app, sessionID: sessionID, expectedTurns: turns, rawTurns: rawTurns)
+        }
+        print("MURAL_DEVICE_BREEZE_UI_PASS")
     }
 
     func testNativeBaseline() throws {

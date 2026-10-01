@@ -12,7 +12,7 @@ from pathlib import Path
 
 from verify_device import (validate_request, check_summary, baseline_events, acoustic_events, run_bounded,
                            compiler_proof, select_prepared, idle_process, cancellation_events, APP_EXECUTABLE,
-                           phase_durations, native_phase_durations, playback_ack_token, runtime_test_plan, consumed_ack_copy, reviewed_fixture, resource_events, capture_readiness, provisioning_events, provisioning_recovery_events)
+                           phase_durations, native_phase_durations, breeze_load_profile, require_instruments_device, playback_ack_token, runtime_test_plan, consumed_ack_copy, reviewed_fixture, resource_events, capture_readiness, provisioning_events, provisioning_recovery_events, breeze_events, breeze_fault_log, validate_breeze_memory_poc, breeze_fixture_ids, expected_console_stop, check_profiler_exit, breeze_history_fixture)
 
 
 def refuses(operation):
@@ -83,6 +83,134 @@ if __name__ == "__main__":
     for bad in ("device disconnected", copy_error.replace(run, nonce), copy_error + "other failure"):
         assert not consumed_ack_copy(bad, consumed, run, 0, nonce)
     udid = "00008150-000D25942278401C"
+    # App RPC availability does not imply Instruments availability. Refuse before
+    # installation when the exact device is offline, missing or only a simulator.
+    active = f"== Devices ==\nMac (OTHER)\nKevq (27.2) ({udid})\n== Simulators ==\n"
+    require_instruments_device(active, udid)
+    for inventory in ("", active.replace(udid, "WRONG"),
+                      active.replace("== Devices ==", "== Devices Offline =="),
+                      active.replace("== Devices ==", "== Simulators =="),
+                      f"== Devices ==\nMac (OTHER)\n== Devices Offline ==\nKevq (27.2) ({udid})\n"):
+        refuses(lambda: require_instruments_device(inventory, udid))
+    # A deliberate termination intent permits console closure, never a test pass.
+    # Unexpected disappearance still fails, and final summary/settings/cleanup
+    # assertions are independently required by the runtime.
+    assert not expected_console_stop("")
+    assert not expected_console_stop("MURAL_DEVICE_BREEZE_UI_PASS\n")
+    assert expected_console_stop("MURAL_DEVICE_TERMINATE_REQUESTED\n")
+    assert expected_console_stop("MURAL_DEVICE_CLEANUP_PASS\n")
+    assert expected_console_stop("MURAL_DEVICE_MODEL_PHASE_COMPLETE\n")
+    # A successful profiler exit can still truncate the native load trace. Admission
+    # requires capture to stay live until deliberate native teardown, for every profile.
+    check_profiler_exit(None, "")
+    for exit_code in (0, 1):
+        refuses(lambda: check_profiler_exit(exit_code, "MURAL_DEVICE_BREEZE_UI_PASS\n"))
+        check_profiler_exit(exit_code, "MURAL_DEVICE_TERMINATE_REQUESTED\n")
+    # History verification is model-free and scoped to the exact saved conversation
+    # from a successful, cleaned-up native Simplified run on this same phone.
+    import json
+    with tempfile.TemporaryDirectory() as directory:
+        source = Path(directory)
+        prior = dict(stage="breeze-acoustic", udid=udid, pair="breeze-zh-CN-en")
+        result = dict(session=run, backend=dict(pair="zh-CN-en", model="breeze-asr25-pal8-v1"),
+                      turns=[dict(raw="對我就 ok 大家聽出來", display="对我就 ok 大家听出来", reply="Alright.")])
+        summary = dict(passedTests=1, failedTests=0, skippedTests=0, totalTestCount=1)
+        for name, value in [("session", prior), ("result", result), ("summary", summary), ("cleanup", dict(cleanup="PASS"))]:
+            (source / f"{name}.json").write_text(json.dumps(value))
+        assert breeze_history_fixture(source, udid) == {"session": run, "turns": result["turns"]}
+        refuses(lambda: breeze_history_fixture(source, "00008150-1111111111111111"))
+        for name, bad in [("session", {**prior, "stage": "breeze-traditional"}),
+                          ("result", {**result, "session": "not-a-uuid"}),
+                          ("result", {**result, "turns": []}),
+                          ("result", {**result, "backend": dict(pair="zh-CN-en", model="FireRed")}),
+                          ("summary", {**summary, "skippedTests": 1}),
+                          ("cleanup", dict(cleanup="FAIL"))]:
+            path = source / f"{name}.json"
+            original = path.read_bytes(); path.write_text(json.dumps(bad))
+            refuses(lambda: breeze_history_fixture(source, udid))
+            path.write_bytes(original)
+        (source / "failure.json").write_text('{}')
+        refuses(lambda: breeze_history_fixture(source, udid))
+    breeze = "\n".join("Mural[123]: " + event for event in (
+        "local_talk_asr_backend backend=" + __import__('verify_device').BACKEND,
+        "local_talk_model_selected pair=zh-CN-en model=Breeze TW–EN (test)",
+        "asr_memory model=breeze-asr25-pal8-v1 stage=loaded", "asr_ready",
+        "breeze_inference_begin turn=1", "breeze_decode scope=whisperkit-transcribe-not-ui-send",
+        "breeze_script_display policy=tw2s-han-1d8105a0-v1 raw_preserved=true pair=zh-CN-en",
+        "model_complete", "local_reply_complete", "tts_finished", "local_ended"))
+    assert breeze_events(breeze, 1)["pid"] == "123"
+    warning = "Mural[123]: asr_memory_warning stopped=false continuing=true model=Breeze TW–EN (test)"
+    assert breeze_events(breeze + "\n" + warning, 1)["pid"] == "123"
+    for fault in ("thermal_state=2", "thermal_state=3", "tts_safety_stop", "model_failed", "local_reply_failed"):
+        refuses(lambda: breeze_events(breeze + "\n" + warning + " " + fault, 1))
+    refuses(lambda: breeze_events(breeze + "\n" + warning.replace("continuing=true", "continuing=false"), 1))
+    for bad in ("", breeze.replace("zh-CN-en model", "zh-TW-en model"),
+                breeze.replace("stage=loaded", "stage=prewarm-begin"),
+                breeze.replace("raw_preserved=true", "raw_preserved=false"),
+                breeze + "\nMural[123]: breeze_inference_begin turn=2",
+                breeze + "\nMural[123]: asr_memory_warning",
+                breeze + "\nMural[123]: firered_native_begin phase=prepare"):
+        refuses(lambda: breeze_events(bad, 1))
+    # Component profiling uses the real production step/receipt fences, not ASR text.
+    model = "breeze-asr25-pal8-v1"
+    load_rows = [
+        f"coreml_preparation model={model} phase=receipt status=hit seconds=0",
+        f"coreml_preparation model={model} phase=prewarm_skipped status=receipt seconds=0",
+        f"coreml_preparation model={model} phase=load_begin status=none seconds=0",
+    ]
+    for index, (component, seconds) in enumerate([("MelSpectrogram", .06), ("TextDecoder", 18), ("AudioEncoder", 150)]):
+        step = f"speech_preparation_step id={index} model={model} component={component} phase=load"
+        load_rows += [step + " outcome=begin seconds=0", step + f" outcome=completed seconds={seconds}"]
+    load_rows += [f"coreml_preparation model={model} phase=load_end status=none seconds=168.07"]
+    load_log = "\n".join("Mural[123]: " + row for row in load_rows)
+    profile = breeze_load_profile(load_log)[0]
+    assert profile["complete"] and profile["receipt_status"] == "hit" and profile["prewarm_skipped"]
+    assert profile["components_seconds"] == {"MelSpectrogram": .06, "TextDecoder": 18, "AudioEncoder": 150}
+    assert abs(profile["unattributed_seconds"] - .01) < 1e-6
+    assert not breeze_load_profile(load_log.rsplit("\n", 1)[0])[0]["complete"]
+    failed_load = load_log.replace("outcome=completed seconds=150", "outcome=failed seconds=150").replace("phase=load_end", "phase=load_failed")
+    assert not breeze_load_profile(failed_load)[0]["complete"]
+    for bad in [load_log.replace("seconds=150", "seconds=nan"),
+                load_log.replace("seconds=150", "seconds=-1"),
+                load_log.replace("seconds=150", "seconds=200"),
+                load_log.replace("outcome=begin seconds=0", "outcome=completed seconds=0")]:
+        refuses(lambda: breeze_load_profile(bad))
+    assert breeze_load_profile("unrelated model log") == []
+    prepared_breeze = "\n".join(line for line in breeze.splitlines() if not any(
+        marker in line for marker in ("breeze_inference_begin", "breeze_decode", "breeze_script_display", "local_reply_complete")))
+    assert breeze_events(prepared_breeze, 0)["pid"] == "123"
+    for marker in ("asr_ready", "stage=loaded", "tts_finished", "local_ended"):
+        refuses(lambda: breeze_events(prepared_breeze.replace(marker, "missing"), 0))
+    refuses(lambda: breeze_events(prepared_breeze + "\nMural[123]: breeze_inference_begin turn=1", 0))
+    # The opt-in diagnostic changes warning handling only; normal fault gates stay strict.
+    marker = "Mural[123]: breeze_memory_poc enabled=true thermal_stop_retained=true"
+    idle_warning = "Mural[123]: asr_memory_warning stopped=true model=PhoWhisper CS previous_state=Prepare speech models"
+    validate_breeze_memory_poc("prepare", "vi-en", True)
+    validate_breeze_memory_poc("breeze-acoustic", "breeze-zh-CN-en", True)
+    for stage, pair in [("multi", "vi-en"), ("resource", "zh-CN-en"), ("breeze-traditional", "breeze-zh-CN-en"), ("breeze-history", "breeze-zh-CN-en"), ("breeze-finish", "breeze-zh-CN-en")]:
+        refuses(lambda: validate_breeze_memory_poc(stage, pair, True))
+    refuses(lambda: breeze_events(breeze + "\n" + marker, 1))
+    refuses(lambda: breeze_events(breeze + "\n" + idle_warning, 1, memory_poc=True))
+    assert breeze_events(marker + "\n" + breeze + "\n" + idle_warning, 1, memory_poc=True)["pid"] == "123"
+    refuses(lambda: breeze_events(marker.replace("[123]", "[987]") + "\n" + breeze, 1, memory_poc=True))
+    for fault in ["asr_memory_warning stopped=true model=Breeze TW–EN (test)",
+                  "thermal_state=2", "thermal_state=3", "tts_safety_stop", "model_failed", "local_reply_failed"]:
+        refuses(lambda: breeze_events(marker + "\n" + breeze + "\nMural[123]: " + fault, 1, memory_poc=True))
+    assert "thermal_state=3" in breeze_fault_log(marker + "\n" + idle_warning + " thermal_state=3", memory_poc=True)
+    assert breeze_fixture_ids("breeze-acoustic") == ["M00A-switch"]
+    assert breeze_fixture_ids("breeze-acoustic", "F00A-switch") == ["F00A-switch"]
+    assert breeze_fixture_ids("breeze-multi") == ["F00A-switch", "M00A-english"]
+    assert breeze_fixture_ids("breeze-support") == ["M00A-english"]
+    validate_breeze_memory_poc("breeze-support", "breeze-zh-CN-en", True)
+    refuses(lambda: breeze_fixture_ids("breeze-multi", "F00A-switch"))
+    refuses(lambda: breeze_fixture_ids("breeze-acoustic", "unreviewed"))
+    # Breeze uses new ordinary-build stages, never the old FireRed resource path.
+    for stage in ("breeze-check", "breeze-acoustic", "breeze-multi", "breeze-traditional", "breeze-history", "breeze-support", "breeze-finish", "breeze-profile-check", "breeze-profile"):
+        validate_request(udid, stage, True, pair="breeze-zh-CN-en")
+        refuses(lambda: validate_request(udid, stage, False, pair="breeze-zh-CN-en"))
+        refuses(lambda: validate_request(udid, stage, True, pair="zh-CN-en"))
+        refuses(lambda: validate_request(udid, stage, True, pair="vi-en"))
+    refuses(lambda: validate_request(udid, "resource", True, pair="breeze-zh-CN-en"))
     # Pair-extension failure matrix: unknown pair, missing readiness, accidental
     # native FireRed admission before resource approval, and unchanged VI defaults.
     validate_request(udid, "pair-check", True, pair="zh-CN-en")
@@ -317,6 +445,11 @@ if __name__ == "__main__":
         assert compiler_proof(new_log, identity, [receipt], firered=True)["linker_command"] == linker.strip()
         old_log.write_text("Requested OTHER_SWIFT_FLAGS=-D MURAL_COREAI_TALK\n")
         refuses(lambda: compiler_proof(new_log, identity, [receipt]))
+        old_log.write_text("swiftc -module-name Mural -D MURAL_COREAI_TALK -D MURAL_BREEZE_MEMORY_POC -O\n")
+        refuses(lambda: compiler_proof(new_log, identity, [receipt]))
+        assert compiler_proof(new_log, identity, [receipt], memory_poc=True)["app_sha256"] == "binary"
+        old_log.write_text("swiftc -module-name Mural -D MURAL_COREAI_TALK -O\n")
+        refuses(lambda: compiler_proof(new_log, identity, [receipt], memory_poc=True))
         pidfile = root / "child.pid"
         code = "import os,time; open(%r,'w').write(str(os.getpid())); time.sleep(30)" % str(pidfile)
         refuses(lambda: run_bounded([sys.executable, "-c", code], root / "timeout.log", 1))

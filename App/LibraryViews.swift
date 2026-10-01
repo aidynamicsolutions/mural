@@ -383,7 +383,8 @@ struct TranscriptView: View {
                         ForEach(session.passages) { passage in
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(passage.speaker == .assistant ? "MURAL" : "YOU").font(.caption).tracking(1).foregroundStyle(MuralColor.secondary)
-                                Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                                Text(passage.displayText).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                                TranscriptScriptDisclosure(passage: passage)
                                 if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
                                     Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
                                 }
@@ -401,6 +402,7 @@ struct TranscriptView: View {
                     } else { Text("Start a conversation and your words will appear here.") }
                 }.padding(26)
             }.background(MuralColor.cream).foregroundStyle(MuralColor.ink)
+                .accessibilityIdentifier("transcript-session-\(session?.id.uuidString ?? "none")")
                 .navigationTitle("Our conversation").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
@@ -422,7 +424,8 @@ struct SessionHistoryView: View {
                             Text(session.title).font(.headline)
                             Text(session.startedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(MuralColor.secondary)
                         }.padding(.vertical, 8)
-                    }.swipeActions { Button("Delete", role: .destructive) { deleting = session }.disabled(session.endedAt == nil) }
+                    }.accessibilityIdentifier("history-session-\(session.id.uuidString)")
+                        .swipeActions { Button("Delete", role: .destructive) { deleting = session }.disabled(session.endedAt == nil) }
                 }
             }.scrollContentBackground(.hidden).background(MuralColor.cream)
                 .navigationTitle("Past conversations").navigationBarTitleDisplayMode(.inline)
@@ -459,10 +462,11 @@ struct EditableTranscriptView: View {
                                 Text(passage.speaker == .user ? "YOU" : "MURAL").font(.caption).tracking(1)
                                 Spacer()
                                 if passage.speaker == .user && session?.endedAt != nil {
-                                    Button("Edit") { editedText = passage.text; editingID = passage.id }.font(.caption)
+                                    Button("Edit") { editedText = passage.displayText; editingID = passage.id }.font(.caption)
                                 }
                             }.foregroundStyle(MuralColor.secondary)
-                            Text(passage.text).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                            Text(passage.displayText).font(.system(.title3, design: .rounded)).textSelection(.enabled)
+                            TranscriptScriptDisclosure(passage: passage)
                             if passage.fragments.contains(where: { $0.playbackCompleted == false }) {
                                 Text("Playback not completed").font(.caption).foregroundStyle(MuralColor.secondary)
                             }
@@ -480,12 +484,13 @@ struct EditableTranscriptView: View {
                     ForEach(session?.topics ?? []) { topic in Text(.init(topic.text)); SourcesView(sources: topic.sources, date: topic.retrievedAt) }
                 }.padding(26)
             }.background(MuralColor.cream).foregroundStyle(MuralColor.ink)
+                .accessibilityIdentifier("transcript-session-\(sessionID.uuidString)")
                 .navigationTitle("Our conversation").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }.sheet(isPresented: Binding(get: { editingID != nil }, set: { if !$0 { editingID = nil } })) {
             NavigationStack {
                 VStack(alignment: .leading, spacing: 20) {
-                    TextField("What you said", text: $editedText, axis: .vertical).lineLimit(4...10).padding(18).background(.white, in: RoundedRectangle(cornerRadius: 20))
+                    TextField("What you said", text: $editedText, axis: .vertical).lineLimit(4...10).accessibilityIdentifier("transcript-edit-text").padding(18).background(.white, in: RoundedRectangle(cornerRadius: 20))
                     Text("Correct a misheard phrase. Learning evidence from the old wording will be removed; the original remains in your backup history.").font(.footnote).foregroundStyle(MuralColor.secondary)
                     Spacer()
                 }.padding(24).background(MuralColor.cream).navigationTitle("What you said").navigationBarTitleDisplayMode(.inline)
@@ -723,7 +728,12 @@ struct SettingsView: View {
         } message: { Text("This removes conversations, vocabulary and progress. Export a backup first if you want to keep them. Your API key and preferences remain.") }
         .sheet(isPresented: $notices) {
             NavigationStack {
-                ScrollView { Text(Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "Notices unavailable.").font(.footnote).padding(24).textSelection(.enabled) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        Text(Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "Notices unavailable.")
+                        Text((try? ChineseScriptNotices.read()) ?? "OpenCC notices unavailable.")
+                    }.font(.footnote).padding(24).textSelection(.enabled)
+                }
                     .navigationTitle("Open-source notices").navigationBarTitleDisplayMode(.inline)
             }
         }

@@ -30,8 +30,9 @@ import OSLog
     public var isBusy: Bool { worker != nil }
     public init() {}
 
-    public func check(_ pair: LocalSpeechPair) {
+    public func check(_ requestedPair: LocalSpeechPair) {
         guard worker == nil else { return }
+        let pair = requestedPair.recognitionAssetPair
         error = nil; failure = nil; package = nil; offered = nil; completedBytes = 0; phase = .checking
         worker = Task {
             defer { worker = nil }
@@ -131,6 +132,9 @@ import OSLog
     /// Legacy/developer paths, receipts, settings and learning records are outside this root.
     public func removeManagedDownloads(for pair: LocalSpeechPair) throws {
         guard worker == nil else { throw SpeechPackageError.download("Finish cancelling the download first.") }
+        guard pair != .mainlandMandarinEnglish else {
+            throw SpeechPackageError.download("Simplified and Traditional Chinese share Breeze assets. Manage their shared download from Traditional Chinese after stopping all conversations. Retained FireRed downloads were not removed.")
+        }
         let manager = FileManager.default
         let pointer = Self.activeFile(pair)
         if manager.fileExists(atPath: pointer.path) { try Self.noSymlinks(pointer); try manager.removeItem(at: pointer) }

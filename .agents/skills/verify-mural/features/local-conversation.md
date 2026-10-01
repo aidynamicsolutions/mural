@@ -1,6 +1,143 @@
 # Local conversation feasibility probes
 
-## Simplified Chinese candidate: downloads passed, native memory STOP
+## Breeze Simplified MVP: manual acceptance complete
+
+The user confirms live mixed Mandarin/English with names/numbers, Simplified meanings and
+word lookup, on-screen Simplified Help, audible English replies without Chinese Help
+playback, and several ordinary turns without unexpected Pause/Resume. Together with real
+OpenCC goldens, focused UI/notification checks and earlier exact-UUID native persistence /
+explicit edit / raw retention, this closes the tested Simplified MVP PoC. See the
+[MVP closeout](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow).
+
+A fresh Traditional spoken session is not checked; source/unit/model-free shared-model
+checks are not a new native acoustic pass. Earlier prerecorded recognition failures and
+blocked support/profiler automation remain recorded, not relabeled PASS. Do not restart
+those scenarios or cold-load profiling just to repeat accepted manual coverage. No broad
+accuracy, sustained resource safety or semantic-learning qualification is claimed.
+
+## Normal Talk memory-warning UX: ordinary update installed
+
+UIKit memory-warning notifications are now advisory in normal Talk for every selected
+ASR. They log `asr_memory_warning stopped=false continuing=true` and must not cancel
+setup, recording, inference or reply or create a Resume state by themselves. Actual
+sampled memory-ceiling, serious/critical thermal and model-error stops remain; never
+hide their recovery controls or treat a warning-only pass as lifetime safety proof.
+Use the ordinary Core AI Release, not `DEVICE_BREEZE_MEMORY_POC=YES`, to qualify this policy.
+Legacy diagnostic flags/receipts are historical evidence, not required for the new behavior.
+
+Two real-observer model-free UI checks passed for repeated notifications during setup
+and after synthetic turns. Three distinct memory-ceiling/thermal recovery checks passed;
+host classification retains all genuine failure coverage. Preview loads no ASR model:
+assert settled coordinator state and preservation, not an enabled real microphone.
+Signed build is prepared privately under
+`.build/verification/breeze-memory-warning-nonblocking-20260930/native-prepare/`.
+The initial idle handoff timed out. A later fresh authorized handoff installed this exact
+ordinary artifact in place; `deploy-finish` passed the native dictionary/final-language
+check, 1 test / 0 failures / 0 skips and cleanup PASS. Final readback was On-device /
+English / Simplified Chinese. Later user smoke confirms stable ordinary turns; continuation
+through an explicitly observed real warning in this updated binary is still unverified.
+The deployment check requested no ASR models or microphone. See the feature checkpoint.
+
+## Breeze startup: warm relaunch accepted; profiling deferred
+
+The user reports approximately five seconds from Prepare & start to ready after End,
+full quit and relaunch of the unchanged installed Simplified Chinese build. They accept
+slow first preparation after reinstall as testing behavior. This is human feedback, not
+a traced Core ML cache classification. See the
+[warm-relaunch checkpoint](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#user-confirmed-warm-relaunch-startup-investigation-closed-for-the-poc).
+Do not reopen startup profiling solely for a slow post-install load. Separate cold/warm
+timings and retain model-ready waits/validation; investigate again only if unchanged-install
+relaunches regress, a relevant model/runtime/compute contract changes, or cold-start
+optimization is explicitly requested. No new installation is needed for current daily use.
+
+### Historical preparation-only profiling: native qualification blocked
+
+The receipt hits and skips prewarm, but actual encoder loading took 141-150 s in retained
+native runs. Decoder took 18-22 s, remaining load validation under 8 ms; receipt and
+Core ML's path/configuration-sensitive specialization cache are distinct. See the
+[load-profile checkpoint](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#september-30-breeze-load-profile-encoder-bottleneck-confirmed-cache-cause-unconfirmed).
+
+`breeze-profile-check` is model-free and records Time Profiler plus Core ML against the
+exact activated app PID. `breeze-profile` uses one normal Prepare, awaits enabled Record,
+then End/drain; it never records or plays Mac input. It requires `DEVICE_PAIR=breeze-zh-CN-en`,
+a matching ordinary `DEVICE_PREPARED` and `DEVICE_BREEZE_PROFILE_CHECK` pointing to a
+successful same-device/runner/prepared-identity check with cleanup and trace finalization.
+The zero-turn nonce now gates exact PID ownership before model work. No manual override of
+these gates, diagnostic memory define, probe flag, new runner or model acquisition.
+
+The corrected model-free attempt failed native automation initialization before the test
+body, not Breeze loading. Capture attachment/finalization worked after USB readiness;
+no new model load or cache classification was obtained. Host checks and compilation pass,
+but these stages are NOT QUALIFIED for expensive runtime. Preserve failed/skip reports and
+separate recovery; do not retry model work or call a trace with no model events acceptance.
+Read-only fresh status confirmed no owned work remains. The ordinary warning-fix binary
+remains installed. The user-confirmed warm relaunch above supersedes the proposed immediate
+profiling work, not these failed test outcomes. If profiling is needed later, resolve
+initialization or coordinate paired normal Prepare/End capture before claiming a traced
+cache state or changing Breeze's compute configuration.
+
+## Historical Breeze Simplified automation: bounded diagnostic, incomplete automated acceptance
+
+The manual MVP acceptance above supersedes the remaining Simplified manual checks below,
+not the outcomes of these older failed/blocked runs.
+
+The user-approved direction is shared Breeze recognition plus a raw-preserving
+Simplified display layer. Read `docs/asr/chinese/breeze-simplified-implementation-20260928.md`.
+Meaning language remains the only pair choice. The user explicitly authorized the
+existing XCTest runner against the existing Mural app, limited to new test conversations,
+and Mac-speaker input. The runner is not a separate Mural data sandbox.
+
+Use `breeze-check`, `breeze-acoustic`, `breeze-multi`, `breeze-support` or
+`breeze-traditional` with `DEVICE_PAIR=breeze-zh-CN-en` and a matching explicit
+`DEVICE_PREPARED` receipt. `breeze-support` selects one reviewed English clip and
+checks actual Simplified meaning/lookup/Help, with no Chinese Help speech. It is not
+currently qualified: the first attempt exposed a converter bug; the corrected attempt
+returned no recognized speech and did not reach lookup/Help. Do not silently retry.
+`breeze-history` is model-free and requires `DEVICE_BREEZE_HISTORY_SOURCE` pointing to
+this phone's successful, cleaned-up Simplified acoustic run. It opens only that UUID,
+checks display/raw after relaunch and future preference changes, then edits its test
+passage and verifies raw retention after a second relaunch. `breeze-finish` is model-free,
+checks the real pinned converter natively and deliberately leaves On-device / English /
+Simplified Chinese after independent readback. Use it only when that final preference
+is authorized; `breeze-check` instead restores the original preference. History/finish
+refuse the memory-warning diagnostic. Default `prepare` is build-only and preserves Core AI Release;
+its vi-en metadata does not authorize Vietnamese runtime. Custom evidence roots can
+supply `DEVICE_PREPARED` to preparation for unchanged-executable compiler-proof reuse.
+`DEVICE_BREEZE_CLIP=F00A-switch` selects the existing reviewer-frozen Mandarin-dominant
+clip for a one-turn acoustic check, not a new recording or ASR picker.
+
+Historical policy before the warning UX follow-up stopped the first actual turn on an iOS memory warning. A separately
+user-authorized `DEVICE_BREEZE_MEMORY_POC=YES` diagnostic compiles
+`MURAL_BREEZE_MEMORY_POC` into isolated DerivedData, retaining the same signed app and
+runner identities and locked package checkouts. It logs Breeze memory warnings without
+the automatic pause. The normal build has no such define. Serious/critical thermal
+stops, the existing sampled memory ceiling, model-error stops and runtime budgets remain.
+This is diagnostic evidence only, not production qualification or an iOS safety override.
+Restore the ordinary signed artifact before returning to daily use; do not leave the
+exception installed silently. No model/cache deletion, fallback, VAD or limit change.
+
+September 30 continuation: content-bounded scrolling passed model-free before model
+work. The reviewed Mandarin clip completed with byte-exact distinct raw/display Han
+and unchanged English, one Breeze load/inference and an English reply through a memory
+warning. Scoped history/relaunch/explicit edit passed separately without reloading ASR.
+The user could not confirm listening to that Mandarin reply. Earlier mixed-language
+recognition failure remains recorded, and the English-only clip produced incorrect words;
+a corrected support attempt subsequently returned no words. Native lookup/Help, fresh
+reply listening, technical-name/number accuracy and a new Traditional acoustic session
+remain unqualified. Never repair these ASR words with display conversion.
+
+Pinned TWVariantsRev changes literal Simplified 么 into 幺. The renderer now preserves
+that ambiguous input while still converting Traditional 麼; it does not repair wording
+or alter the dependency pin. Three new real goldens first reproduced the defect, then
+passed, along with the original goldens, persistence, synthetic UI and native dictionary
+regression. Ordinary signed Core AI Release is restored and terminated; final preference
+On-device / English / Simplified Chinese was read back. No diagnostic remains installed.
+See the implementation checkpoint for precise evidence, retained failures and limits.
+
+The previous FireRed failure below is historical. Its `DEVICE_PAIR=zh-CN-en` stages
+must not be reused or relabeled for Breeze.
+
+## Historical FireRed candidate: downloads passed, native memory STOP
 
 See `docs/asr/chinese/simplified-talk-qualification-plan.md` for current progress and `docs/asr/chinese/firered-memory-research-handoff.md` for the sanitized research packet. Managed acquisition, cancellation/resume and full verified activation passed within the existing installation, with the token-redirect failure and approved recovery retained separately. Talk has no developer-assets fallback. The approved native continuation `20260928-125336-34898` received an iOS memory warning during recording before decode. No completed turn, full idle or +30 release qualification. Original host trace cleanup failed; separate recovery inspection confirmed no owned processes. Stop native work: no retry, asset copying/deletion or ordinary promotion. The commands below describe existing model-free/build entrypoints, not a new phone window.
 
