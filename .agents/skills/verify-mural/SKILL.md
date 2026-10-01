@@ -38,16 +38,18 @@ Run commands from the repository root. The public/simulator bundle is `no.willia
 
 ## Mandatory simulator lifecycle
 
+Enter complete heavy commands through `active-ios-simulator-limit run -- <command>` before prebuild or boot. Two permits are shared with other projects and retained through cleanup. The host limiter is not another simulator lifecycle runner; all device/build locks and budgets below remain required.
+
 Reuse `Mural Lifecycle Verification`, UDID `C094F154-7674-4A17-9F6B-319959B1F49A` (iPhone 17 / iOS 27.0), as the single persistent project device across tasks, retries and worktrees. Confirm availability and Shutdown before use. If busy, wait rather than create a substitute. Never create per-test devices or parallel test-worker clones. If missing, inspect the inventory before deliberately replacing it. Additional migration/runtime/screen-size devices require a concrete coverage gap, user approval and an agreed deletion plan before creation; export evidence and delete only those approved temporary devices afterward. Retain the primary device's app/model data.
 
 Choose the relevant command below; these are alternatives, not a sequence to run in full:
 
 ```sh
-make build  # Generic arm64 simulator compilation only; never boots a device.
-make agent-verify SIM_UDID="$SIM_UDID"  # Three-check smoke fallback.
-make agent-verify SIM_UDID="$SIM_UDID" TESTS='testThemeSearchFiltersLocally'
-make agent-verify SIM_UDID="$SIM_UDID" VERIFY_SUITE=qualification
-make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock
+active-ios-simulator-limit run -- make build  # Generic arm64 simulator compilation only; never boots a device.
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID"  # Three-check smoke fallback.
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" TESTS='testThemeSearchFiltersLocally'
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" VERIFY_SUITE=qualification
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock
 ```
 
 Pass the exact UUID of an available, **initially Shutdown, explicitly owned synthetic simulator**. Never select by name, `booted`, or another project's device. The runner takes the shared real-user lock at `~/Library/Caches/ios-verification/<UDID>.lock`; a prebooted device or busy lock is a refusal, not permission to stop its owner.
@@ -119,7 +121,7 @@ The helper is `serve-sim` version 0.1.46. It targets simulators only. It does no
 export APP_BUNDLE_ID=no.william.mural
 export DERIVED_DATA="$PWD/.build/mural-lifecycle-derived-data"
 export SIM_APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/Mural.app"
-make agent-verify SIM_UDID="$SIM_UDID"
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID"
 ```
 
 Prefer the smallest sufficient **affected-feature selection** below; there is no mandatory smoke run before it. The default smoke fallback reuses three existing checks: onboarding/language selection, meaning toggle/New conversation/preview History, and Apple/Mural voice preference reselection and relaunch retention. Preview History is temporary, while preference retention is asserted across app launches. Neither is native model/audio proof.
@@ -133,14 +135,14 @@ Measured on the qualified runtime with incremental builds: smoke **4m23s / 4m35s
 For a focused change (replaces smoke, never appends it):
 
 ```sh
-make agent-verify SIM_UDID="$SIM_UDID" \
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" \
   TESTS='testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount'
 ```
 
 For custom simulator work, compile first with `make build`, then enclose **all** install/launch/input/capture steps in one bounded script:
 
 ```sh
-python3 scripts/verify_simulator.py --udid "$SIM_UDID" \
+active-ios-simulator-limit run -- python3 scripts/verify_simulator.py --udid "$SIM_UDID" \
   --evidence "$PWD/.build/verification/custom-$(date +%Y%m%d-%H%M%S)-$$" \
   --timeout 300 --cleanup-script /absolute/path/to/owned-finalizer.sh \
   -- bash /absolute/path/to/interaction.sh
@@ -281,7 +283,7 @@ Reuse saved evidence only after checking relevant production/test/fixture code, 
 ```sh
 cd "$(git rev-parse --show-toplevel)"
 : "${SIM_UDID:?Choose an explicitly owned Shutdown iPhone 17 simulator}"
-make agent-verify SIM_UDID="$SIM_UDID" \
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" \
   TESTS='testOnboardingChoosesLearningAndSubtitleLanguagesWithoutAnAccount'
 ```
 
