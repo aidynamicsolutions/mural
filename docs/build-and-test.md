@@ -1,64 +1,48 @@
-# How to build and test Mural
+# Build and test Mural
 
-Run commands from the directory containing `Package.swift` and `Mural.xcodeproj`. Core tests need Swift 6. Native builds need Xcode 26 or later.
+Run from the repository root containing `Package.swift` and `Mural.xcodeproj`. Native builds use **Xcode 27 / iOS 27 SDK**; the generated app deployment target is iOS 27.0. Core checks require Swift 6 and the pinned C++ OpenCC dependency. Resolve existing locks, never upgrade pins just to build.
 
-## Run offline checks
+## Host and simulator
+
+After dependencies resolve, Core checks need no API key or ASR weights:
 
 ```sh
-export EVIDENCE="$PWD/.build/verification/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$EVIDENCE"
 set -euo pipefail
-
-swift test > "$EVIDENCE/swift-test.log" 2>&1
-xcodebuild -project Mural.xcodeproj -scheme Mural \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath .build/DerivedData \
-  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build \
-  2>&1 | tee "$EVIDENCE/simulator-build.log" | xcbeautify --is-ci
+mkdir -p .build/verification
+swift test > ".build/verification/swift-test-$(date +%Y%m%d-%H%M%S)-$$.log" 2>&1
+active-ios-simulator-limit run -- make build
 ```
 
-Create an iPhone 17 simulator in Xcode’s **Devices and Simulators** window. If you name it `iPhone 17`, run UI tests with:
+`make build` compiles generic arm64 Simulator only; it never boots. For UI checks, use the persistent owned Shutdown simulator from `AGENTS.md` and the [verification feature map](../.agents/skills/verify-mural/features/README.md):
 
 ```sh
-xcodebuild -project Mural.xcodeproj -scheme Mural \
-  -destination 'platform=iOS Simulator,name=iPhone 17,arch=arm64' \
-  -derivedDataPath .build/DerivedData \
-  CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-  -parallel-testing-enabled NO \
-  -resultBundlePath "$EVIDENCE/ui-tests.xcresult" \
-  test 2>&1 | tee "$EVIDENCE/ui-tests.log" | xcbeautify --is-ci
-xcrun xcresulttool get test-results summary \
-  --path "$EVIDENCE/ui-tests.xcresult" --compact
+: "${SIM_UDID:?Use the explicitly owned Shutdown simulator}"
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" \
+  TESTS='testBreezeSimplifiedDisplayPreservesRawRolesAndEnglish'
 ```
 
-The core suite covers evidence validation, transcript revisions, language isolation, recall spacing, archive validation, translation cancellation, and managed-account configuration and security parsing. Native UI tests exercise the screens with in-memory data. Neither suite needs an API key. Configured provider sign-in and account deletion need the separate device checks in [managed accounts](managed-accounts.md).
+Simulator verification requires the installed host limiter and reviewed SimSlim 0.11.0; missing prerequisites are blockers, not permission to bypass them. Select the affected methods; `TESTS` replaces smoke. Omit it for the three-check smoke or deliberately choose `VERIFY_SUITE=qualification` for broader profile/runtime acceptance. Do not select by simulator name, create retry devices or run standalone boot/test commands. The existing runner owns locks, bounded build/runtime, screen recording, raw/formatted Xcode logs, compact xcresult and cleanup PASS/Shutdown.
 
-## Preview without saving learning data
+Core tests cover data/security/persistence boundaries, including real OpenCC. Preview UI uses synthetic in-memory records: no microphone, ASR/tutor or durable-history proof. Use stock simulator services only for affected integrations. Missing dependencies, zero tests, skips and cleanup failures are not passes.
 
-In **Product → Scheme → Edit Scheme → Run → Arguments**, add `--preview`. The app opens with temporary storage and skips onboarding. In a Debug build, add `--ended-conversation` to exercise the ended-conversation state. Preview fixtures make no API calls.
+## Preview and project generation
 
-Remove preview arguments before testing normal persistence. For actual speech, [install on an iPhone](run-on-iphone.md) and use the key saved through Settings.
+Debug `--preview` uses temporary records and makes no provider calls. Add `--ended-conversation` for lifecycle UI. Drive custom fixtures only inside the parent skill's bounded simulator workflow. Remove preview arguments for actual persistence.
 
-## Update the generated project
-
-After adding or removing files under `App/`, run:
+Regenerate when App membership or Xcode configuration changes, not for every build or documentation edit:
 
 ```sh
 python3 scripts/generate_project.py
 ```
 
-The generator moves a team selected in Xcode into the ignored `Config/Local.xcconfig`. The public `Config/Signing.xcconfig` includes that file when present. You can also copy `Config/Local.example.xcconfig` to `Config/Local.xcconfig` and enter your team ID there. Keep repeatable project settings in the generator; other manual project edits can be replaced on the next run. Swift Package Manager discovers files under `Core/` automatically.
+Preserve the selected signing/backend recipe and both package locks. Personal signing stays in ignored `Config/Local.xcconfig` included by `Config/Signing.xcconfig`. Change project recipes in the generator, never hand-edit generated files. Core source is discovered by SwiftPM; UI test membership is explicitly listed.
 
-## Verify live changes
+FireRed `--firered-runtime` / `--firered-file-probe` remain gated research options, not normal Breeze generation. See [retained support](asr/chinese/README.md#retained-firered-support).
 
-After changing audio, prompts or a language module, check a short conversation on a real iPhone: greeting, learner reply, correction, subtitles, interruption, mute and final closure. Check speaker and headphones separately. Try cellular with the Mac disconnected.
+## Physical and provider checks
 
-Debug-only `--verify-audio --verify-language=<language ID>` starts two real voice sessions using the phone’s saved key. `--verify-meaning` adds the translation and explicit manual-reset check. These flags incur API usage, use temporary learning data, and write content-free diagnostics in the app container. Run them only when live testing is intended; they are excluded from Release builds.
+Use the [physical workflow](../.agents/skills/verify-mural/references/physical-device.md) and [local feature](../.agents/skills/verify-mural/features/local-conversation.md). Physical work is explicitly opt-in, not a build dependency. Prepare before the idle/audible window; reuse installed main/runner identities, explicit paired Core AI Release and assets. `make agent-verify-device DEVICE_STAGE=prepare` is build-only. Select runtime coverage from changed contracts, not every suite.
 
-Record the build, checks and remaining limitations in `verification/validation.md`. Successful API transport does not establish pronunciation quality or teaching effectiveness.
+On-device needs ready Apple Intelligence and qualified retained assets, not an OpenAI key. Premium/live checks need the user's saved API key and authorization; use [installation guidance](run-on-iphone.md). Debug-only `--verify-audio --verify-language=<registered ID>`, `--verify-meaning` and `--record-spanish-demo` are paid provider helpers, not local ASR proof. The Spanish demo uses typed input with live voice output and still needs recording/listening review.
 
-## Record a scripted Spanish demo
-
-In a Debug build, launch with `--verify-audio --record-spanish-demo`. This uses the saved API key and temporary learning data. After a 30-second setup pause, it starts a café conversation with English meanings, mutes the microphone, and sends two scripted typed replies. Mural’s responses and speech come from the live APIs. The second reply contains a grammar mistake so the conversation can demonstrate a correction.
-
-This is a typed-input demo with live voice output. It does not verify speech recognition or a human conversation. The helper ends the session and writes a content-free `demo-verification.json` status in the app container. Actual recording is separate; select the Mural screen and its app audio in your recorder. The helper has been compiled on-device; a completed recording and playback review remain required.
+Save new scoped evidence under `.build/verification/` and separate automated assertions, human judgments and unverified behavior. [Current evidence selection](../.agents/skills/verify-mural/SKILL.md#evidence-selection); [historical public validation](../verification/validation.md).

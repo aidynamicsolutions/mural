@@ -1,5 +1,15 @@
 # Speech setup UX: implementation and verification
 
+## Current operating contract
+
+Use [local verification](../../.agents/skills/verify-mural/features/local-conversation.md), not old phase work orders. Normal Talk is English with Vietnamese or either Chinese meaning language; both Chinese modes share Breeze. Prepare owns consent, verified inventory, serialized native loading and actual readiness. Missing unpublished Breeze/PhoWhisper packages fail closed; retained FireRed metadata is not a normal Talk fallback.
+
+Cancel closes admission until the real child returns, while safe navigation and next-pair selection remain usable. Relaunch/retry rechecks surviving assets; approval, a saved checklist or a receipt cannot declare a model Ready. Receipts skip matching prewarm only and use policy-2 sandbox-relative identity; native loading/validation remains mandatory.
+
+Normal UIKit memory notifications are advisory, not cancellation/Resume triggers. Actual sampled-ceiling, thermal and model faults retain drain/explicit recovery. Background/native-compute qualification remains separate. Warm unchanged-install Breeze preparation was approximately five seconds by user report; slow post-install loading is an accepted testing distinction, not proof of a failed receipt. [Startup details](../../.agents/skills/verify-mural/features/local-conversation.md#startup-and-preparation-receipts).
+
+The dated cancellation/build results below preserve their original evidence. Their old pending-work/UX descriptions are not the current task queue. Current [Simplified acceptance](chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow) supersedes earlier deferred manual coverage, not historical failures or unrun Traditional/resource gates.
+
 Date: 2026-09-22. Branch: `mvp`. **Focused cancellation work complete and owner-accepted; not a clean-install release approval.**
 
 ## Accepted cancellation follow-up
@@ -42,7 +52,7 @@ Sampled footprint maxima were 2,030,127,304 / 249,169,904 / 1,917,159,432 / 1,24
 
 1. Local installer fault/recovery tests are complete: HTTP range resume, cancellation/network loss, bad pins/files, simulated storage/write failure, immutable publication, pointer-boundary recovery and old-version retention. See [local speech QA](local-speech-qa.md#local-installer-transaction-fault-tests-2026-09-23). Hosted/customer clean-install qualification remains separate.
 2. Safety-monitor and simulator coordinator/accessibility replay is complete. A delayed over-threshold sample could not stop a replacement monitor; current injected memory/thermal samples still stopped speech. Setup drain/admission, background/retry, thermal Resume and Accessibility XXXL consent/cancel checks passed. Physical native teardown, real memory/thermal qualification, scroll profiling and VoiceOver speech remain unverified; see [local speech QA](local-speech-qa.md#safety-monitor-delayed-sample-and-lifecycle-replay-2026-09-23).
-3. The owner explicitly deferred mixed Mandarin/English recognition and Traditional Chinese quality work. Preserve the known limitation; do not investigate it or request audio under the current scope.
+3. At this cancellation checkpoint language-quality work was deferred. Later Simplified manual acceptance is recorded in the current contract above; earlier failures and a fresh Traditional acoustic gap remain separate. Do not repeat accepted coverage or infer a broad language-quality pass.
 4. Keep [P0 provisioning](app-store-model-provisioning-release-blocker.md) open. TestFlight/App Store clean-install qualification is parked until the owner says they are ready to enroll in the paid Apple Developer Program; do not request enrollment or start distribution work before then. Hosting is separately deferred. When resumed, complete exact hosted packages, approved primary/backup sources and failover, independent pins, license/notices review, per-mode native disk reserves and intended clean-install verification. Independent local QA may continue but does not close the release gate.
 
 No additional owner testing is required to close this focused cancellation task. Do not reopen it merely because historical paragraphs below describe the superseded spinner or 195-second result.

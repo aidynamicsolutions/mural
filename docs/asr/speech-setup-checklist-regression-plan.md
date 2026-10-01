@@ -1,5 +1,7 @@
 # Speech setup checklist progress regression
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 **Status: checklist fix passes Core and focused simulator checks. Physical Taiwan/Breeze smoke reached Ready, then received a real iOS memory warning. STOP pending memory and engine-owner review; phone UI-order acceptance is inconclusive.**
 
 - Source branch: `local/resumable-speech-setup-qualification`

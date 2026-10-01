@@ -1,44 +1,52 @@
 # Verification feature map
 
+Read the affected feature, not every file. Use the smallest check that proves the changed contract.
+
 | Feature | User outcome | Verification file |
-|---|---|---|
-| Onboarding and AI consent | The learner chooses languages, understands processing, and reaches Talk without an account | `onboarding-consent.md` |
-| UI animations and transient layout | Labels and controls stay correctly positioned throughout transitions | `ui-animation.md` |
-| Themes, words, and settings | The learner browses practice choices, sees learning state, and can reach secure settings | `themes-words-settings.md` |
-| Conversation lifecycle | The learner can see meaning, reset a finished conversation, and retain its history | `conversation-lifecycle.md` |
-| Local conversation | Qualified opt-in native acoustic/tutor/TTS/persistence checks in the parent skill; paired probes and remaining human-only quality checks | `local-conversation.md` |
-| Live AI conversation | The learner receives a real voice or typed response and the device handles audio and failure states | `live-ai-device.md` |
+| --- | --- | --- |
+| Onboarding and AI consent | Choose languages/processing and reach Talk without an account | [Onboarding](onboarding-consent.md) |
+| Animation and transient layout | Labels/controls stay correctly positioned during transitions | [UI animation](ui-animation.md) |
+| Themes, words and settings | Browse practice, retain choices, reach secure settings/notices | [Settings](themes-words-settings.md) |
+| Conversation lifecycle | End explicitly, read transcript/meaning and retain eligible history | [Lifecycle](conversation-lifecycle.md) |
+| On-device English conversation | Vietnamese support or either Chinese writing mode with real local ASR/tutor/English voice | [Local conversation](local-conversation.md) |
+| Simplified display and transcript provenance | Read Simplified while preserving original recognition; reopen/edit without stale projection | [Chinese display](local-conversation.md#chinese-display-and-history) |
+| Speech readiness and interruptions | Safe cancellation/drain; advisory notifications do not independently pause Talk | [Readiness and safety](local-conversation.md#readiness-and-safety) |
+| Premium/live AI | Real provider reply, audio and failure handling | [Live AI](live-ai-device.md) |
 
-Use simulator preview fixtures and native UI tests for onboarding, navigation/settings, and synthetic conversation-lifecycle UI. For animation defects, also inspect recorded transition frames as described in `ui-animation.md`. Use the parent skill's explicitly authorized native physical workflow for real local microphone/model/speech/persistence checks. Device Hub is a premium typed/visual fallback and must be closed during microphone testing. With no OpenAI API key, the live response portion is blocked; missing-key and consent guards remain testable.
+## Select the surface
 
+- Simulator preview: UI, navigation, synthetic setup/safety and real converter/archive/view integration. No microphone/model/acoustic or durable-preview-history proof.
+- Physical phone: explicitly authorized real microphone/model/speech and native persistence. Use the [physical workflow](../references/physical-device.md), existing main app/runner and only new test conversations.
+- Human judgments: recognized words, script rendering and audible voice are separate. Logs alone do not prove hearing.
+- Core/host checks: exhaustive data/security boundaries through production code; real OpenCC goldens, never a converter stub for acceptance.
 
-## Physical acceptance selection
+Breeze Simplified MVP is user-accepted; the exact boundaries and unrun Traditional/support/profiler gates are in [local conversation](local-conversation.md#accepted-evidence-and-limits). Retained FireRed research is not Breeze evidence. Local checks need no OpenAI key; premium responses require an authorized saved key. Device Hub is a typed/visual premium fallback and stays closed for microphone checks.
 
-The real iPhone is primary for actual microphone/model/speech and native lifecycle acceptance, with explicit opt-in. Follow the [parent skill's stage selection](../SKILL.md#select-the-affected-behavior): `acoustic` for one real input turn, `multi` for conversation/persistence, `cancel` for End during recording and recovery. The latter does not prove inference cancellation or background execution. Initial or affected-contract qualification uses the ordered gates; routine checks do not automatically run every stage or duplicate simulator coverage.
+## Simulator entrypoints
 
-Prepare before the audible window, use saved Make/report commands, and distinguish automated results from human listening. See [physical E2E lessons](../../../../docs/physical-iphone-e2e-lessons.md) for matched runtime measurements, qualified playback synchronization and remaining human-only acceptance.
+Use the owned, initially Shutdown simulator from `AGENTS.md`. The outer host limiter, per-device/DerivedData locks, serial tests, saved logs/recordings and cleanup PASS/Shutdown remain mandatory.
 
-## Required simulator entrypoints
+```sh
+active-ios-simulator-limit run -- make build
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" \
+  TESTS='testBreezeSimplifiedDisplayPreservesRawRolesAndEnglish'
+```
 
-- `make build`: generic arm64 compilation, no boot.
-- `make agent-verify SIM_UDID=... TESTS='testMethod ...'`: preferred for known affected behavior. Smallest sufficient focused selection, replacing rather than appending smoke. Zero tests/skips are not accepted; explicitly empty/malformed/duplicate selectors fail.
-- `make agent-verify SIM_UDID=<owned Shutdown UUID>`: three-check smoke fallback for broad changes: onboarding, meaning/New conversation/preview History, and voice preference relaunch retention. Default reviewed Mural SimSlim profile, serial tests, full cleanup.
-- `VERIFY_SUITE=qualification`: the unchanged broader 13-check selection, including local search and recorded Settings transitions, for profile/runtime or broad integration qualification. Routine focused/smoke jobs have a shared ten-minute budget; qualification has a separate 40-minute bound. Cleanup is never cut off to meet a timing target.
-- `SIMULATOR_MODE=stock`: restore/verify managed services before tests. Required for system Spotlight, Health/Home/Fitness, Contacts/Calendar/Mail, Family/Screen Time, Maps/Games/News/Weather or wallpaper integrations affected by the default profile.
-- Custom scripts must be enclosed by `scripts/verify_simulator.py`; detached helper ownership/finalizers are mandatory. See the parent skill. All artifacts stay under `.build/verification/`; inspect after confirmed Shutdown.
+`TESTS` replaces the default three-check smoke; empty/malformed/duplicate selections and zero/skipped tests are not passes. Omit it for smoke. Use `VERIFY_SUITE=qualification` for the unchanged broader 13-check profile/runtime suite, not every feature edit. Routine runs have a shared ten-minute build/runtime/cleanup budget; qualification has 40 minutes. Do not cut cleanup short.
 
-Qualification covers preview onboarding/consent/missing-key, backend/unsupported-pair guards, synthetic setup cancel/drain/retry/language-change, voice selection/reselection/relaunch, themes/local search/secure settings, ended transcript/New conversation/preview History, large text and Settings transitions. No selection runs real audio, models, provider calls or a phone.
-
-| Change | Start with these selectors, adding siblings only when affected |
+| Changed contract | Focused selectors; add siblings only when affected |
 | --- | --- |
-| Settings layout/animation | `testSettingsDropdownTransitions`, plus `testSettingsLanguageRowAtAccessibilityTextSize` for large-text impact |
-| Local search | `testThemeSearchFiltersLocally` (match, no results, recovery) |
-| Theme navigation | `testThemeSurvivesNavigationToWords` |
-| Onboarding/consent | The relevant test(s) in `onboarding-consent.md` |
-| Meaning/reset/history UI | `testMeaningLabelWorksAfterEndingAndManualResetKeepsHistory`; add transcript checks if affected |
-| Voice preferences | `testOnDeviceVoiceSelectionPersists` or `testMuralVoiceSelectionPersists`, as affected |
-| Setup cancellation/drain | `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain`; relevant interruption matrix only when semantics change |
+| Chinese script, raw disclosure and explicit edit | `testBreezeSimplifiedDisplayPreservesRawRolesAndEnglish` |
+| Missing Chinese assets / pair mapping | `testSimplifiedBreezeMissingAssetsDoesNotOfferFireRed`, `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed` |
+| Setup cancellation/drain | `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain` |
+| Advisory memory notifications | `testMemoryWarningDuringApprovedSetupDoesNotInterrupt`, `testMemoryWarningKeepsTalkActiveAndPreservesTurns` |
+| Genuine memory/thermal recovery | Applicable ceiling/thermal selectors in [local conversation](local-conversation.md#readiness-and-safety) |
+| Meaning/reset/history | `testMeaningLabelWorksAfterEndingAndManualResetKeepsHistory`; relevant transcript siblings |
+| Voice preference retention | `testOnDeviceVoiceSelectionPersists` or `testMuralVoiceSelectionPersists` |
+| Settings motion / large text | `testSettingsDropdownTransitions`, plus `testSettingsLanguageRowAtAccessibilityTextSize` when affected |
+| Search and themes | `testThemeSearchFiltersLocally`, `testThemeSurvivesNavigationToWords` |
+| Onboarding/consent | Relevant selectors in [onboarding](onboarding-consent.md) |
 
-Keep existing target-driven scrolling and meaningful readiness waits. Coordinate heavy simulator work with other projects; separate devices still contend for host resources. Timings and exact selections are saved with each run. Results and scope boundaries: [speedup plan](../../../../docs/simulator-test-speedup-plan.md).
+Use `SIMULATOR_MODE=stock` for integrations affected by disabled SimSlim services. Custom interaction must stay inside `scripts/verify_simulator.py`, itself entered through the host limiter. See the [parent skill](../SKILL.md) for ownership, budgets, finalizers and evidence reuse.
 
-For opt-in normal-installation persistence, run `testSimulatorLifecycleSetRetainedSettings`, then `testSimulatorLifecycleCheckRetainedSettings` in separate slim and stock lifecycles, then `testSimulatorLifecycleRestoreSettings`. Use only a dedicated Mural Lifecycle synthetic installation. These assert exact disk-backed language settings before changing them, not durable conversation creation. Commands and evidence: [rollout plan](../../../../docs/simulator-verification-lifecycle-plan.md).
+For non-preview Settings persistence, use the retained synthetic installation and the separate set/check/restore lifecycle tests in the [rollout guide](../../../../docs/simulator-verification-lifecycle-plan.md). Preview records do not establish durable conversations. [Measured selections and boundaries](../../../../docs/simulator-test-speedup-plan.md).

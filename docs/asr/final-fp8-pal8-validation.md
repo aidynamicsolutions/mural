@@ -1,5 +1,7 @@
 # Local-agent prompt: final FP8/PAL8 iPhone validation
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Continue `aidynamicsolutions/mural`, branch `mvp`. This is final validation of
 **packed-v3 FP8 Core AI encoder + PAL8 Core ML decoder**, not FP8 on both halves.
 Keep `prewarm=always`. No PAL4/PAL6, mixed-precision, prewarm-policy, conversion,

@@ -6,26 +6,9 @@ The learner starts a real Mural conversation on the physical iPhone 17, receives
 
 ## How to get to it
 
-Use the physical-device preparation and Device Hub rules in the parent `SKILL.md`. Discover the paired phone first:
+Follow [physical preparation and the premium fallback](../references/physical-device.md#device-hub-manualpremium-fallback), including fresh device/status discovery, exact-PID idle ownership and approved signed-artifact selection. Preserve the paired Core AI Release, main/runner identities, assets and data; do not substitute generic Debug or use blanket `--terminate-existing`.
 
-```sh
-xcrun devicectl list devices
-```
-
-Build and install the current signed checkout without uninstalling the existing app:
-
-```sh
-xcodebuild \
-  -project Mural.xcodeproj \
-  -scheme Mural \
-  -destination "platform=iOS,id=$DEVICE_UDID" \
-  -derivedDataPath "$DEVICE_DERIVED_DATA" \
-  build
-xcrun devicectl device install app --device "$DEVICE_UDID" "$DEVICE_APP"
-xcrun devicectl device process launch --device "$DEVICE_UDID" --terminate-existing "$APP_BUNDLE_ID"
-```
-
-Open Device Hub, select the phone, and choose View Screen. Use Capture Keyboard only for typed input. For microphone capture, fully quit Device Hub and operate the phone directly.
+Open only the owner-coordinated Device Hub session on that phone and choose View Screen. Use Capture Keyboard only for typed input and turn it off afterward. For microphone capture, fully quit the owned mirror and operate the phone directly. Debug diagnostic helpers require an explicitly approved matching Debug build.
 
 ## How to drive it
 
@@ -47,7 +30,7 @@ A passed live check needs the physical-device build/install evidence, a settled 
 
 ## Gotchas
 
-- The current checkout has no available OpenAI API key. Provider responses, live audio, typed replies that call OpenAI, meaning requests, and WebRTC success are blocked until a key is supplied through the phone UI.
+- A saved user key and paid-provider authorization are prerequisites, not properties of the checkout. Without them, completed provider replies/audio/meaning are blocked; missing-key and consent UI can still be checked.
 - Do not inspect Keychain contents or put the key in logs, screenshots, shell history, or reports.
 - Device Hub can show live frames while input forwarding is broken. Quit and reopen the entire app, then verify a harmless navigation action before retrying.
 - Device Hub can interfere with microphone capture. Fully quit it for voice recording checks.

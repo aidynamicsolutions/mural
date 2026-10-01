@@ -1,5 +1,7 @@
 # Simplified Chinese-English Talk: implementation and physical qualification plan
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 ## Current checkpoint
 
 **Status: managed acquisition/recovery PASS; native FireRed resource qualification BLOCKED by an actual iOS memory warning. Stage 6A acquisition/runtime implementation and Stage 7A first-download/cancel/resume/verification evidence are complete within the existing installation. The approved native continuation failed during recording before decode. No automatic retry or ordinary promotion.**

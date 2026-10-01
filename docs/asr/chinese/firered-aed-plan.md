@@ -1,5 +1,7 @@
 # Plan B — FireRedASR2-AED for Mainland Mandarin + English
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 ## Decision and scope
 
 Run this after the Breeze checkpoint, as a separate change. The first question is

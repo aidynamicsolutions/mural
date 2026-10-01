@@ -1,5 +1,7 @@
 # W8 v3: repair the diagnostic ABI and continue qualification
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Date: 2026-09-17. Reviewed `mvp` head: `f5dbbf98f847fe2c8665bf767259eb9c728ce5d4`.
 
 **Status:** new exporter, runtime-identity helper, native tiny-probe wiring and portable tests are implemented. Portable checks pass. Apple conversion/AOT, Xcode type-checking of the changed native probe, native cache isolation, full PhoWhisper accuracy and iPhone speed/memory remain unverified here. Actual generated manifest pins must be installed locally before the probe loads anything. This is not a default model change.

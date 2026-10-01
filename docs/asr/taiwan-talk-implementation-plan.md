@@ -1,5 +1,7 @@
 # Taiwan Mandarin–English Talk and clean-install provisioning
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Latest flow and verification: [accepted cancellation closeout](speech-setup-ux.md#accepted-cancellation-follow-up). Prepare & start owns consent/download/preparation. Per-component cancellation and safe navigation/next-pair selection are implemented; the owner accepts the observed 15-19 second post-reinstall drain. That focused task is complete, not a total-startup-time guarantee. Installer recovery, language quality and native/distribution release gates remain separate.
 
 Base: `3bae86c34072c088454afe5b235802a76b6e2c3b` on `mvp`.

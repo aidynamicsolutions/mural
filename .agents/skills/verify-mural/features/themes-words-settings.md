@@ -13,7 +13,7 @@ Use `--preview --screenshot=themes` or `--preview --screenshot=words` **inside a
 Run the focused native checks when the changed behavior is navigation, language selection, settings, or notices:
 
 ```sh
-make agent-verify SIM_UDID="$SIM_UDID" \
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" \
   TESTS='testThemeSurvivesNavigationToWords testThemeSearchFiltersLocally testLanguageSwitchUpdatesGreetingThemesAndWords testSettingsOfferSecureKeyEntryAndBackups'
 ```
 
@@ -32,6 +32,12 @@ Use the exact test target spelling from `xcodebuild -list` if Xcode reports an u
 ## Proof
 
 Capture the changed screens and accessibility output. Success is a visible selected theme after returning to Talk, the expected language-specific Words heading, and a passing focused UI test. A secure text field's existence proves the disclosure is reachable, not that a real key was saved.
+
+## On-device meaning-language selection
+
+Normal Talk chooses English learning plus Vietnamese or either Chinese meaning language, not an ASR picker. Both Chinese settings select Breeze; Simplified also prepares a display converter. The selected support locale stays distinct from shared asset ownership, and the active session pair stays frozen during drain or later Settings changes.
+
+For that contract use `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed`; for missing Chinese assets use `testSimplifiedBreezeMissingAssetsDoesNotOfferFireRed`. Real support/voice and history are covered separately in [local conversation](local-conversation.md), not by menu selection alone. OpenCC notices must remain reachable in Settings.
 
 ## Gotchas
 

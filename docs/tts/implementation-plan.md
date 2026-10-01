@@ -1,5 +1,7 @@
 # Mural: on-device TTS implementation and comparison plan
 
+Retained TTS experiment/qualification record. Start with [results and limits](results.md) and [current local verification](../../.agents/skills/verify-mural/features/local-conversation.md), not old pending-work labels or probe flags. Normal Talk's advisory warning policy does not remove genuine thermal/ceiling/model guards or authorize another acoustic/voice campaign.
+
 **Implementation order:** Supertonic-3 ANE-bucketed int4 → Kokoro-82M → optional Kokoro-7M-Distill
 **Target:** the user's real iPhone 17; local, offline English tutor speech
 **Prepared:** September 20, 2026

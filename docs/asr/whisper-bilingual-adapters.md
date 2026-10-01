@@ -1,5 +1,7 @@
 # Bilingual Whisper adapters: feasibility, data and training
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Research date: 2026-09-17. This is a research proposal, not a trained model or a cleared training dataset. It accompanies the [current-model-first plan](iphone17-vien-research-plan.md).
 
 ## Explanation in ordinary language

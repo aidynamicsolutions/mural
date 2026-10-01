@@ -1,5 +1,7 @@
 # Plan A — Breeze-ASR-25 for Taiwan Mandarin + English
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 ## Decision and scope
 
 Implement one local, non-streaming ASR probe through the existing audio owner.

@@ -11,23 +11,27 @@
 
 Mural is a native iPhone app for learning through conversation. Speak to a warm, animated orb, follow the meaning when you need it, and practise words again in later conversations. Mural adjusts the challenge from the evidence in your replies.
 
-Built with SwiftUI, Liquid Glass and local SwiftData storage. This version connects directly to OpenAI using your own API key. It needs an internet connection, but no Mural account or running Mac.
+Built with SwiftUI, Liquid Glass and local SwiftData storage. **On-device** mode practises English with Vietnamese or either Chinese meaning language, using local speech models and Apple's Foundation Models. **Premium** connects directly to OpenAI with your own API key. Neither requires a Mural account or a running Mac during practice.
+
+This is a development build: ordinary Breeze/PhoWhisper first-install model downloads are not published yet. On-device acceptance reused qualified assets on iPhone 17; a fresh installation is not automatically ready. See the [current documentation](docs/README.md) and [distribution blocker](docs/asr/app-store-model-provisioning-release-blocker.md).
 
 ## Get started
 
-You need a Mac with Xcode 26 or later, an iPhone running iOS 26.1 or later, an Apple Account, and an OpenAI API project with billing and access to GPT-Live-1 and GPT-5.6 Luna. A ChatGPT subscription does not provide API credit.
+Use Xcode 27, an iPhone running iOS 27 or later, and an Apple Account for signing. On-device requires ready Apple Intelligence, a supported English/support pair and verified local assets; no OpenAI key. Premium requires network and your own API project with billing/model access. A ChatGPT subscription does not provide API credit.
 
 ### Install with a local AI agent
 
 If Codex or another coding agent has access to your Mac's files and terminal, paste the prompt below. The agent can clone, build and install Mural. You handle Apple Account sign-in and team selection in Xcode, device trust and Developer Mode prompts, and API-key entry inside the app. The [iPhone installation guide](docs/run-on-iphone.md) covers each step.
 
 ```text
-Help me build and install Mural on my iPhone from https://github.com/Chuloo/mural.
+Help me build and install Mural on my iPhone from
+https://github.com/aidynamicsolutions/mural, branch mvp.
 
-Clone the repository into a new local folder, or use this checkout if it is
-already open. Read README.md, docs/run-on-iphone.md and docs/build-and-test.md.
-Check that Xcode and its iOS tools are ready, resolve the pinned dependencies,
-run the offline core tests, and build the iOS Simulator target.
+Prefer the existing checkout. Read AGENTS.md, docs/README.md,
+docs/run-on-iphone.md and docs/build-and-test.md. Check Xcode 27 and its iOS
+tools, preserve package locks, run Core checks and compile through the
+existing bounded simulator entrypoint. Preserve the paired phone's intended
+backend/signing recipe; do not replace it with a generic build.
 
 Guide me through adding my Apple Account and choosing my signing team in
 Xcode. For a first installation, help me choose a unique bundle identifier if
@@ -38,25 +42,26 @@ Detect my connected iPhone, build with the configured signing team, install
 Mural and launch it. Tell me when I need to unlock the phone, trust this Mac
 or the developer profile, enable Developer Mode, or approve a system prompt.
 
-I will choose my learning and subtitle languages, then enter my own OpenAI
-API key in Settings > Advanced > Use your own API key. Do not ask me to paste
-the key into chat, read it from Keychain, or put it in source files or logs.
-Leave managed accounts, hosted trials and purchases disabled.
+I will choose languages and mode. For On-device, verify Apple/model
+readiness; missing unpublished assets are a blocker, not permission to fetch
+invented packages or substitute FireRed. For Premium I will enter my key in
+Settings > Advanced > Use your own API key. Never request it in chat, read it
+from Keychain, or put it in source/logs. Leave hosted trials/purchases disabled.
 
-Finish by reporting which build and installation checks passed, and anything
-I still need to do on the phone. I will start the first live conversation.
+Report build/install checks separately from speech/listening and remaining
+blockers. I will operate the first normal conversation.
 ```
 
 ### Install with Xcode
 
-1. Clone [Chuloo/mural](https://github.com/Chuloo/mural), or download its ZIP. Open `Mural.xcodeproj` from the directory containing this README.
+1. Use this checkout or clone [aidynamicsolutions/mural, branch mvp](https://github.com/aidynamicsolutions/mural/tree/mvp). Open `Mural.xcodeproj` beside `Package.swift`. For an existing paired installation use the [preserved physical recipe](.agents/skills/verify-mural/references/physical-device.md), not an unqualified default replacement.
 2. In Xcode, open **Settings → Accounts** and add your Apple Account.
 3. Select the **Mural** target, open **Signing & Capabilities**, enable automatic signing, and choose your team. For your own fork, replace the bundle identifier with a unique value such as `com.yourname.mural`. Keep that value stable for later updates.
 4. Connect and unlock your iPhone. Trust the Mac if prompted. Turn on **Settings → Privacy & Security → Developer Mode** on the phone, restart, and confirm the setting.
 5. Select **Mural** as the scheme and your iPhone as the destination, then click **Run**. If iOS asks you to trust the developer, do so in **Settings → General → VPN & Device Management**.
-6. Choose your learning and subtitle languages in the welcome screens. In **Settings → Advanced → Use your own API key**, save your own OpenAI project key. Start a conversation and allow microphone access.
+6. Choose languages and mode. On-device teaches English with the selected meaning language; **Prepare & start** checks actual model readiness. Premium saves your key in **Settings → Advanced → Use your own API key**. Allow microphone access when requested.
 
-You should hear Mural greet you in your chosen language. You can now disconnect your phone from the Mac and use Wi-Fi or cellular.
+Confirm a short conversation and audible output in the selected mode. On-device inference runs locally after assets are ready; Premium needs Wi-Fi or cellular.
 
 A free Personal Team can run the app on your own phone; TestFlight and App Store distribution require Apple Developer Program membership. Free provisioning profiles expire after seven days. Refresh by running the same project again, preserving the team and bundle identifier. Export a learning backup before changing either or switching phones. See the [detailed iPhone guide](docs/run-on-iphone.md) for common setup problems. [Apple membership guidance](https://developer.apple.com/support/compare-memberships/)
 
@@ -64,6 +69,7 @@ A free Personal Team can run the app on your own phone; TestFlight and App Store
 
 - **A warm welcome:** choose a learning language and a subtitle language in two short screens, with a greeting that changes languages.
 - **Conversation practice:** live voice, gentle corrections, optional meaning subtitles, word lookup, mute, and a typed reply when speaking is inconvenient.
+- **On-device English:** Vietnamese support or shared Breeze recognition for both Chinese writing modes. Simplified display preserves original recognition separately; Chinese meanings/Help stay on screen and reply speech stays English. The [Simplified MVP is user-accepted](docs/asr/chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow), not a broad accuracy/resource guarantee. Chinese automatic learning credit remains disabled.
 - **Themes:** 24 conversation settings, with cultural details supplied by each language module. You can also request a current topic; web search supplies source links.
 - **Adaptive practice:** vocabulary and provisional ability observations come from validated conversation evidence. Each learning language keeps separate progress.
 - **Recall bars:** one to three bars summarise repeated retrieval over time. Three bars require spaced evidence in different contexts. These are product heuristics, not calibrated forgetting probabilities or a language certificate.
@@ -76,7 +82,7 @@ The modules teach Norwegian Bokmål with an Eastern Norwegian voice target, Span
 
 Mural stores conversations, vocabulary and preferences on your device. The iPhone app has no Mural cloud sync, analytics SDK, advertising or account connection in this version. Your API key is stored in the device’s Keychain, excluded from learning exports, and sent only to OpenAI.
 
-During practice, audio, selected conversation text, learning context and requested searches go to OpenAI. Mural does not save raw audio. API requests set `store: false` where supported, but that does not disable all provider retention; OpenAI’s abuse-monitoring rules and your project’s settings still apply. [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data)
+On-device speech/tutoring inference stays on the phone once required assets are ready; initial asset acquisition may use network. In Premium, audio, selected conversation text, learning context and requested searches go to OpenAI. Mural does not normally save raw audio. API requests set `store: false` where supported, but that does not disable all provider retention; OpenAI’s abuse-monitoring rules and your project’s settings still apply. [OpenAI data controls](https://developers.openai.com/api/docs/guides/your-data)
 
 OpenAI bills your project for voice, text and search. The app’s usage display is an estimate, and its conversation time limit is not a billing cap. Check your OpenAI project’s usage and spending settings.
 
@@ -90,7 +96,7 @@ The [Mural website](https://mural.chat) lives in the separate [Chuloo/mural-webs
 
 ## Build and test
 
-For core tests, simulator builds, and native UI tests, follow [the build and test guide](docs/build-and-test.md). It keeps raw logs in local evidence, formats Xcode output with `xcbeautify`, and summarizes test results with `xcresulttool`. UI tests use in-memory fixtures and do not require an API key.
+Start with the [documentation index](docs/README.md), [build guide](docs/build-and-test.md) and [verification feature map](.agents/skills/verify-mural/features/README.md). Existing Make entrypoints own simulator lifecycle/locks, concise Xcode output, raw evidence and compact results. Preview UI uses in-memory fixtures; physical microphone/model/voice checks are separate and opt-in.
 
 On 12 September 2026, the English, French, onboarding and AI-consent build passed **41 core tests and 11 native UI tests**. This covers language-specific progress, the two welcome screens, consent for existing users, secure key entry and the conversation controls. Earlier iPhone checks verified Spanish speech, Meaning during and after a conversation, reset, retained history and audio cleanup; those live results apply to the earlier tested builds. [Verification record](verification/validation.md)
 
@@ -103,7 +109,7 @@ On 12 September 2026, the English, French, onboarding and AI-consent build passe
 | `Tests/` | Core learning and translation tests |
 | `UITests/` | Native interface tests |
 | `scripts/` | Xcode project and procedural icon generators |
-| `docs/` | Setup, build and language-module guides |
+| `docs/` | Current operating guides, linked feature verification and dated research/evidence |
 | `release/` | Submission drafts and public-release checks |
 | `server/` | Account, billing and hosted-service foundation; see its runbook before deploying |
 
@@ -111,6 +117,6 @@ Read [how the language architecture works](docs/language-architecture.md) and [h
 
 ## Dependencies and license
 
-The native WebRTC package is pinned to [stasel/WebRTC 152.0.0](https://github.com/stasel/WebRTC/tree/152.0.0). The app bundles [third-party notices](App/ThirdPartyNotices.txt) and the SDK’s privacy manifest. Review upstream notices when changing the dependency.
+Dependencies are pinned in the root/Xcode manifests and locks, including WebRTC, FluidAudio, WhisperKit and SwiftyOpenCC. The app bundles [app notices](App/ThirdPartyNotices.txt), [OpenCC notices](Core/Resources/opencc-notices.txt) and the SDK privacy manifest. [ASR provenance](docs/asr/README.md) is separate from converter licensing; review notices/resources before distribution or dependency changes.
 
 Mural is released under the [MIT License](LICENSE). Third-party components retain their own licenses. The Mural name and logo identify the original project; the software license does not grant trademark rights.

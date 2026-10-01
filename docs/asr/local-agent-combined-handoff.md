@@ -1,5 +1,7 @@
 # Local execution: bounded PAL6 encoder + PAL6 decoder qualification
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Read `combined-pal6-review-20260918.md` and the committed
 `decoder-qualification-20260918-real-results.md` first. This is an implementation
 handoff, not permission to switch production defaults. All new device outcomes

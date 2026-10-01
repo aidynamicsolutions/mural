@@ -1,5 +1,7 @@
 # Local-agent handover: smaller FireRed research and CTC host gate
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 Work in `aidynamicsolutions/mural`, branch `mvp`. Review anchor is
 `a73d8163355fb2137d552196677c1b722840d9df`. Preserve unrelated work/history; no
 reset, rebase, stash, force push, deletion of assets or replacement app slot.

@@ -1,5 +1,7 @@
 # FireRedASR2-AED memory research handoff
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 Date: 2026-09-28. Repository: `aidynamicsolutions/mural`, branch **`mvp`**.
 
 **Purpose: research practical reductions in real iPhone memory use, then return a small, evidence-backed implementation/experiment plan to the local agent. Do not run or promote the stopped candidate.** This is a source and sanitized evidence checkpoint, not production qualification.

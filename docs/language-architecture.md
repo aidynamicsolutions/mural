@@ -10,6 +10,10 @@ Switching is allowed between conversations. It clears the current screen context
 
 Archive version 2 stores language IDs explicitly. Version 1 records migrate to Norwegian, and their hidden-word keys gain the same namespace as new evidence. The SwiftData record itself retains its original identity. Before persisting that migration, the app saves a protected copy of the original payload in its Application Support/Mural directory. The API key stays in Keychain. Backups with unknown language IDs or mixed-language topic attachments are rejected without replacing existing data.
 
+On-device Talk has a narrower contract than the general learning-language registry: English learning with a frozen `LocalSpeechPair` for Vietnamese, Traditional Chinese or Simplified Chinese support. Both Chinese pairs share Breeze assets while retaining distinct support locales and stored pair IDs. Apple Foundation Models generate the selected-script support; OpenCC only derives new Simplified spoken-user display.
+
+Raw recognition, canonical teaching wording and optional display snapshots remain distinct in schema 2. An explicit edit clears stale projection but retains raw provenance. Later Settings changes cannot rewrite history. Chinese automatic learning assessment remains disabled pending separate semantic qualification. See [the display/persistence contract](asr/chinese/breeze-simplified-implementation-20260928.md#raw-canonical-and-display-roles).
+
 These are compiled modules. Adding one ships with an app update; there is no remote module download or extra service. Different scripts may require additional word-selection and layout work, and every new language needs a native-speaker teaching and pronunciation review.
 
 See [how to add a language](add-language.md) for the implementation steps.

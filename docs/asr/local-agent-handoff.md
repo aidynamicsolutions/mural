@@ -1,5 +1,7 @@
 # Local-agent handoff: repair the marker ABI and keep the W8 work moving
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Updated 2026-09-17 after reviewing `f5dbbf98f847fe2c8665bf767259eb9c728ce5d4`.
 
 Read `coreai-w8-v3-marker-recovery.md` and `coreai-w8-v2-local-result.md` first. This supersedes the older "stop for review before changing marker semantics" instruction. The actual invariants must remain; a tested versioned diagnostic ABI change is allowed. Do not revert prior useful work or repeat the unchanged v2 constant-Int32 graph.

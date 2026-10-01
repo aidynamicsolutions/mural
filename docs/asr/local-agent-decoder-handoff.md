@@ -1,5 +1,7 @@
 # Local agent: decoder precision, trustworthy timing, natural interview pacing
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 > **Delivery status:** Prepared against `eb2675980cd9c944cd376d7bb70e4d2800f15df8`. The GitHub connector rejected the remote write, so these changes are **not committed or pushed**. Apply the delivered `decoder-next.patch` using the package’s `DELIVERY.md` before running this handoff.
 
 Continue `aidynamicsolutions/mural`, branch `mvp`. Read

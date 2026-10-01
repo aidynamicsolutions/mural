@@ -1,5 +1,7 @@
 # Continue the approved stateful Core AI decoder proof
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../asr/README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Status: **Historical approved handoff, now executed.** See
 [stateful-decoder-checkpoint.md](stateful-decoder-checkpoint.md): Mac proof passed,
 first stateful phone inference aborted; stopped for review. The preparation-only

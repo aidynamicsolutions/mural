@@ -1,5 +1,7 @@
 # Hybrid ASR production plan
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../asr/README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Status: **GPU-preferred normal-Talk opt-in implemented and partially phone-verified. Default rollout remains gated.**
 
 Latest: [GPU Talk checkpoint](gpu-talk-checkpoint.md). The original ANE-backed cached-load failure was reproduced and preserved. A separate GPU-preferred FP16 encoder passed bounded qualification and enabled an explicit Release Talk experiment. Real-path preparation, repeated turns, persistence, offline and Finalizing Stop/retry passed after fixing verification-buffer accumulation. The background-restoration correction still needs its phone replay; full rollback and release gates remain open.

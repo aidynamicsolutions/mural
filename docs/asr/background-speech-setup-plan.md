@@ -1,5 +1,7 @@
 # Resumable first-time speech setup
 
+Durable setup/foreground admission remains the design contract; current operation is described in [speech setup](speech-setup-ux.md). Later shared-Breeze routing and advisory memory notifications supersede older backend/warning assumptions below. Native background compute is still unqualified; do not enable it from this plan alone.
+
 Updated: 2026-09-24
 
 Review base: `c67e3d302428fe79b2ecbe6664bc2cafe9c45ae0` on `mvp`.

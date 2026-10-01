@@ -1,5 +1,7 @@
 # Continue Core AI decoder diagnosis
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../asr/README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 ## Continuation completed: stop at review
 
 Checkpoint 1 is now complete with execution blocked. Read

@@ -1,5 +1,7 @@
 # Staged ASR: cached-load diagnosis and Talk assessment
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../asr/README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Historical assessment, superseded by [GPU Talk checkpoint](gpu-talk-checkpoint.md). The original failed cache remains preserved; a separate GPU-preferred compilation subsequently enabled a partially verified normal-Talk opt-in. Existing WhisperKit/Core ML remains the repository default.
 
 Status at this assessment: **Do not enable normal-Talk opt-in yet. Existing WhisperKit/Core ML remains the default.**

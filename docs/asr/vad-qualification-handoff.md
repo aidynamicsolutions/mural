@@ -1,5 +1,7 @@
 # Local-agent handoff: iPhone 17 silence qualification
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 ## Boundary and expected starting point
 
 Work on `aidynamicsolutions/mural`, branch `mvp` only. The candidate was prepared

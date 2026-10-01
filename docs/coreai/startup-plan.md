@@ -1,5 +1,7 @@
 # PhoWhisper Core AI startup investigation and proposed plan
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../asr/README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Status: both bounded checkpoints completed, execution blocked. See the [full-prefix diagnostic result](decoder-diagnostic-checkpoint.md) and the [stateful result](stateful-decoder-checkpoint.md). The separately approved stateful one-token candidate passes Mac PyTorch checks but aborts on its first phone inference. Stopped for review; no fixture transcript, full-corpus run or production integration. The [stateful handoff](stateful-decoder-handoff.md) and [original incoming handoff](decoder-diagnostic-handoff.md) are historical; later gates remain in force.
 Reviewed: `8e80058`, `865c374`, `cedc4a6`, and the relevant `c3e6b1b` changes.
 Source checkout: `cedc4a6dc918bb561e763edfd10d66e7c3835165`.
@@ -144,7 +146,7 @@ No quantization, palettization, new model, LoRA remerge, VAD/silence fix, transc
 
 ## Sources and verification performed for this review
 
-- Committed [loading handoff](../../coreai_asr_handoff.md), [latest report](sequential-loading-checkpoint/report.md), and [earlier-attempt summary](sequential-loading-checkpoint/README.md).
+- Committed loading handoff (historical `coreai_asr_handoff.md`, not present in this checkout), [latest report](sequential-loading-checkpoint/report.md), and [earlier-attempt summary](sequential-loading-checkpoint/README.md).
 - Local original JSONs under `.build/verification/coreai-load-probe/`; failure reports under `.build/verification/coreai-mel-fix/` and `.build/verification/coreai-sequential/`; `.build/coreai/frozen-source-replay.json`.
 - Historical phone component timings: `.build/verification/local-mvp-phase-2/phowhisper/fp16-gpu-profile-v1/recovered-asr.log` and `mvp_plan.md`.
 - Apple: [AOT compilation](https://developer.apple.com/documentation/coreai/compiling-core-ai-models-ahead-of-time), [specialization/caching and variable shapes](https://developer.apple.com/documentation/coreai/managing-model-specialization-and-caching), [compute preference semantics](https://developer.apple.com/documentation/coreai/specializationoptions/init(preferredcomputeunitkind:)). GPU preference is not a GPU-only restriction.

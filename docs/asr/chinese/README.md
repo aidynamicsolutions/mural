@@ -1,113 +1,39 @@
-# Chinese-English ASR: two separate work items
+# Chinese-English speech
 
-## Breeze Simplified display: accepted MVP PoC
+## Normal Talk: shared Breeze
 
-The user selected reuse of Breeze for both Chinese writing modes. See
-[breeze-simplified-implementation-20260928.md](breeze-simplified-implementation-20260928.md)
-for the raw-preserving OpenCC display layer, shared-asset routing, patch checks and
-focused native acceptance. The user accepts live mixed speech, Simplified meanings/lookup/
-on-screen Help, English reply audio and stable ordinary turns on the installed build.
-Retained native raw/persistence/edit and real converter tests complement that smoke. This
-is a bounded Simplified MVP checkpoint, not broad accuracy/lifetime safety qualification;
-a fresh Traditional spoken session remains unchecked. See the document's MVP closeout.
-Use ordinary Breeze/paired verification, not the historical FireRed Chinese runner
-commands below. Preserve all old failed evidence and downloaded models.
+English learning with either Chinese meaning language uses **one Breeze ASR-25 PAL8 recognizer** for the complete Mandarin/English turn. Traditional mode keeps existing display. Simplified mode adds pinned OpenCC character conversion after recognition, with raw ASR kept separately. No English translation, grammar repair, regional vocabulary substitution or duplicate recognizer.
 
-## Historical FireRed checkpoint, September 28
+Read [implementation and acceptance](breeze-simplified-implementation-20260928.md) and the [local verification feature](../../../.agents/skills/verify-mural/features/local-conversation.md).
 
-Managed FireRed download/cancel/resume/integrity/activation is implemented and phone-verified within the existing installation. The runtime-only candidate remains opt-in. The approved native continuation received an iOS memory warning during recording before decode; no automatic retry or ordinary promotion. The user reports good brief native-Mandarin-speaker accuracy and now prioritizes memory reduction.
+The user accepted mixed live speech with names/numbers, Simplified meaning/lookup/Help, audible English replies without Chinese Help speech and stable ordinary turns. Real OpenCC checks and native scoped history/reopen/edit evidence complement that smoke. A fresh Traditional spoken session remains unchecked; older prerecorded failures and blocked support/profiler automation remain failures.
 
-Start with the [qualification tracker](simplified-talk-qualification-plan.md) and [memory research handoff](firered-memory-research-handoff.md). The latter packages exact pins, sanitized old/new memory evidence, source map, retained worktree/quantization inventory, constraints and questions for an online research agent. The current model is already released INT8; no separate lower-bit FireRed candidate was found in the inspected worktree/history. The original preparation inventory below is historical, not current execution guidance.
+The exact retained Breeze export is reused. Breeze has no published managed download entry in this build: missing/corrupt assets fail closed, without FireRed substitution or invented downloads. Fresh-device provisioning remains a [release blocker](../app-store-model-provisioning-release-blocker.md).
 
-## Historical native execution update
+## Verification and useful provenance
 
-Breeze is integrated in `App/BreezeEnglishRecognizer.swift` and registered in the
-Xcode project. The guarded installer was reviewed and applied on its exact pinned
-engine; its duplicate Tools candidate and installer were then removed. Use the
-existing Speech recognition probe, not the historical installer command below.
-See [native qualification result](breeze-native-result-20260920.md) for actual
-source/model identities, conversion/build evidence and unrun device/accuracy gates.
-The preparation inventory below records the original handoff, not current status.
+| Need | Read |
+| --- | --- |
+| Real converter, raw/display roles, persistence and edits | [Breeze Simplified checkpoint](breeze-simplified-implementation-20260928.md) |
+| Normal phone/runner workflow, focused selectors and cold/warm startup | [Local verification](../../../.agents/skills/verify-mural/features/local-conversation.md) |
+| Original Breeze export and bounded native result | [Native result](breeze-native-result-20260920.md) |
+| Original conversion/probe design | [Historical Breeze plan](breeze-taiwan-plan.md) |
+| Corpus/audio validation and scoring boundaries | [Host checks](host-checks.md) |
 
-FireRedASR2-AED is now implemented as a compile-time opt-in probe, **not qualified**.
-Its exact-v2 native file gate passed on iPhone 17, then live testing stopped on an
-iOS memory warning while loaded/idle. Two short Yes attempts were also rejected
-by the unchanged VAD gate. The ordinary Mural build was restored; no ASR default
-or script/case normalization changed. See [FireRed qualification result](firered-aed-qualification.md)
-for exact identities, measured timings/memory, human observations and unrun gates.
-Do not retry that resource configuration merely to finish the test matrix.
+The authored [Taiwan](taiwan-smoke.template.json) and [Mainland](mainland-smoke.template.json) templates are recording scripts, not measured ground truth or a required new corpus run. Review spoken words independently of ASR output; keep personal recordings and detailed transcripts private. Script conversion cannot fix incorrect recognized words.
 
-Initial architecture review: `mvp` at `6867ff912c7eb940ec444ae836adafaa46d3d7cd`.
-The branch advanced to `cfa0999a0738c7a28cc5879b041c1f0e12a0218f` during preparation.
-Its engine diff and new speech policy were reviewed; the patch pin now targets that
-engine. This delivery preserves the new silence-trimming work without modifying it.
+Existing host helpers remain under `Tools/ChineseASR/`: `prepare_breeze.py` packages reviewed converted assets, `run_reference.py` replays local models and `evaluate.py` validates/scores recordings. Do not re-export or acquire weights merely to repeat accepted smoke.
 
-Start with [Breeze for Taiwan Mandarin](breeze-taiwan-plan.md). Run
-[the Breeze local-agent prompt](local-agent-breeze.md) on the development Mac.
-Only after recording that result, start [FireRedASR2-AED](firered-aed-plan.md)
-with [its separate prompt](local-agent-firered.md). Neither is a new default yet.
+## Retained FireRed support
 
-## What is delivered
+FireRed code, native bridge/build flags, package pins/catalog, host tools and device stages remain intact. It is an explicit research/probe path, **not the normal Simplified Talk recognizer or an automatic fallback**.
 
-| Item | Status |
-|---|---|
-| Two bounded implementation/qualification plans and agent prompts | Written |
-| Local corpus validation, mixed-error scoring, source packaging, replay helpers | Implemented; standard-library tests run |
-| Breeze Swift recognizer candidate | Written; Swift syntax parsed, not Apple-SDK type-checked |
-| Small patch installer for the existing ASR probe | Written; anchor transformations tested; not applied to the complete app here |
-| Breeze Core ML export, Xcode registration/build, device installation | Requires the Mac; not performed here |
-| FireRed AED iOS bridge and app integration | Planned; not implemented or qualified |
-| Physical iPhone 17 recognition, latency, memory, offline/lifecycle results | Not measured here |
+Managed download/cancel/resume/integrity/activation passed at its September 28 checkpoint. Native resource qualification stopped on an iOS memory warning before decode and remains blocked. The host CTC comparison was rejected for English/mixed quality. No new native FireRed pass or promotion is implied by Breeze acceptance.
 
-The candidate lives under `Tools/ChineseASR`, outside the app target. The installer
-adds it to the existing probe only after local review. This keeps the accepted
-PhoWhisper FP8/PAL8 Talk path, asset pins, caches and history untouched. The
-remaining work is **not testing alone**: native conversion, applying/building the
-prepared Breeze integration, and FireRed's native bridge still require local work.
+- [Qualification tracker](simplified-talk-qualification-plan.md) and [candidate checkpoint](simplified-talk-candidate.md).
+- [Native qualification](firered-aed-qualification.md) and [memory investigation](firered-memory-investigation-20260920.md).
+- [Memory research handoff](firered-memory-research-handoff.md).
+- [Smaller-model findings](firered-smaller-model-review.md) and [host-gate handover](firered-smaller-model-handover.md).
+- [Original native design](firered-aed-plan.md) and [probe instructions](local-agent-firered.md).
 
-## Small implementation, not a provider framework
-
-Use the current capture, sample-rate conversion, task ownership, cancellation,
-VAD policy and result presentation. One model owns a whole mixed-language turn;
-do not switch engines when the speaker switches languages. Use one active ASR
-model at a time. No registry, automatic locale detection, new server, cloud
-fallback, training pipeline, or generalized download manager is needed.
-
-Files in `Tools/ChineseASR`:
-
-- `BreezeEnglishRecognizer.swift`: candidate local WhisperKit actor.
-- `install_breeze_probe.py`: dry-run-first patch against the exact reviewed engine.
-- `prepare_breeze.py`: package an already converted PAL8 model; not a converter.
-- `run_reference.py`: local Breeze/PyTorch or FireRed/AED-ONNX replay; inference untested here.
-- `evaluate.py`, `test_evaluate.py`, `test_prepare.py`: local checks and tests.
-
-## Evidence and recording rules
-
-The two `*.template.json` files are **authored recording scripts**, not an actual
-corpus or measured ground truth. Copy a template outside the repository. Record
-mono 16 kHz PCM16 WAVs of at most 30 seconds, replace anonymous speaker labels, and
-correct each reference to the words actually spoken without looking at ASR output.
-Keep raw recordings, detailed transcripts and complete device logs local. Do not
-upload them to a model hub or commit them. User recordings establish a personal
-smoke result; native-speaker and unseen spontaneous speech are separate coverage.
-
-Example commands, with private paths supplied by the local agent:
-
-```sh
-python3 -m unittest discover -s Tools/ChineseASR -p 'test_*.py' -v
-python3 Tools/ChineseASR/evaluate.py check-audio "$CORPUS" "$AUDIO_ROOT" --output "$NEW_AUDIO_REPORT"
-python3 Tools/ChineseASR/evaluate.py score "$CORPUS" "$PREDICTIONS" --output "$NEW_SCORE"
-```
-
-Predictions use `mural.chinese-asr.predictions.v1` with a `predictions` array of
-`{"id":"tw01","text":"..."}`. Missing, duplicate, extra, failed or explicitly
-incomplete results are rejected. An explicit empty transcript is scored as
-missing speech, not silently discarded. Reports omit transcript text unless
-`--include-text` is explicitly requested for private local review.
-
-The declared local MER tokenization is one Han character or one word, with NFC,
-case folding and punctuation separation. It does not convert Simplified to
-Traditional characters, translate words or repair learner grammar. It is not a
-reproduction of a publisher benchmark. Review English preservation, proper names,
-script errors, silence and UX latency separately. No automatic promotion follows
-from a numeric score. See [host check limits](host-checks.md).
+Legacy `DEVICE_PAIR=zh-CN-en` stages encode FireRed assumptions; Breeze stages use `breeze-zh-CN-en`. Inspect current routing and requalify affected selector/ownership contracts before expensive research work. Old approvals, failed resource runs and an available phone are not permission for an automatic retry or warning/thermal override.

@@ -1,5 +1,7 @@
 # Investigation: iOS memory warning during Taiwan/Breeze Talk
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 **Status: OPEN / STOP.** A real iOS memory-warning notification interrupted a Taiwan/Breeze conversation on Kevq. The workload is a likely material contributor, but the logs do not prove it was the sole cause. The unexpected presence of two `LocalConversationEngine` warning handlers is unresolved. Two owner-requested sequential Vietnamese-then-Taiwan runs were completed on 2026-09-25; neither produced a logged warning. The second began after an app-container wipe and showed cold app-owned caches, but neither run proves native deallocation or clears the original incident. Do not repeat native ASR preparation on this device until engine ownership and the memory peak have been reviewed.
 
 This is an investigation record, not a fix or an acceptance claim. The checklist progress fix is separate and does not address memory or engine lifetime.

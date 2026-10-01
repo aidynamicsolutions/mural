@@ -1,5 +1,7 @@
 # Simplified Chinese-English Talk candidate
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 2026-09-26. **Historical opt-in source/build/UI checkpoint.** The status and remaining-work statements below describe that date. September 28 managed acquisition/recovery subsequently passed, but native Talk hit another memory-warning stop. Use the [current qualification tracker](simplified-talk-qualification-plan.md) and [memory research handoff](firered-memory-research-handoff.md); native speech remains unqualified and ordinary promotion gated.
 
 ## Source and scope

@@ -1,5 +1,7 @@
 # Preparation checks and limits
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](../README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Initial review used `6867ff912c7eb940ec444ae836adafaa46d3d7cd`. Before publication,
 `mvp` advanced to `cfa0999a0738c7a28cc5879b041c1f0e12a0218f`. The engine changes
 for that commit and its new Core speech policy were inspected; the integration

@@ -1,12 +1,14 @@
 # Physical iPhone end-to-end verification with acoustic speech input
 
+Operating commands and ownership live in the [physical reference](../.agents/skills/verify-mural/references/physical-device.md); select by the [feature map](../.agents/skills/verify-mural/features/README.md). The default acoustic ladder here is Vietnamese-English. Chinese uses shared Breeze and its distinct stage/acceptance status; legacy FireRed research is retained, not normal Simplified Talk. Dated qualification sections below are evidence, not a current queue or reusable device authorization.
+
 ## Decision and scope
 
 Use a Mac script to play repeatable speech through the Mac's speakers while native XCUITest operates Mural on a nearby, connected physical iPhone. Mural must record through the real iPhone microphone and use its actual on-device recognition, tutor, and speech paths.
 
 Keep this as a separate, linked track from the [simulator lifecycle and SimSlim plan](simulator-verification-lifecycle-plan.md). Simulator memory optimization can finish independently. Physical voice testing has additional signing, audio, privacy, data, and model-resource risks; a blocker here must not delay safe simulator cleanup or be hidden by simulator passes.
 
-**Current authorization: implementation, signed native runner builds/installations, scoped evidence and bounded physical tests using synthetic speech are approved.** Complete safe preparation first, then confirm the audible window and any room-audio capture. Preserve the existing bundle, Core AI Release opt-in, assets, caches, preferences and personal history. No commits or pushes.
+**Recorded authorization for the original qualification: implementation, signed native runner builds/installations, scoped evidence and bounded physical tests using synthetic speech were approved.** Complete safe preparation first, then confirm the audible window and any room-audio capture. Preserve the existing bundle, Core AI Release opt-in, assets, caches, preferences and personal history. No commits or pushes.
 
 This design is now qualified within the recorded acceptance limits below, including real acoustic turns and exact transcript persistence. Historical planning and failed attempts remain in the log; they are not current pending work. The goal is to minimize repeated human operation, not to pretend hardware prerequisites or subjective listening checks disappear. Future runs remain opt-in and require a confirmed audible window, not blanket permission from this historical authorization.
 
@@ -82,7 +84,7 @@ Use native tools first:
 - Discover the current physical UDID. Do not use a historical identifier or infer ownership from the device name.
 - Preserve the existing phone bundle `com.kevintruong.mural.dev`, signing configuration, data, and retained assets. The XCTest runner needs its own valid identity/provisioning; do not blindly apply the app's bundle override to every test target.
 - Read the current local-conversation and Core AI checkpoint instructions before any build. At planning time, the paired iPhone uses explicit Release `MURAL_COREAI_TALK` opt-in. Confirm the actual compiler flags and `local_talk_asr_backend` event, not just the requested command or successful build.
-- Keep the approved language pair/backend. Start with the currently qualified English/Vietnamese path and short English utterances. Do not activate blocked FireRed/Simplified Chinese loading or introduce a new recognizer to test this harness.
+- Keep the approved language pair/backend. The original harness qualified English/Vietnamese; current Breeze stages have [separate acceptance boundaries](../.agents/skills/verify-mural/features/local-conversation.md#existing-native-automation). Do not activate blocked FireRed research or introduce a new recognizer merely to test this harness.
 - Confirm required Apple model availability and retained recognition/TTS assets without clearing caches, re-exporting models, downloading replacements, or changing model policy. Missing assets/readiness is a blocker.
 - A Prepare button or Ready label alone does not prove every model loaded. Some native work happens at Send; require backend/inference events and actual turn results before claiming the full pipeline.
 - Use On-device mode only. No premium fallback, API keys, or paid provider calls.

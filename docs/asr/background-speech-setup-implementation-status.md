@@ -1,5 +1,7 @@
 # Resumable speech setup: implementation status
 
+Dated integration/review evidence, not an instruction to reapply its foundation patch. Current normal warning behavior and shared Breeze pairs are in [speech setup](speech-setup-ux.md); old injected memory-interruption results do not describe notification-only behavior today.
+
 ## Current status: 2026-09-26
 
 Application integration is applied (including `07e5e85`). **Do not reapply the old handoff patch or regenerate the project for it.** The section below is historical, not current instructions.

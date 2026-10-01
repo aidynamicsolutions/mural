@@ -1,5 +1,7 @@
 # Local-agent prompt — FireRedASR2-AED only
 
+Retained FireRed research/support, not normal Breeze Talk. Use [the current Chinese index](README.md#retained-firered-support) for disposition. Dated approvals/pending steps do not authorize a new run; recheck current routing and qualification gates before expensive work. Code, pins and tooling remain intact.
+
 Start this as a separate work item after the Breeze checkpoint is recorded.
 
 ---

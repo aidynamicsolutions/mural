@@ -1,5 +1,7 @@
 # Automated local speech preparation checks
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Date: 2026-09-22. Result: **bounded physical ASR checks passed; focused cancellation follow-up is complete and owner-accepted**. This is not complete Talk, hosted provisioning, language-quality or App Store acceptance.
 
 Latest results: [accepted cancellation closeout](speech-setup-ux.md#accepted-cancellation-follow-up). Four subsequent physical cancellation/retry runs passed: post-install drain **19.315 s Breeze / 15.403 s PhoWhisper**, cached drain **1.538 s / 1.278 s**. The owner accepts the observed 15-19 second wait; do not reopen latency tuning as unfinished work. This is Cancel-to-drain, not total setup time: the first Breeze retry still took 141.030 s to finish skipped preparation. Eight simulator UI checks separately passed safe navigation, pair selection, closed admission and recovery.
@@ -30,7 +32,7 @@ Coordinator/UI regression checks passed: setup cancellation kept admission close
 
 Limits: no physical-phone or native inference lifecycle replay, real memory pressure/thermal excursion, scrolling profile, or VoiceOver spoken-announcement test was done. One-second sampling is sampled protection, not a hard memory ceiling; a transient peak can exceed the threshold between samples. The TTS experiment UI test emitted an internal QoS priority-inversion runtime warning despite passing; no cause was established. Xcode also reported existing LiveTransport async-alternative and iOS 27 AVAudioSession deprecation warnings.
 
-The initial batch below is historical. Start an independent review with [consolidated findings](local-speech-findings-handoff.md) and the [updated next-agent prompt](local-speech-review-prompt.md).
+The initial batch below is historical. Retain [consolidated findings](local-speech-findings-handoff.md); choose new checks through the [current local feature](../../.agents/skills/verify-mural/features/local-conversation.md). The legacy QA helper is not the default main-app/XCTest acceptance workflow.
 
 ## Why this check exists
 

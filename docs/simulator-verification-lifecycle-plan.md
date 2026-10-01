@@ -1,12 +1,14 @@
 # Simulator verification lifecycle and SimSlim rollout
 
+Retained rollout design and measured evidence. Use the [current feature map](../.agents/skills/verify-mural/features/README.md) for selectors, the mandatory host limiter and persistent-device ownership. Historical control/refusal devices and approvals below are not permission to create or borrow additional simulators.
+
 ## Purpose and approval boundary
 
 Reduce Mac memory used by Mural's simulator verification without weakening verification or disrupting StrengthLogger, other agents, or the user's physical iPhone.
 
 The agreed design is a thin Makefile, a bounded simulator lifecycle script adapted from StrengthLogger, Mural-specific SimSlim profiles, and evidence-backed shutdown. Preserve `xcbeautify` and the existing `.build/verification/` evidence layout.
 
-**Current authorization: implement the simulator rollout, including builds, owned simulator operations, SimSlim setup and verification.** Physical iPhone operations, commits and pushes remain excluded. Preserve unrelated work and the existing Git index.
+**Recorded rollout authorization: implement simulator tooling, including builds, owned simulator operations, SimSlim setup and verification.** Physical iPhone operations, commits and pushes remain excluded. Preserve unrelated work and the existing Git index.
 
 ## Two linked verification tracks
 
@@ -14,10 +16,10 @@ This document owns **simulator memory optimization and automatic cleanup**. The 
 
 Keep separate progress and acceptance gates. Physical testing must not block simulator cleanup, and a simulator pass must not be counted as a real voice/model pass. Share the thin Makefile and existing evidence conventions, not a new cross-platform harness:
 
-- `make agent-verify SIM_UDID=...`: default slim simulator verification with enforced shutdown.
+- `active-ios-simulator-limit run -- make agent-verify SIM_UDID=...`: default slim simulator verification with enforced shutdown.
 - `make agent-verify-device DEVICE_UDID=...`: explicitly requested physical test, once qualified; never an automatic dependency of simulator verification.
 
-The simulator command is implemented and qualified, with focused selection or a three-check smoke fallback; explicit `VERIFY_SUITE=qualification` retains the 13-check rollout coverage. The physical command remains planned, not implemented. Recommended sequence remains simulator rollout first, then the separately authorized bounded physical feasibility gates. Phone connection and proximity are necessary but not sufficient: the companion plan also covers signing, model readiness, audio routing, capture/playback synchronization, privacy, and resource stops. No SimSlim or simulator-shutdown operations apply to the physical phone.
+The simulator command is implemented and qualified, with focused selection or a three-check smoke fallback; explicit `VERIFY_SUITE=qualification` retains the 13-check rollout coverage. The physical command is also implemented, with distinct Vietnamese and Breeze acceptance boundaries in the current physical workflow. Do not repeat completed rollout/feasibility stages as a compulsory sequence. Phone connection and proximity are necessary but not sufficient: the companion plan also covers signing, model readiness, audio routing, capture/playback synchronization, privacy, and resource stops. No SimSlim or simulator-shutdown operations apply to the physical phone.
 
 ## Progress tracker
 
@@ -146,9 +148,9 @@ Acceptance: success/failure/signal/timeout/ownership scenarios pass with retaine
 Implemented entrypoints (current selection policy is detailed in the final handoff):
 
 ```sh
-make build
-make agent-verify SIM_UDID="$SIM_UDID"
-make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock
+active-ios-simulator-limit run -- make build
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID"
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock
 ```
 
 - `make build` compiles without booting a simulator; retain Mural's scheme/configuration and arm64 simulator requirements.
@@ -337,7 +339,7 @@ For each stage update, record:
 - [Local conversation and paired-phone workflow](../.agents/skills/verify-mural/features/local-conversation.md)
 - [Conversation lifecycle evidence boundaries](../.agents/skills/verify-mural/features/conversation-lifecycle.md)
 - [UI animation and bounded recording](../.agents/skills/verify-mural/features/ui-animation.md)
-- [StrengthLogger rollout and adoption lessons](../../StrengthLogger/docs/simulator-verification-lifecycle-plan.md)
+- Optional sibling-checkout reference: `../../StrengthLogger/docs/simulator-verification-lifecycle-plan.md` (not part of this repository).
 - [Apple: BGContinuedProcessingTask and its Live Activity](https://developer.apple.com/documentation/backgroundtasks/bgcontinuedprocessingtask)
 - [SimSlim](https://github.com/MobAI-App/simslim), with exact installed-version/category review required before use.
 
@@ -439,15 +441,15 @@ Speedup evidence: `.build/verification/simulator-test-speedup/run-20260927-11452
 Use an explicitly owned, initially Shutdown exact UUID; fresh evidence names are mandatory. Never substitute another project's device or run both overlapping selections automatically.
 
 ```sh
-make build
+active-ios-simulator-limit run -- make build
 # Known change: select the smallest sufficient affected check.
-make agent-verify SIM_UDID="$SIM_UDID" TESTS='testThemeSearchFiltersLocally'
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" TESTS='testThemeSearchFiltersLocally'
 # Broad-change fallback: three representative checks.
-make agent-verify SIM_UDID="$SIM_UDID"
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID"
 # Profile/runtime or broad integration qualification: retained 13-check selection.
-make agent-verify SIM_UDID="$SIM_UDID" VERIFY_SUITE=qualification
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" VERIFY_SUITE=qualification
 # Explicit restoration for integrations affected by disabled services.
-make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock TESTS='testThemeSearchFiltersLocally'
+active-ios-simulator-limit run -- make agent-verify SIM_UDID="$SIM_UDID" SIMULATOR_MODE=stock TESTS='testThemeSearchFiltersLocally'
 # Fast selection/shared-budget regression and saved-result verification, no simulator boot.
 python3 scripts/check_simulator_selection.py
 python3 .build/verification/simulator-test-speedup/run-20260927-114527/verify-results.py

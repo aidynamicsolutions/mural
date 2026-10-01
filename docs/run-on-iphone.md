@@ -1,46 +1,44 @@
-# How to run Mural on your iPhone
+# Run Mural on iPhone
 
-Use this guide to install a personal build from source. After installation, the phone connects directly to OpenAI and works away from your Mac.
+This checkout targets **iOS 27.0** and builds with **Xcode 27**. Reuse an existing checkout, signing team and bundle identity when updating; never uninstall to resolve a setup problem.
 
-## Before you start
+## Choose the mode
 
-- A Mac with Xcode 26 or later, downloaded from Apple.
-- An iPhone running iOS 26.1 or later and a USB cable for initial setup.
-- An Apple Account added to **Xcode → Settings → Accounts**.
-- An OpenAI project with API billing enabled and access to the models configured in `App/APIClient.swift` and `App/LiveTransport.swift`.
+| Mode | Requirements and boundary |
+| --- | --- |
+| On-device | English learning; Vietnamese or either Chinese meaning language; ready Apple Intelligence and qualified local model assets. No OpenAI key. Current acoustic acceptance is on iPhone 17. |
+| Premium | Own OpenAI project key, API billing/model access and network. ChatGPT subscription credit is separate. |
 
-OpenAI API usage is paid separately from ChatGPT. Use your own key for this personal build. Never add a key to source code, an Xcode build setting, a screenshot or a GitHub issue.
+Both Chinese writing modes use Breeze; Simplified adds character display conversion, not another recognizer. Exact Breeze/PhoWhisper Talk packages are not published for ordinary first-install download in this build. Existing developer-staged assets do not prove a new phone can provision itself. Missing assets fail closed; do not fetch an invented package or substitute FireRed. [Distribution blocker](asr/app-store-model-provisioning-release-blocker.md).
 
-## Install
+## Build and install
 
-1. Download the [repository ZIP](https://github.com/Chuloo/mural/archive/refs/heads/main.zip) and extract it, or clone [Chuloo/mural](https://github.com/Chuloo/mural). Open `Mural.xcodeproj` in the directory containing `Package.swift`. Allow Xcode to resolve the pinned WebRTC package.
-2. Select the blue **Mural** project in the navigator. Under **Targets**, choose **Mural**, then open **Signing & Capabilities**.
-3. Enable **Automatically manage signing** and choose your Apple team. For a fork, set a unique bundle identifier, such as `com.yourname.mural`. Do not change an existing installation’s identifier when refreshing it.
-4. Connect the iPhone, unlock it, and accept **Trust This Computer** if shown. In Xcode’s **Window → Devices and Simulators**, wait for the phone to finish preparing.
-5. On the iPhone, enable **Settings → Privacy & Security → Developer Mode**. Restart and confirm **Turn On** when prompted.
-6. In Xcode’s toolbar, select the **Mural** scheme and your iPhone as the destination. Click **Run** or press **⌘R**. If macOS requests access to the signing key, allow Xcode to use it.
-7. If iOS blocks the first launch because the developer is untrusted, open **Settings → General → VPN & Device Management**, select your developer profile, and tap **Trust**. Return to Xcode and run again.
-8. Choose your learning and subtitle languages in the welcome screens. In **Settings → Advanced → Use your own API key**, save your OpenAI project key. Tap the main conversation button and allow microphone access.
+For the project's existing paired phone, follow the [physical workflow](../.agents/skills/verify-mural/references/physical-device.md), preserving explicit Core AI Release, `com.kevintruong.mural.dev` and the existing automation runner. Generic Xcode Run is not permission to replace that recipe or consume another app slot. Build-only preparation can precede a fresh idle/unlocked/cool handoff; install/launch/runtime require it.
 
-Mural should greet you aloud. Disconnect the cable and confirm a short conversation over Wi-Fi or cellular.
+For a first personal build:
 
-## Refresh a free installation
+1. Clone [this repository](https://github.com/aidynamicsolutions/mural/tree/mvp), or use the current checkout. Open `Mural.xcodeproj` beside `Package.swift`; resolve the existing package locks.
+2. Add your Apple Account in **Xcode > Settings > Accounts**. In Mural's **Signing & Capabilities**, select automatic signing and your team. Choose a unique bundle ID only for a genuinely new installation; retain it for updates.
+3. Connect/unlock the phone, trust the Mac and wait for pairing in **Devices and Simulators**. Enable **Settings > Privacy & Security > Developer Mode** and complete its restart/confirmation.
+4. Select the Mural scheme and phone, then Run. If required, trust the development profile in **Settings > General > VPN & Device Management**.
+5. Choose languages and mode. On-device uses **Prepare & start** and actual asset/model checks; normal Talk has no ASR picker. Premium saves the key only through **Settings > Advanced > Use your own API key**. Never put a key in chat, source, build settings, screenshots or logs.
+6. Allow microphone access when requested. Check one short turn and audible output. On-device inference remains local after assets are ready; initial asset acquisition may need network. Premium needs Wi-Fi/cellular.
 
-A free Personal Team provisioning profile expires after seven days. Reconnect your phone and run the same project with the same team and bundle identifier. Keep the app installed while refreshing it. [Apple’s account and membership guidance](https://developer.apple.com/support/compare-memberships/)
+A successful launch is not microphone/model/voice qualification. See [local verification](../.agents/skills/verify-mural/features/local-conversation.md) for scoped acceptance and remaining gaps.
 
-Use **Settings → Export learning backup** before changing your bundle identifier, signing team or device. On a new installation, choose **Import learning backup** and enter your API key again. The key is never included in the backup.
+## Refresh and troubleshoot
 
-## Fix setup problems
+A free Personal Team profile expires after seven days. Reconnect and refresh using the same team/identity, keeping the app installed. [Apple membership guidance](https://developer.apple.com/support/compare-memberships/). Export a learning backup before deliberately changing team, bundle or device; API keys and model files are not the learning backup.
 
 | Problem | Action |
 | --- | --- |
-| Xcode cannot register the bundle identifier | Choose a unique identifier for your fork and reselect your team. |
-| The phone does not appear as a destination | Unlock it, check the cable, and open Devices and Simulators to finish pairing. |
-| Developer Mode is missing | Pair with Xcode first, then check Privacy & Security again. |
-| The app will not launch after a week | Refresh the build through Xcode without uninstalling. |
-| Key rejected or model unavailable | Check the key’s project, API billing, permissions and model access in OpenAI. |
-| No microphone input | Enable Mural under iPhone Settings → Privacy & Security → Microphone. |
-| Sound uses the wrong output | Check iOS’s current audio destination; disconnect an unwanted Bluetooth route. |
-| A connection fails on cellular | Confirm Mural is allowed to use cellular data and retry with a stable connection. |
+| Phone unavailable or locked | Check cable/pairing, unlock and refresh device inventory; never reuse an old PID/UDID blindly |
+| Profile expired | Rebuild in place; no uninstall/data reset |
+| On-device unavailable | Inspect Apple Intelligence/device/locale readiness and the selected pair; no cloud fallback |
+| ASR assets missing/corrupt | Report the exact verification/provisioning blocker; preserve files and pins |
+| First Prepare after reinstall is slow | Allow bounded native loading; compare unchanged-install warm relaunch separately, not repeated installs |
+| Talk shows Resume | Distinguish genuine ceiling/thermal/model interruption from a notification-only warning; never hide a real fault |
+| No microphone/sound | Check Mural microphone permission and current iOS audio route |
+| Premium key/connection rejected | Check project billing/model access, saved key and network without exposing credentials |
 
-For simulator previews and automated checks, use [the build guide](build-and-test.md).
+[Build/test guide](build-and-test.md) and [documentation index](README.md).

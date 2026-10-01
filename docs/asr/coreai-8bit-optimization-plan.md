@@ -1,5 +1,7 @@
 # PhoWhisper CS: evidence-led Core AI 8-bit optimization
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Updated 2026-09-17 against remote `f51fb58d7653330abbfabb80eae52fa07485a1c9`.
 
 **Status: implementation plan, not a built or measured optimization.** No model, runtime, dependency, default, or recovery behavior changes with this documentation revision. The authoring environment has neither the developer Mac nor the iPhone. Execute the [local-agent handoff](local-agent-handoff.md) for implementation and physical qualification.

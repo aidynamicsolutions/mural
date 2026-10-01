@@ -1,447 +1,102 @@
-# Local conversation feasibility probes
+# On-device conversation verification
 
-## Breeze Simplified MVP: manual acceptance complete
+## User outcome and route
 
-The user confirms live mixed Mandarin/English with names/numbers, Simplified meanings and
-word lookup, on-screen Simplified Help, audible English replies without Chinese Help
-playback, and several ordinary turns without unexpected Pause/Resume. Together with real
-OpenCC goldens, focused UI/notification checks and earlier exact-UUID native persistence /
-explicit edit / raw retention, this closes the tested Simplified MVP PoC. See the
-[MVP closeout](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow).
+Settings > **On-device**, learning **English**, then choose **Meaning language**. Normal Talk has no ASR picker. Use **Prepare & start**, wait for real readiness, then speak/listen.
 
-A fresh Traditional spoken session is not checked; source/unit/model-free shared-model
-checks are not a new native acoustic pass. Earlier prerecorded recognition failures and
-blocked support/profiler automation remain recorded, not relabeled PASS. Do not restart
-those scenarios or cold-load profiling just to repeat accepted manual coverage. No broad
-accuracy, sustained resource safety or semantic-learning qualification is claimed.
+| Meaning language | Normal recognizer | Support/display |
+| --- | --- | --- |
+| Vietnamese | PhoWhisper CS, preserved Core AI FP8/PAL8 phone configuration | Vietnamese support; existing transcript |
+| Traditional Chinese | Breeze PAL8 | Traditional support; unconverted existing transcript |
+| Simplified Chinese | The same Breeze PAL8/assets | Simplified support and derived spoken-user display |
 
-## Normal Talk memory-warning UX: ordinary update installed
+Breeze is MediaTek's retained local model, not Apple's built-in ASR. Apple Foundation Models supply the tutor/meanings/lookup/Help. English replies use the existing selected English voice. Chinese Help is on screen, never sent to English speech. Chinese automatic learning assessment remains disabled.
 
-UIKit memory-warning notifications are now advisory in normal Talk for every selected
-ASR. They log `asr_memory_warning stopped=false continuing=true` and must not cancel
-setup, recording, inference or reply or create a Resume state by themselves. Actual
-sampled memory-ceiling, serious/critical thermal and model-error stops remain; never
-hide their recovery controls or treat a warning-only pass as lifetime safety proof.
-Use the ordinary Core AI Release, not `DEVICE_BREEZE_MEMORY_POC=YES`, to qualify this policy.
-Legacy diagnostic flags/receipts are historical evidence, not required for the new behavior.
+Missing/corrupt Breeze fails closed; it is not published in the current managed catalog. No FireRed fallback, model acquisition, re-export, provider/VAD/limit change or second recognizer merely to complete a test.
 
-Two real-observer model-free UI checks passed for repeated notifications during setup
-and after synthetic turns. Three distinct memory-ceiling/thermal recovery checks passed;
-host classification retains all genuine failure coverage. Preview loads no ASR model:
-assert settled coordinator state and preservation, not an enabled real microphone.
-Signed build is prepared privately under
-`.build/verification/breeze-memory-warning-nonblocking-20260930/native-prepare/`.
-The initial idle handoff timed out. A later fresh authorized handoff installed this exact
-ordinary artifact in place; `deploy-finish` passed the native dictionary/final-language
-check, 1 test / 0 failures / 0 skips and cleanup PASS. Final readback was On-device /
-English / Simplified Chinese. Later user smoke confirms stable ordinary turns; continuation
-through an explicitly observed real warning in this updated binary is still unverified.
-The deployment check requested no ASR models or microphone. See the feature checkpoint.
+## Chinese display and history
 
-## Breeze startup: warm relaunch accepted; profiling deferred
+Source contract: [Breeze implementation](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md).
 
-The user reports approximately five seconds from Prepare & start to ready after End,
-full quit and relaunch of the unchanged installed Simplified Chinese build. They accept
-slow first preparation after reinstall as testing behavior. This is human feedback, not
-a traced Core ML cache classification. See the
-[warm-relaunch checkpoint](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#user-confirmed-warm-relaunch-startup-investigation-closed-for-the-poc).
-Do not reopen startup profiling solely for a slow post-install load. Separate cold/warm
-timings and retain model-ready waits/validation; investigate again only if unchanged-install
-relaunches regress, a relevant model/runtime/compute contract changes, or cold-start
-optimization is explicitly requested. No new installation is needed for current daily use.
+- Preserve exact raw recognition; canonical text retains pre-existing app whitespace handling. OpenCC converts Han script only, not English, grammar or regional vocabulary.
+- Require `軟體 -> 软体`, not `软件`; `滑鼠` remains unchanged. Preserve English, whitespace, emoji and variation sequences. The pinned literal-`么` boundary prevents corruption of already Simplified text.
+- Only finalized spoken user turns in the frozen Simplified pair gain a saved display snapshot. Typed/assistant turns and old history are not rewritten.
+- Expand original recognition separately from displayed text. Reopen only the new test UUID; future Settings changes must not rewrite it.
+- Edit starts with displayed wording. Explicit save makes edited canonical wording, removes stale projection and retains raw ASR. Never inspect/export the user's whole history to prove this.
 
-### Historical preparation-only profiling: native qualification blocked
-
-The receipt hits and skips prewarm, but actual encoder loading took 141-150 s in retained
-native runs. Decoder took 18-22 s, remaining load validation under 8 ms; receipt and
-Core ML's path/configuration-sensitive specialization cache are distinct. See the
-[load-profile checkpoint](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#september-30-breeze-load-profile-encoder-bottleneck-confirmed-cache-cause-unconfirmed).
-
-`breeze-profile-check` is model-free and records Time Profiler plus Core ML against the
-exact activated app PID. `breeze-profile` uses one normal Prepare, awaits enabled Record,
-then End/drain; it never records or plays Mac input. It requires `DEVICE_PAIR=breeze-zh-CN-en`,
-a matching ordinary `DEVICE_PREPARED` and `DEVICE_BREEZE_PROFILE_CHECK` pointing to a
-successful same-device/runner/prepared-identity check with cleanup and trace finalization.
-The zero-turn nonce now gates exact PID ownership before model work. No manual override of
-these gates, diagnostic memory define, probe flag, new runner or model acquisition.
-
-The corrected model-free attempt failed native automation initialization before the test
-body, not Breeze loading. Capture attachment/finalization worked after USB readiness;
-no new model load or cache classification was obtained. Host checks and compilation pass,
-but these stages are NOT QUALIFIED for expensive runtime. Preserve failed/skip reports and
-separate recovery; do not retry model work or call a trace with no model events acceptance.
-Read-only fresh status confirmed no owned work remains. The ordinary warning-fix binary
-remains installed. The user-confirmed warm relaunch above supersedes the proposed immediate
-profiling work, not these failed test outcomes. If profiling is needed later, resolve
-initialization or coordinate paired normal Prepare/End capture before claiming a traced
-cache state or changing Breeze's compute configuration.
-
-## Historical Breeze Simplified automation: bounded diagnostic, incomplete automated acceptance
-
-The manual MVP acceptance above supersedes the remaining Simplified manual checks below,
-not the outcomes of these older failed/blocked runs.
-
-The user-approved direction is shared Breeze recognition plus a raw-preserving
-Simplified display layer. Read `docs/asr/chinese/breeze-simplified-implementation-20260928.md`.
-Meaning language remains the only pair choice. The user explicitly authorized the
-existing XCTest runner against the existing Mural app, limited to new test conversations,
-and Mac-speaker input. The runner is not a separate Mural data sandbox.
-
-Use `breeze-check`, `breeze-acoustic`, `breeze-multi`, `breeze-support` or
-`breeze-traditional` with `DEVICE_PAIR=breeze-zh-CN-en` and a matching explicit
-`DEVICE_PREPARED` receipt. `breeze-support` selects one reviewed English clip and
-checks actual Simplified meaning/lookup/Help, with no Chinese Help speech. It is not
-currently qualified: the first attempt exposed a converter bug; the corrected attempt
-returned no recognized speech and did not reach lookup/Help. Do not silently retry.
-`breeze-history` is model-free and requires `DEVICE_BREEZE_HISTORY_SOURCE` pointing to
-this phone's successful, cleaned-up Simplified acoustic run. It opens only that UUID,
-checks display/raw after relaunch and future preference changes, then edits its test
-passage and verifies raw retention after a second relaunch. `breeze-finish` is model-free,
-checks the real pinned converter natively and deliberately leaves On-device / English /
-Simplified Chinese after independent readback. Use it only when that final preference
-is authorized; `breeze-check` instead restores the original preference. History/finish
-refuse the memory-warning diagnostic. Default `prepare` is build-only and preserves Core AI Release;
-its vi-en metadata does not authorize Vietnamese runtime. Custom evidence roots can
-supply `DEVICE_PREPARED` to preparation for unchanged-executable compiler-proof reuse.
-`DEVICE_BREEZE_CLIP=F00A-switch` selects the existing reviewer-frozen Mandarin-dominant
-clip for a one-turn acoustic check, not a new recording or ASR picker.
-
-Historical policy before the warning UX follow-up stopped the first actual turn on an iOS memory warning. A separately
-user-authorized `DEVICE_BREEZE_MEMORY_POC=YES` diagnostic compiles
-`MURAL_BREEZE_MEMORY_POC` into isolated DerivedData, retaining the same signed app and
-runner identities and locked package checkouts. It logs Breeze memory warnings without
-the automatic pause. The normal build has no such define. Serious/critical thermal
-stops, the existing sampled memory ceiling, model-error stops and runtime budgets remain.
-This is diagnostic evidence only, not production qualification or an iOS safety override.
-Restore the ordinary signed artifact before returning to daily use; do not leave the
-exception installed silently. No model/cache deletion, fallback, VAD or limit change.
-
-September 30 continuation: content-bounded scrolling passed model-free before model
-work. The reviewed Mandarin clip completed with byte-exact distinct raw/display Han
-and unchanged English, one Breeze load/inference and an English reply through a memory
-warning. Scoped history/relaunch/explicit edit passed separately without reloading ASR.
-The user could not confirm listening to that Mandarin reply. Earlier mixed-language
-recognition failure remains recorded, and the English-only clip produced incorrect words;
-a corrected support attempt subsequently returned no words. Native lookup/Help, fresh
-reply listening, technical-name/number accuracy and a new Traditional acoustic session
-remain unqualified. Never repair these ASR words with display conversion.
-
-Pinned TWVariantsRev changes literal Simplified 么 into 幺. The renderer now preserves
-that ambiguous input while still converting Traditional 麼; it does not repair wording
-or alter the dependency pin. Three new real goldens first reproduced the defect, then
-passed, along with the original goldens, persistence, synthetic UI and native dictionary
-regression. Ordinary signed Core AI Release is restored and terminated; final preference
-On-device / English / Simplified Chinese was read back. No diagnostic remains installed.
-See the implementation checkpoint for precise evidence, retained failures and limits.
-
-The previous FireRed failure below is historical. Its `DEVICE_PAIR=zh-CN-en` stages
-must not be reused or relabeled for Breeze.
-
-## Historical FireRed candidate: downloads passed, native memory STOP
-
-See `docs/asr/chinese/simplified-talk-qualification-plan.md` for current progress and `docs/asr/chinese/firered-memory-research-handoff.md` for the sanitized research packet. Managed acquisition, cancellation/resume and full verified activation passed within the existing installation, with the token-redirect failure and approved recovery retained separately. Talk has no developer-assets fallback. The approved native continuation `20260928-125336-34898` received an iOS memory warning during recording before decode. No completed turn, full idle or +30 release qualification. Original host trace cleanup failed; separate recovery inspection confirmed no owned processes. Stop native work: no retry, asset copying/deletion or ordinary promotion. The commands below describe existing model-free/build entrypoints, not a new phone window.
-
-Model-free physical selection/transport gate is now qualified, without FireRed loading:
+Host checks use the actual dependency:
 
 ```sh
-# Discover current DEVICE_UDID first. Default prepare preserves explicit Core AI Release.
-make agent-verify-device DEVICE_STAGE=prepare
-# After exclusive idle/unlocked phone and closed-mirroring confirmation:
-make agent-verify-device DEVICE_STAGE=pair-check DEVICE_PAIR=zh-CN-en DEVICE_READY=YES
+swift test --filter ChineseScriptPresentationTests
+swift test --filter LocalSpeechPairPersistenceTests
 ```
 
-This checks normal Settings, FireRed diagnostics, scrolling, fresh nonce transport and original meaning preference restoration/readback. It never presses Prepare, plays speech or opens history. `DEVICE_PAIR` defaults to `vi-en`; ordinary Chinese baseline/acoustic/multi/cancel stages remain refused. The separate `resource-check`/`resource` stages require the native-linked artifact and qualification plan's explicit gates. Build-only native preparation is available and does not authorize loading. If recovering a failed model-free run, pass `DEVICE_RESTORE_MEANING` only from its recorded original preference. Evidence: `.build/verification/physical-iphone-e2e/20260928-083908-39499/` (one native pass, cleanup PASS). See the [qualification plan](../../../../docs/asr/chinese/simplified-talk-qualification-plan.md) for the approved one-turn resource design, remaining runtime prerequisites and the frozen, human-reviewed MELI references.
+For converter/archive/view integration, use the parent simulator lifecycle with `testBreezeSimplifiedDisplayPreservesRawRolesAndEnglish`. Add `testSimplifiedBreezeMissingAssetsDoesNotOfferFireRed` or `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed` for those changed contracts. Synthetic text/in-memory storage is not acoustic or native persistence acceptance.
 
-Native-linked candidate preparation, without touching the ordinary generated project or installed phone app:
+## Readiness and safety
 
-```sh
-make agent-verify-device DEVICE_STAGE=prepare DEVICE_PAIR=zh-CN-en
-python3 scripts/verify_device.py --check-fixture \
-  .build/verification/simplified-talk-meli-20260928/frozen-manifest-v1.json --clip M00A-switch
-```
+Cancel closes admission until the existing native owner actually returns. Safe navigation/next-pair selection does not admit a replacement model. Receipts and an enabled synthetic state do not substitute for actual model readiness.
 
-The runtime-only native build uses isolated generation and separate DerivedData, checkout-owned `.build/firered-runtime`, the explicit Core AI flag, existing signing identities and shared locks. It checks actual compiler/linker commands, linked sherpa/ORT symbols, bundled pin/notices and native input/artifact hashes. Current prepared candidate: `20260928-120554-25215` (build/cleanup PASS). Matching model-free `resource-check` `20260928-122726-70556` passed useful exact-PID allocation/VM capture, the long fresh-nonce ACK, Settings selection and independent restoration without models/audio. Explicit selected-time export is required because the default VM view can be misleadingly empty. Acquisition recovery `20260928-121115-36976` passed; native resource run `20260928-125336-34898` failed as described above. Reuse matching evidence only under the parent skill's identity rules, not as permission to rerun native models.
+Normal UIKit memory notifications log `asr_memory_warning stopped=false continuing=true` and must not independently cancel preparation, capture, inference or reply or create Resume. The sampled 3 GB ceiling, serious/critical thermal and real model faults still stop/drain and retain explicit recovery controls. No iOS safety override or lifetime memory guarantee.
 
-For ordinary-build UI regression, run the existing `testMeaningLanguageSelectsOnDeviceRecognizerAndUnsupportedCombinationsFailClosed` and `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain` on an exclusively owned iOS 27 simulator. The first checks Settings English + Vietnamese/Traditional Chinese/Simplified Chinese, selected headings and backend identities, and the explicit unavailable-FireRed alert. The second changes the next Settings language during synthetic cancellation drain: Start stays disabled and diagnostics must still name the OLD job's Breeze backend until drain completes. Record video under `.build/verification/`; preview drain is not native acceptance.
+Choose only the affected synthetic selectors through the [feature-map entrypoint](README.md#simulator-entrypoints):
 
-Once continuation is justified, use normal Settings/Talk, not the flask/file runner. Capture Mural-only logs before the human batch; require `local_talk_model_selected pair=zh-CN-en` and FireRed, not merely the generic PhoWhisper launch event. Check Mandarin, English, mixed speech, natural Yes/No and a name/number; English speech, Simplified meanings/lookup and on-screen-only Help; no Chinese learning credit. Then check the approved lifecycle/offline/idle/drain scenarios and both existing pairs. Preserve voice settings and raw transcript output. Stop on the first resource warning or native-duration blocker, without an automatic retry.
+| Contract | Selectors |
+| --- | --- |
+| Setup drain | `testSpeechSetupCancelKeepsAdmissionClosedUntilDrain` |
+| Warning continuation | `testMemoryWarningDuringApprovedSetupDoesNotInterrupt`, `testMemoryWarningKeepsTalkActiveAndPreservesTurns` |
+| Actual memory ceiling | `testMemoryCeilingInterruptionDuringApprovedSetup`, `testMemoryCeilingPausesSpeechUntilExplicitResumeAndPreservesTurns` |
+| Thermal fault/recovery | `testThermalInterruptionDuringApprovedSetup`, `testThermalAlertAndExplicitResume` |
 
-## Current phone build: explicit Core AI Release
+A model-free Ready fixture can intentionally have Record disabled because no ASR was loaded. Assert coordinator state, absence of warning-induced Resume and turn preservation, not a working microphone. Injected safety values are not physical resource measurements.
 
-For the user's paired iPhone 17/h18p on iOS 27, preserve the explicitly opted-in staged Core AI GPU-preferred encoder with the existing Core ML decoder. This supersedes the historical baseline-only build instructions below, not the safety or release gates in `docs/coreai/gpu-talk-checkpoint.md` and `docs/coreai/first-turn-readiness-prewarm-plan.md`.
+## Startup and preparation receipts
 
-A normal Release install of `a4de800` omitted the opt-in and reproduced 179.454 s preparation (172.205 s Core ML prewarm), followed by 9.309 s cached preparation. All optimization commits were present. A commit hash, bundle version or successful build does not identify the runtime backend.
+The user reports approximately **five seconds** after End, full quit and unchanged-install relaunch. Historical post-install receipt-backed loads took **161-172 seconds**, mostly encoder loading (141-150 s); the receipt hit and skipped prewarm. This supports installation/path-sensitive Core ML caching as the working explanation, not a traced cache result.
 
-After discovering the phone, build from the intended checkout with its existing signing configuration:
+Record post-install/cold separately from unchanged-install/warm. Preserve native loading/validation and receipt invalidation. Do not resume cold-load profiling merely because another reinstall is slow. Reopen only for a warm regression, a relevant model/runtime/compute change or an explicit cold-start optimization request. [Warm checkpoint](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#user-confirmed-warm-relaunch-startup-investigation-closed-for-the-poc).
 
-```sh
-: "${DEVICE_UDID:?Set the freshly discovered paired iPhone 17 UDID}"
-export APP_BUNDLE_ID=com.kevintruong.mural.dev
-export DEVICE_DERIVED_DATA="$PWD/.build/local-mvp-phase-1-device-derived-data"
-xcodebuild \
-  -project Mural.xcodeproj -scheme Mural -configuration Release \
-  -destination "platform=iOS,id=$DEVICE_UDID" \
-  -derivedDataPath "$DEVICE_DERIVED_DATA" \
-  PRODUCT_BUNDLE_IDENTIFIER="$APP_BUNDLE_ID" \
-  OTHER_SWIFT_FLAGS='$(inherited) -D MURAL_COREAI_TALK' \
-  build
-export DEVICE_APP="$DEVICE_DERIVED_DATA/Build/Products/Release-iphoneos/Mural.app"
-```
+## Physical workflow
 
-- Save the command and build log under a fresh `.build/verification/` directory. Before installation, confirm the actual `swiftc -module-name Mural` invocation has `-D MURAL_COREAI_TALK`; do not check only the requested command. Pass the flag explicitly even when using a detached worktree. Keep the existing bundle identity when installing/launching with the parent skill's device commands.
-- Start or reuse the scoped capture below before launch. Confirm `local_talk_asr_backend` reports `Core AI GPU-preferred encoder + Core ML decoder (staged)`. After Prepare, confirm `asr_staged_prepared backend=coreai-gpu` and `asr_ready` in that process. Backend selection alone does not prove successful preparation/inference.
-- **On-device details & diagnostics > ASR backend** identifies the selected Talk backend before preparation. The existing preparation breakdown remains below the total. Both backends still use the PhoWhisper CS model name; the model name alone is insufficient.
-- Preserve all assets, caches and history. A missing/changed staged asset or missing specialization is a blocker, not permission to clear caches, re-export models or silently substitute the baseline.
-- Public/default Release stays baseline. `--coreai-talk-gpu` only opts in Debug; it cannot enable a default Release executable. An explicitly requested baseline/rollback build must omit the compile flag and run in a fresh process after draining old work. Do not apply this phone-specific opt-in to unrelated devices or simulator checks.
-- Measure Prepare plus first and subsequent Send-to-final, decoder warmup wait, and memory warnings. A fresh process with retained caches is not an uncached benchmark; do not erase caches to simulate one. Fast preparation alone does not prove the deferred decoder cost disappeared.
+Read the [physical reference](../references/physical-device.md) before phone work. Reuse `com.kevintruong.mural.dev` and its existing `com.kevintruong.mural.dev.physicaltests.xctrunner`; the runner is not a separate personal-data sandbox.
 
-### Regression-fix phone checkpoint (September 16, 2026)
+Default `DEVICE_STAGE=prepare` builds only and retains explicit `MURAL_COREAI_TALK` Release. Its vi-en receipt metadata does not authorize a Vietnamese runtime. For Breeze use `DEVICE_PAIR=breeze-zh-CN-en` and an explicit matching `DEVICE_PREPARED`; never relabel old FireRed `zh-CN-en` stages.
 
-- Corrected explicit opt-in Release from `a4de800` plus the backend-diagnostics diff was built, installed in place and launched; actual compiler flag and runtime backend confirmed. Evidence: `.build/verification/asr-preparation-fix-20260916-222340/`.
-- Phone log: Prepare **2.991 s**, next conversation **2.855 s**, background resume **2.817 s**. The user confirms two spoken turns plus restart/background recovery worked. Agent-captured diagnostics screenshot shows the staged backend and readable, unclipped timing text. No memory warning was recorded in that batch.
-- **Remaining latency limitation:** first Send-to-final **32.775 s**, including **26.677 s** awaiting speculative decoder prewarm (total prewarm **32.576 s**). Second Send-to-final **5.506 s**. Send-to-audio was **38.405 / 10.422 s**. This restores preparation performance, not instant first-turn response or a controlled cold-cache distribution.
-- Logs show speculative prewarm completed before encoder entry on both turns. The background action occurred after prewarm completed, so cancellation during active prewarm remains unqualified. No asset/cache reset, decoder-policy change, model transfer, public-default promotion or new fallback.
+Before install/runtime, refresh exact device/process/lock identity and exclusive idle/unlocked/cool readiness, close owner-coordinated mirroring and agree audio placement/listening. Stop only a freshly verified matching owned PID. Preserve signing, models, pointers, caches, voices, settings and personal history.
 
-## Current UX and lifecycle follow-up
+### Paired acceptance
 
-This section records the current behavior after the Phase 5 UI feedback. The historical checkpoints below retain their original evidence and wording.
+The agent owns exact build/install/scoped capture and diagnosis; the user operates normal Talk and speaks/listens. Use one agreed short batch: mixed switching with a name/number, English-only and a natural response. Judge recognized words separately from rendered script. Verify Simplified meaning/lookup/Help, audible English reply and no Chinese Help playback. Scope reopen/edit to the new conversation. Restore test settings and stop only owned work; never shut down the phone.
 
-- **Meaning subtitles** are controlled from Settings only. Talk has no persistent Meaning or Hide meaning button.
-- The word-lookup hint appears under the first completed assistant reply of a conversation, then disappears after the conversation has another assistant reply.
-- On-device conversations have no inactivity or elapsed-time auto-end. Backgrounding pauses audio/model work and foregrounding re-prepares the same in-memory session when possible.
-- An explicit **New conversation** action clears an ended Talk session. Ending after only Mural's greeting discards the draft; history is saved only after a non-empty learner message.
-- The GPT-Live inactivity and maximum-duration guards, and its existing background close behavior, remain unchanged.
-- The collapsed **On-device details & diagnostics** disclosure contains microphone and lifecycle details. Normal Talk does not show the microphone state or implementation notes.
+Use bounded app-scoped capture from the physical workflow. Save source/pins/executable identity, current-PID Breeze readiness/inference and `breeze_script_display` markers. Logs contain private content and do not replace human listening or accuracy feedback. Stop/drain on genuine faults; no automatic retry, cache deletion or model substitution.
 
-## Phase 5 checkpoint: installed and launched, PENDING HUMAN (historical)
+### Existing native automation
 
-The user authorized **Phase 5 only**, retaining the original latest-user-passage assessment scope. Implementation and deployment are complete; **stop and wait for the user's phone feedback**. Phase 6 and whole-conversation extraction are not implemented or authorized. Whole-conversation extraction remains an optional later expansion the user can choose after testing this checkpoint.
+| Stage | Coverage/status |
+| --- | --- |
+| `breeze-check` | Model-free diagnostics/settings/selector check; restores original preference |
+| `breeze-acoustic`, `breeze-multi` | Real reviewed acoustic input; requires frozen fixtures and current capture/playback gates, not broad accuracy |
+| `breeze-support` | Intended meaning/lookup/Help check; previous runs failed before support acceptance, not qualified |
+| `breeze-traditional` | Intended fresh Traditional acoustic regression; not run on accepted build |
+| `breeze-history` | Model-free, exact new UUID reopen/edit; requires `DEVICE_BREEZE_HISTORY_SOURCE` from a successful cleaned-up acoustic run |
+| `breeze-finish` | Real native converter and final preference readback; leaves English/Simplified only when authorized |
+| `breeze-profile-check`, `breeze-profile` | Preparation-only Instruments tooling; blocked native initialization, no qualified cache trace |
 
-- Deployed Release **0.1.0 (1)**, `com.kevintruong.mural.dev`, executable SHA-256 `2af7a113f85180481ee595af8b992ecad37bec19f8c3705580b96148733f49ac`. Source base `fe8fdaeea882db3685b609ec8edd9f5456eca5cd` plus the uncommitted Phase 5 diff. Initial checkout was clean; all prior work preserved. No commits or publication.
-- Built with `.build/local-mvp-phase-1-device-derived-data` and the existing bundle override; installed in place and launched on freshly rediscovered Kevq, iPhone 17/iPhone18,3, iOS 27.0 (24A435), UDID `00008150-000D25942278401C`. Final running process confirmed at PID 29453 in bundle directory `1D5960F8-0EB7-4D90-BC33-2CC797C0028F`. No uninstall, data reset, model transfer, cache deletion, signing/pin changes or project regeneration.
-- Retained `phowhisper-cs-fp16-v1`, prior verified runtime bytes 3,101,573,848, manifest `7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52`. No new phone hash sweep; Prepare continues to verify assets. Actual ANE placement remains unverified and no model-download source exists.
-- Talk now has a labeled **Meaning / Hide meaning** action, distinct from caption-word taps. Completed responses use local Vietnamese translation and the existing translation cache. **A little help** generates and speaks simpler English; **Type instead > Send reply** accepts English/Vietnamese/mixed text through the same local append/reply path, with `typed = true`. Conflicting actions wait for Ready; End remains available on Talk. Meaning works after End too. Themes/search remain unavailable locally.
-- One shared local tutor instance guards actual model work until cooperative cancellation finishes. Reply/Help, Meaning, lookup and assessment never use a cloud fallback. Local meaning uses a separate existing MeaningController instance, and assessment a separate existing FinalAssessmentQueue instance. The queue is now observable for pending UI; its existing timeout/application logic is unchanged. Local post-End work drains primary/meaning/lookup work before submitting the latest passage. New conversation, mode/language changes, backgrounding and transcript invalidation cancel local supporting work. Edited/deleted ended records clear the coordinator snapshot so later saves cannot restore obsolete text.
-- Assessment runs only after explicit **End**, foregrounded, for the latest unassessed user passage, with the queue's existing 15-second limit. A small guided schema proposes at most two English words/chunks. Code supplies passage/revision/source IDs and requires exact observed quotations before LearningEngine validation. Support-only/ambiguous verdicts map to uncertain, no words and no capability credit. Visible meanings, lookup support, typing and recent modeling preserve assisted semantics. English glossary senses are independent of Vietnamese meanings. Local paid usage stays zero.
-- **Semantic accuracy is PENDING HUMAN.** Generated language declarations are not an independent language detector. No universal English/Vietnamese classification or reliable extraction claim. If phone testing shows false English evidence, disable local assessment and report the integrated-MVP blocker rather than saving false progress. Optional diagnostics show last-review outcome, word count and capability status without exporting transcripts. Timeout/cancellation may leave saved text without evidence.
-- Agent observed successful Release builds, in-place installs, launches and final process evidence. Two initial build issues (observable queue deinit isolation and private nested Generable macro access) were corrected. One focused existing core check ran: `swift test --filter 'FinalAssessmentTests|MeaningTests'`, **12 passed, 0 failed**. No new tests, frameworks, mocks or subagents. These checks do not establish Apple model quality or changed phone UI/audio behavior.
-- Final bounded Mural-only launch syslog contains 118 lines, including applicationDidBecomeActive; no OpenAI-attempt or app persistence-failure event was observed in that launch sample. It includes system BoardServices PointerUI and QuartzCore handler errors without an established app defect. No feature actions were driven, so this is **not proof of zero OpenAI attempts during local use**. First launch sample was incomplete. Both owned captures are stopped; Device Hub quit requested and no DeviceHub process remained. No broad device archive was collected.
-- Evidence: `.build/verification/local-mvp-phase-5/`, especially `build-deployed.log`, `install-final.log`, `launch-final.log`, `process-confirmed-final.log`, `device-events-final.log`, `core-check.log`, `executable.sha256`, `implementation.diff`, `capture-cleanup.txt`, `result.md`. Existing interruption/LiveTransport async-alternative and missing-AppIntents warnings were observed across builds; no new warning remains.
-- Known limitations unchanged: silence can invent Vietnamese text and trigger a tutor reply; repetitive tutoring is deferred. Earlier approximately 208-second first / 6-second cached preparation and offline conversation acceptance are Phase 3 human reports, not Phase 5 measurements. Backup compatibility replay remains explicitly deferred. No new latency distribution, 20-minute soak, credentialed premium smoke or human learning-evidence pass.
+Choose the smallest applicable stage, retain failures and read saved summary/cleanup before another command. Model-free selector/cleanup repairs precede expensive replay. Historical `DEVICE_BREEZE_MEMORY_POC=YES` was a diagnostic, not a requirement for ordinary advisory warnings; do not leave it installed or treat it as production qualification.
 
-### Phase 5 exact next action: human phone checklist
+## Accepted evidence and limits
 
-1. **Settings:** English learning language, Vietnamese meaning language, On-device. **Talk > Prepare & start**, wait for Ready. With previously prepared assets, turn Wi-Fi and cellular off for these checks. Record/Send `Yesterday I went to the supermarket.` Wait for speaking/support work to finish. Toggle **Hide meaning > Meaning**: expect Vietnamese for the completed English response. Tap an English caption word: expect contextual Vietnamese; **Done** closes lookup. No OpenAI consent/key prompt.
-2. At Ready, tap **A little help**: expect a simpler spoken English restatement/example, not spoken Vietnamese. Then **Type instead**, enter `Hôm nay I bought apples.`, **Send reply**: expect one saved user turn and a real local English response. End > Transcript should retain separate turns and completed Help text. Report clipping, wrong-language output or unresponsive controls.
-3. Start a new practice conversation. Record/Send `Today I went to siêu thị. I don't know that word in English.` After the model supplies its English equivalent/example, record its modeled sentence, such as `Today I went to the supermarket.` Tap **End** before another user turn. Keep foregrounded while the last-reply review finishes (up to 15 seconds after canceled work drains). **Words > word detail** should show clear English evidence if accepted, with no increase in independent uses for immediate repetition. If no words appear, report **Talk > On-device details & diagnostics > Last-reply review**; absence is not automatically a pass.
-4. Separately start a new practice conversation, **Type instead** and send only `Em không biết từ này.` After the reply, End and wait. Diagnostics should show **uncertain, 0 words, no capability credit**; Words must gain no Vietnamese word or English credit. Typed input makes this semantic check independent of the known ASR hallucination. If recognition was used instead, report its exact transcript.
-5. **Words > Past conversations > the practice conversation from step 3 > Edit** its last user passage to `I bought apples.` > Save. Evidence from the replaced wording must disappear; older evidence from other conversations may legitimately remain. Force-close/relaunch normally and confirm the edit persists. Do not edit personal conversations or reset data.
-6. In short separate attempts, End during Help/typed generation; background immediately after End while review is pending; and use **New conversation** or switch mode after End. Wait for canceled workers to finish before Prepare. No late speech, duplicate turns, old lookup/meaning, recreated transcript or evidence in a new session. Newly finalized text stays saved. Return to On-device. No repeated Phase 3 ten-turn/silence suite or Phase 6 soak.
+[Canonical closeout](../../../../docs/asr/chinese/breeze-simplified-implementation-20260928.md#mvp-closeout-user-accepted-simplified-workflow):
 
-Report the failing step, exact displayed transcript/reply/error, Words/detail or diagnostic result, and a screenshot for layout issues. All changed UI, offline support, semantic judgments and phone lifecycle checks remain **PENDING HUMAN**. Wait for feedback before further engineering or phase advancement.
+- User accepted live mixed names/numbers, Simplified meanings/lookup/Help, English reply audio without Chinese Help speech and stable ordinary turns.
+- Real OpenCC goldens, focused synthetic UI/notification checks and native exact-UUID raw/display persistence plus explicit editing passed.
+- Warm startup is approximate human timing, not a matched benchmark.
+- Fresh Traditional acoustic coverage remains unchecked. Earlier prerecorded English/mixed and no-speech failures remain failures; accent causality is unproven.
+- Automated support/profiler gaps remain separate from manual acceptance. A real warning in the updated ordinary binary was not explicitly observed in the latest smoke.
+- No sustained resource/thermal safety or broad language/learning-quality qualification.
 
-This checkpoint supersedes historical Phase 4-next/Phase 5-not-authorized instructions below; their evidence and Phase 4 human acceptance remain intact.
+Keep detailed evidence private under `.build/verification/`. Older Phase 0-5 work orders live in the historical `mvp_plan.md` journal, not this feature's current task queue. For the preserved Vietnamese configuration use [precision findings](../../../../docs/asr/precision-comparison-20260918.md), [final result](../../../../docs/asr/fp8-pal8-final-validation-result-20260919.md) and the current physical recipe; do not restart rejected Nemotron/Parakeet or PAL4/PAL6 comparisons.
 
-## Phase 4 DONE: human-accepted for MVP; backup verification deferred
+## Retained FireRed research
 
-The user reports doing most checks and accepts Phase 4 for the MVP. **Export/reimport was not performed and is explicitly deferred**, including genuine new-record round-trip and legacy-import verification. Do not treat these as passed or require them before subsequent MVP work. The user did not identify every individual completed check; this is overall human acceptance, not agent-observed UI/audio or a credentialed premium regression pass.
-
-### Empty preparation draft correction
-
-- Human-reported defect: Talk > Prepare & start > End before the first greeting leaves an empty Transcript button and an empty Past conversations entry. Source tracing reproduced the cause: `startLocal` creates an unsaved empty draft; `endLocal` unconditionally saved it; Talk exposed Transcript whenever that draft was non-nil. No duplicate agent UI/audio automation was run under the paired workflow.
-- Fixed the shared local teardown path: if there is no non-whitespace finalized fragment text, discard the in-memory draft rather than saving it. This covers End, background, interruption and preparation failure. Nonempty completed text, including a greeting interrupted during playback, remains saved. Existing previously saved empty records are not deleted; personal data is untouched.
-- Follow-up Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `acf5c483591d20219802f986fd4212ed1ceee9d19d3e20cd1b9bbc4b9b8483a8`, built successfully, installed in place and launched on rediscovered Kevq iPhone 17/iPhone18,3, iOS 27.0 (24A435), UDID `00008150-000D25942278401C`. Running process confirmed at PID 28315. Same derived-data path and signing override; existing working changes preserved, no commits.
-- Retained `phowhisper-cs-fp16-v1`, manifest `7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52`, prior verified runtime bytes 3,101,573,848. No model/tokenizer/decode/compute/pin changes, transfers, cache deletion or project regeneration.
-- Agent checked build/install/launch/process evidence and diff whitespace. Existing interruption deprecation and missing-AppIntents metadata warnings remain. Five-second Mural-only syslog returned only `[connected]`; no functional or privacy conclusion from that incomplete capture. Owned capture stopped; Device Hub quit requested, no ongoing capture or broad device archive.
-- Evidence: `.build/verification/local-mvp-phase-4/empty-draft-fix/`. The user confirms the deployed empty-draft fix is working and “all good now.” **PASS, human-confirmed.** No new agent UI/audio observation or deployment was performed for this confirmation.
-
-**Retained regression checklist (fix now human-confirmed):** On-device > Prepare & start > End while Preparing, before any greeting text is finalized. Expect no Transcript button and no **new** Past conversations entry, also after force-close/relaunch. Old empty entries from the earlier build may remain. If the greeting was already finalized, retaining that text is intentional. No full-suite or backup replay requested.
-
-**Next scope:** Phase 5 is next when explicitly requested: local Vietnamese Meaning (sentence tap or clear Meaning action, interaction still to decide), lookup, Help, typed replies, conservative last-user-passage assessment after End. Do not implement it merely because Phase 4 is accepted. Tutor repetition, silence/VAD, hosting, compression/ANE tuning, backup compatibility testing and Phase 6 soak remain deferred. Existing silence hallucination and evidence limits are unchanged. Wait for the next explicit implementation request.
-
-This acceptance supersedes all earlier Phase 4 PENDING HUMAN/next/not-started headings below, including the empty-draft correction replay. Historical deployment evidence is retained.
-
-
-## Phase 4 checkpoint: installed and launched, PENDING HUMAN
-
-Phase 4 only plus the requested timing cleanup is implemented and deployed. **Stop and wait for the user's checklist feedback.** This checkpoint supersedes all “Phase 4 next/not started” instructions below. Phase 3 remains human-accepted; no Phase 5 or Phase 6 work is authorized by this checkpoint.
-
-- Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `591211a88f16f6fc1855c9d774db6c87be832af22e02c8bb0b742f6ab883ff08`. Source base `1e78e5ccdf31e2e802ec254e1071072ffade5c0f` plus this uncommitted Phase 4 diff. Initial inspection saw staged Phase 3 changes; before editing, an external commit `1e78e5c` (“finish phase 3”) made the checkout clean. The agent made no commit and preserved that baseline.
-- Built with `.build/local-mvp-phase-1-device-derived-data` and the bundle override, installed in place and launched on rediscovered Kevq, iPhone 17/iPhone18,3, iOS 27.0 (24A435), UDID `00008150-000D25942278401C`. Running app confirmed at PID 26857 in its newly installed bundle path. No signing, dependency, generator, model, tokenizer or decode changes; no asset transfer, cache deletion, uninstall or learning-data reset.
-- Retained `phowhisper-cs-fp16-v1`, 3,101,573,848 runtime-file bytes from prior verification, manifest `7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52`. No new asset hash sweep on phone; Prepare still verifies installed files. Encoder CPU_AND_NE permitted, actual placement unverified. No download/hosting source exists.
-- Finalized turns use optional `Fragment.turnID` and the existing store/archive-v2 path. Unmarked legacy/premium grouping is unchanged. User text is saved before generation; retry reuses it; only completed assistant text is appended. Separate optional playback start/end/completion fields preserve fragment identity and conservatively mark unfinished playback. End saves once, without cloud assessment or the premium close wait. History and Transcript are available; no vocabulary/competence evidence is produced.
-- Talk, Settings and onboarding reuse the same mode preference. Local validates English/Vietnamese without changing history, and needs neither OpenAI consent nor a key. Ordinary onboarding now says Continue and never grants cloud consent; GPT-Live still has separate consent/key guards. Local ancillary features remain unavailable, including after End. Mode switching cancels old requests and clears stale conversation/meaning/topic UI. Cloud assessment and meaning closures reject marked local records; history views are read/edit-only and invoke no provider.
-- Preparation and response timing numbers moved into **On-device details & diagnostics**. Normal Talk keeps state feedback and End while busy. Local paid-usage fields remain zero; Settings labels voice usage as GPT-Live time.
-- Agent observed two successful Release builds, install, launch, running process and a bounded Mural-only launch syslog (298 lines). No OpenAI-attempt or app persistence-error events were found in that launch sample, but no local actions were exercised: this does **not** prove zero cloud attempts during conversation. Process filtering by URL with CONTAINS failed in devicectl; a normal process listing filtered locally confirmed Mural. Both outputs retained.
-- No agent UI/microphone/listening automation, new tests/fixtures/frameworks, subagents, profiling, commits or publication. Device Hub was not running and quit was requested again. The owned scoped syslog process is stopped (`capture-cleanup.txt`); no ongoing capture or broad device archive. Do not signal historical PIDs.
-- Evidence: `.build/verification/local-mvp-phase-4/` (`build.log`, `build-final.log`, `install.log`, `launch.log`, `device.txt`, `process-confirmed.log`, `device-events.log`, `executable.sha256`, `implementation.diff`, `result.md`). Build warnings are the pre-existing interruption API deprecation and no-AppIntents metadata warning; the initial rebuild also included the existing LiveTransport async-alternative warning.
-- All changed UI, persistence/backup, local lifecycle and privacy behavior is **PENDING HUMAN**. Fresh onboarding/no-prior-consent and a genuine imported-new-ID/old-format archive replay remain unverified if the existing phone cannot expose them safely. Reimporting the same backup checks deduplication only, not new-record round-trip fidelity. Do not reset personal data to force those cases. Credentialed premium responses remain unverified.
-- Known limitations unchanged: silence can invent `Để mình check lại thông tin trước khi thi.` and trigger an unsolicited reply; repetitive supermarket/store/carrot tutoring is deferred. Prior user-reported preparation about 208 s first / 6 s after relaunch and fast offline conversation belong to Phase 3, not this build's measurements. No new latency distribution, ANE placement, 20-minute soak, learning evidence or premium response pass.
-
-### Exact next action: human phone checklist
-
-1. **Settings:** Learning language English, Meaning language Vietnamese, Conversation mode On-device. **Talk > Prepare & start**. Expect preparation, fixed greeting, then Ready without an OpenAI consent/key prompt. If onboarding appears naturally, choose the same pair/mode and Continue; do not reset the phone to force it. Briefly choose an unsupported pair only while idle: start should explain the required pair without changing history; restore English/Vietnamese.
-2. **Two exchanges:** Record `Yesterday I went to the supermarket.` > Send; wait for reply and Ready. Record `I bought apples.` > Send (try a quick second tap). End > Transcript. Expect greeting plus two separate user and two assistant turns, no duplicates/joined words. Force-close/reopen normally; **Words > Past conversations > newest On-device conversation** must contain the same five turns. No new words/competence or GPT-Live voice usage should be awarded.
-3. **Lifecycle:** Prepare & start again; End once during Thinking and once during Speaking in separate short attempts. Background once during a recording. Reopen: finalized text must remain, unfinished recording must not appear, interrupted assistant playback must say Playback not completed, and no late speech/phantom recording should begin. After workers stop, switch GPT-Live then On-device: old captions/meanings/topics must clear. Language/mode changes must be disabled during local work.
-4. **Premium boundary:** End, choose GPT-Live and tap the microphone. With no previous consent, expect the separate disclosure; Not now must not start. After consent, with no key, expect Settings, not a provider response. Do not remove an existing key or reset prior consent just for this check; report those cases unavailable if already configured. Return to On-device. Themes/search, Meaning, lookup, Help and typing remain unavailable locally, including after End.
-5. **Safe backup/legacy check:** Settings > Export learning backup, save privately On My iPhone; then Import learning backup using that file. Existing conversations must stay unchanged with no duplicates. Reopen the new practice conversation and an existing older premium conversation. Do not delete conversations or edit IDs in a personal backup. If no safe old-format/practice-only backup exists, report the genuine new-record/legacy-import portion untested; a separate disposable installation can cover that gap later without touching personal data.
-6. **Readability:** normal Talk has no timing numbers. Expand On-device details & diagnostics to find them. Confirm Preparing/Ready/Recording/Thinking/Speaking/Ended feedback and reachable End with no clipping; report exact failing action, transcript/error and screenshot where useful.
-
-Do not repeat Phase 3's accepted ten-turn/offline suite or silence tests. Wait for feedback before further engineering or phase advancement.
-
-## Prior plan and handoff context (superseded where noted above)
-
-## Phase 3 accepted: human feedback and next scope
-
-The user reports **everything in the supplied Phase 3 checklist passed** and accepts the conversation-only feasibility milestone. This is human-confirmed behavior, not agent-observed speech or a new measured benchmark. No further testing or implementation was performed in response to this feedback.
-
-- English/Vietnamese mixed speech was recognized correctly in the user's replay; exact transcripts were not supplied. No universal recognition-accuracy claim.
-- Actual local conversation worked with both Wi-Fi and cellular/4G disconnected. The user describes response speed as quite fast; exact per-turn response gaps were not supplied.
-- Initial preparation was approximately **208 seconds**; after force-quitting and reopening, approximately **6 seconds**. These are user-reported totals, not component measurements. Consistent with the earlier cached-preparation pattern; cache mechanism/lifetime is not proven and first-use cost can recur.
-- The user's overall checklist pass includes the requested English TTS/readiness and End-during-thinking/speaking checks; no separate detailed traces or outputs were supplied.
-- **Known tutor-quality limitation, explicitly deferred:** repetitive supermarket/store/carrot conversation and repeated requests to practise very similar sentences, instead of naturally progressing or varying topics. Improve conversation progression and avoid unnecessary repetition later; do not tune prompts/models now.
-- **UX TODO for Phase 4:** remove preparation, Send-to-reply and Send-to-audio timings from the ordinary Talk surface. Retain content-free diagnostics in an optional diagnostic disclosure/probe, not permanently in the conversation. Keep a clear Preparing/Ready status.
-- **UX TODO for Phase 5:** provide a discoverable way to reveal Vietnamese meaning for the completed English sentence without asking the tutor aloud. Reuse the planned on-device Meaning feature; consider sentence tap or a labeled Meaning action. Preserve word-tap lookup as a distinct interaction and ensure accessibility. Translation must stay local; do not enable the existing premium translation closure. Final interaction design remains to be decided.
-- Phase 2's accepted silence failure remains unchanged: `Để mình check lại thông tin trước khi thi.` was invented from silence, including the mostly silent capped turn. In the integrated loop it can trigger an unsolicited reply. Silence is not fixed or passed.
-- Installed build remains Release 0.1.0 (1), `com.kevintruong.mural.dev`, SHA-256 `bf0c54925e1edad9c0ebd742631df9fc9dcf78f3eaf90b618ae2f05ecdadac22`, with retained `phowhisper-cs-fp16-v1` and ANE-capable encoder. No new deployment, capture, model change, data change or subagents.
-- Evidence limits remain: no exact latency distribution, hardware placement, sustained 20-minute soak, or live premium regression established here. Prior incomplete syslog is not proof of zero network attempts. These do not change the recorded human acceptance of this milestone.
-
-**Recommendation: Phase 4 next**, covering durable separate turns/history, mode/consent/privacy integration and safe transitions, plus the small timing-display cleanup above. Phase 5 remains local Meaning/lookup/Help/typed replies and conservative assessment. Phase 6 remains final sustained acceptance. Do not reopen Phase 3 for these additions. Await an explicit next implementation request; the current response records feedback and recommends scope only. Continue paired testing: agent builds/installs/launches, user tests, no duplicate agent UI/audio automation.
-
-This acceptance supersedes the PENDING HUMAN/wait-for-feedback labels in the historical deployment checkpoint below.
-
-## Phase 3 checkpoint: installed and launched, PENDING HUMAN
-
-Phase 3 implementation is now present. The user requested stopping agent UI checks and handing over immediately for their own testing. Do not run further microphone/UI automation or advance phases while waiting for feedback.
-
-- Release 0.1.0 (1), `com.kevintruong.mural.dev`, executable SHA-256 `bf0c54925e1edad9c0ebd742631df9fc9dcf78f3eaf90b618ae2f05ecdadac22`; source base `ddfb703af15ec166793e3d0672374c001423ba81` plus uncommitted Phase 3 changes. Starting checkout was clean; prior implementation/history preserved.
-- Built using `.build/local-mvp-phase-1-device-derived-data`, installed in place and launched on rediscovered Kevq, iPhone 17/iPhone18,3, iOS 27.0 (24A435), UDID `00008150-000D25942278401C`. Agent process inspection confirmed PID 24859 after launch.
-- Retained `phowhisper-cs-fp16-v1`, manifest `7b0bff2652daa1198cf476609001a87b42518a9854bf2416c728a72778c92b52`, 3,101,573,848 runtime bytes, ANE-capable encoder configuration unchanged. No asset transfer, model/tokenizer/decode changes, signing changes or cache deletion. Actual ANE placement remains unverified.
-- Talk has explicit GPT-Live / On-device selection; missing preference remains premium. Local start validates English + Vietnamese settings. Prepare & start awaits the existing ASR owner, then speaks the fixed greeting. Record/Send invokes finalized ASR, a bounded Apple tutor request and completed-reply TTS. End/background cancel work and prevent restart until old workers drain. New Send-to-reply and TTS-delegate Send-to-audio timings are shown on Talk.
-- Conversation-only: local records remain in memory, latest finalized turns remain visible until reset/restart, no durable history or learning evidence. Meaning/lookup/Help/typing/themes/search and premium finish/assessment paths are guarded off for local mode. Vietnamese was added to the existing language selector only to enable this required pair; broader Phase 4 onboarding/privacy/persistence and Phase 5 features remain deferred.
-- Agent observed successful Release build/install/launch, running process, premium-default Talk and its mode menu through Device Hub. Agent did NOT select local/start preparation, record speech, invoke tutor, listen to TTS or pass the integrated gate. The user interrupted visual inspection and requested immediate handoff. Local layout, readiness and busy states remain PENDING HUMAN.
-- Build warnings: existing AVAudioSession interruption API deprecation, existing LiveTransport async-alternative warning, and no-AppIntents metadata warning. Build succeeded; no new framework/test suite or project regeneration was needed.
-- A bounded eight-second Mural-only syslog attempt returned only `[connected]`; it was stopped. No app timing/error events recovered, so this is not proof of zero network attempts. No broad device log archive collected. Device Hub quit requested before handoff; no owned capture remains active. Do not signal historical PIDs.
-- Phase 2 remains ACCEPTED FOR MVP WITH KNOWN SILENCE FAILURE: three seconds of silence produced `Để mình check lại thông tin trước khi thi.` The mostly silent capped turn produced the same text; the 30-second cap passed, silence did not. A nonempty hallucination may now cause an unsolicited tutor reply. No silence filtering/remediation added.
-- Evidence: `.build/verification/local-mvp-phase-3/` (build-final.log, install.log, launch.log, process.log, device.txt, executable.sha256, device-events.log, Talk/menu screenshots, result.md). No commits, pushes, publication, subagents, or active profiling.
-
-**Next action: wait for human feedback.** On phone: Settings > Learning language: English, Meaning language: Vietnamese; Talk > mode menu (currently GPT-Live) > On-device > Prepare & start. Wait for the fixed greeting and Ready. After preparation, End, disable Wi-Fi/cellular, relaunch, Prepare & start again. Complete ten Record/Send exchanges including `Today I went to... siêu thị. I don't know that word in English.`, a modeled English repetition, and `Tôi không hiểu câu đó.` Check useful simpler English without spoken Vietnamese quotations, no Record during thinking/playback, readiness afterward. End during thinking and speaking, checking no late speech or recording. Report exact ASR/reply/errors, preparation and displayed Send-to-reply/Send-to-audio seconds, heat/crash issues. No repeated Phase 2 suite or silence prerequisite. Offline coexistence/latency/teaching and cancellation remain PENDING HUMAN; Phase 6 soak and premium response checks have not been run.
-
-## Current workflow
-
-The user replaced subagent verification with paired testing on September 14, 2026. The implementation agent builds/installs/launches and diagnoses logs directly; the user operates the physical phone and confirms speech/listening. See `mvp_plan.md`'s current-workflow override. No new test suites or canned inference. Keep evidence under `.build/verification/local-mvp-phase-N/`.
-
-## Device build and identity (confirmed Phase 0/1)
-
-Discover the connected iPhone each run. The user's existing Mural installation is `com.kevintruong.mural.dev`, not the public default. Preserve this identity with `PRODUCT_BUNDLE_IDENTIFIER=com.kevintruong.mural.dev` on xcodebuild; signing comes from ignored `Config/Local.xcconfig`. Do not uninstall or change credentials/data. Build Release for optimized local timing. Reuse `.build/local-mvp-phase-1-device-derived-data`.
-
-The flask toolbar button opens the local probe without starting GPT-Live. No key is required. The main Talk microphone still starts premium until Phase 3 integration. Never use premium `--verify-audio`/`--verify-meaning` to prove local behavior.
-
-## Apple tutor (human-confirmed Phase 1)
-
-In the Phase 2 build select Apple tutor in the probe picker. Enter and Send each text:
-
-1. Yesterday I went to the supermarket.
-2. Tôi không hiểu câu đó.
-3. Today I went to siêu thị. How do I say that in English?
-
-Inspect real availability and English/Vietnamese locale support; read the actual response and listen to English TTS. Screenshot model first/full timing and TTS startup/duration. Stop during thinking, Stop during speech, then retry. The user confirmed these work in the Phase 1 build. Their screenshot also exposed an unhelpful repeated-sentence explanation and they reported English TTS spelling quoted Vietnamese. Prompt correction needs a focused replay; do not claim that correction verified yet.
-
-## Speech recognition (Phase 2 mixed-language gate FAILED)
-
-Fully quit Device Hub before capture. Open flask > Speech recognition > Prepare speech models on Wi-Fi. Wait through downloading/checking and warming for Ready to record. This uses FluidAudio 0.15.7, full multilingual/1120ms, language auto, about 664 MB assets. Repair download reconciles only this variant's cached files without erasing learning data.
-
-Record and Send recording one turn at a time. Inspect Finalized recognition before invoking any tutor. This probe makes no tutor request and does not speak, persist transcripts, or award learning evidence. Include English, Vietnamese, missing-word, reverse-switch speech, silence, Yes/No, and a second distinct turn to catch stale text. Normal turns reuse loaded weights. Stop/Close/background unloads the manager; prepare again to reload cached weights. A recording finalizes at 30 seconds.
-
-See plan sections 4 Phase 2 and 11 for exact corpus. Capture the displayed text, captured-audio duration, and Send-to-final timing. Do not interpret a recording status as proof of actual audio. Ask only for human actions required for this gate; stop if bilingual recognition is unusable.
-
-### Focused blocker investigation replay
-
-Preparation, single-language sentences, recording, and recovery were human-confirmed; mixed turns lost `siêu thị`, `cái từ này`, and `appointment`. Do not advance to Phase 3. See `.build/verification/local-mvp-phase-2/investigation/result.md` for the diagnostic build, cache comparison, launch blocker, and six numbered isolated-versus-mixed phrases. Wait for Recording and one additional second before those diagnostic turns to control early onset. Report each exact result. This timing instruction is not a relaxed acceptance criterion.
-
-The focused replay has now also failed: isolated `siêu thị` was empty, isolated `cái từ này` worked but became `night` inside English, and reverse switches lost `appointment`. All 10 logged sample/chunk counts matched; 13 heuristic blank spans had zero recoveries. User relaunch resolved the earlier phone-lock blocker. The replay's syslog capture was stopped. Do not request another identical Nemotron replay without a concrete new hypothesis/change; the user has now approved the WhisperKit comparison below, retaining Nemotron.
-
-The diagnostic patch changes no ASR settings or UI. Correlate results with `asr_configuration`, `asr_input`, and `asr_decode` before reset: loaded configuration, source/converted sample counts, first language tag, and blank-span/recovery counts. A first language tag is not evidence that all words share that language or that a switch succeeded. Counts alone do not prove audio fidelity. No raw audio is retained.
-
-## Logs
-
-Use log-first paired debugging so the user does not have to transcribe diagnostics:
-
-1. Before another replay, inspect the installing session (use `session-reader` when its ID/path is supplied) and the relevant existing `.build/verification/` reports, build commands and Mural logs. Search known evidence directories first, not the entire home directory. Ignored `.build/` files may be invisible to the indexed search tools; use scoped `rg -n` on the exact evidence files when needed.
-2. For a new phone check, discover the device and check for an existing `idevicesyslog` capture. Reuse it only after confirming its command/UDID, output file and liveness; record the starting byte offset/time to separate fresh evidence. Never signal an old PID without verifying ownership and do not start duplicate captures.
-3. If no suitable capture exists, start the following in the background before launch/reproduction (never as a persistent foreground tool call). Keep a finite test window; record PID, command, start time, output path and who owns cleanup. Stop an owned capture after the batch or agreed timeout.
-
-   ```sh
-   : "${EVIDENCE:?Set a fresh local evidence directory}"
-   : "${DEVICE_UDID:?Discover the paired phone first}"
-   nohup idevicesyslog -u "$DEVICE_UDID" --no-colors -x -p Mural \
-     > "$EVIDENCE/mural-device.log" 2>&1 < /dev/null &
-   printf '%s\n' "$!" > "$EVIDENCE/mural-device-log.pid"
-   ```
-
-4. Verify the capture actually receives fresh Mural events, not just `[connected]`. Keep Device Hub fully closed for microphone checks. Give one short batch through `interview`; ask the user only for “done”, the failing step/approximate time, and audible or visible behavior absent from logs. Collect timings and device screenshots yourself when available. Never imply continuous observation between replies.
-5. Read the fresh slice and correlate the app PID/timestamps with build identity and `local_talk_asr_backend`, `asr_assets_ready`, `asr_prewarmed`, `asr_model_timing`, `asr_ready`, staged decoder/turn events, `capture_started`, `asr_send`, `asr_final`, tutor/TTS events and memory warnings. Inspect `OpenAI request attempted` when checking the local/premium boundary. Save only focused evidence and distinguish observed, human-confirmed and blocked results.
-
-`idevicesyslog` streams current device logs; it does not recover arbitrary past activity. This regression's old timings were recoverable because an earlier session had already saved a capture on the Mac. If evidence is missing/redacted, request one targeted replay with capture ready rather than guessing. App/framework logs and screenshots can still contain personal information: keep them local/uncommitted, do not intentionally log keys, raw audio or personal transcripts, and never silently collect a device-wide archive. Absence in an incomplete capture is not proof of success or zero provider requests.
-
-## Approved WhisperKit comparison (human gate pending)
-
-The probe defaults to **Whisper**. **Speech model** selects Whisper or Nemotron only when idle, unloads the previous recognizer, and clears its displayed results/timing without deleting cached assets. Both original Nemotron code and cache remain available. No automatic fallback, tutor connection, Qwen, or Phase 3 work.
-
-WhisperKit 1.1.0 uses the fixed `openai_whisper-large-v3-v20240930_626MB` asset (about 627 MB plus tokenizer/Core ML caches), pinned asset revision `0f63a7800b00dd0226abd051b906c246e1907482`. Assets are under Application Support/WhisperKit, excluded from backup. Prepare may download missing assets/tokenizer; cached preparation should work offline and must be checked. Repair reconciles only this recognizer's model snapshot. Normal turns reuse in-memory weights and tokenizer. The microphone still uses the same bounded 16 kHz mono conversion; Whisper consumes the completed RAM-only turn after Send. No expected-word prompts or transcript correction. Auto language detection is explicit. The native one-second end-window skip is disabled so sub-second Yes/No recordings are not silently skipped. Silence hallucinations remain a test requirement, not solved by that setting.
-
-Phone checklist, with Device Hub fully closed:
-
-1. Flask > Speech recognition > Speech model: Whisper > Prepare speech models on Wi-Fi. Keep foreground; first Core ML preparation can take minutes. Report any error or termination, not repeated blind retries.
-2. Record/Send the six numbered phrases in `investigation/result.md`, one turn at a time. Report exact final text plus Send-to-final seconds. Include one unseen mixed phrase, isolated Yes, isolated No, and 3 seconds of silence. Important words must survive without translation or invented content.
-3. Stop during finalizing, then Prepare and a fresh distinct turn. Check no stale result arrives. Stop/Close/background should discard unfinished audio; check a background/reopen recovery for Whisper.
-4. After successful preparation, disable Wi-Fi and cellular, relaunch Mural, Prepare Whisper from cache and repeat one mixed turn. Offline capability is not established by source inspection alone.
-5. When convenient, select Nemotron and Prepare from its retained cache, then switch back. Only one model should be resident. No need to repeat the already-failed Nemotron corpus now.
-
-Do not advance to Phase 3 based on successful installation. Keep results under `.build/verification/local-mvp-phase-2/whisperkit/`. Qwen is conditional on a failed Whisper human checkpoint; the monolingual compromise requires a deliberate scope decision and evidence for both languages.
-
-## Parakeet VI-EN comparison (latest approved experiment)
-
-The probe now defaults to **Parakeet VI–EN**. Whisper quality was provisionally accepted by the user, with word loss, retries/slower speech, and one extra `Gracias`. This is not an offline/silence/stability acceptance. Parakeet, not Qwen, is the next authorized experiment. Nemotron and Whisper remain selectable while idle; their caches are retained. No Phase 3 or VAD.
-
-Prepare on Wi-Fi with the app foreground. The pinned split community conversion needs about **1.19 GB plus Core ML caches**, with a **15-second** limit for each Parakeet turn. Whisper/Nemotron remain 30 seconds. Compare the same three mixed phrases from the last user checkpoint at natural pace, one Record/Send each; capture exact output and Send-to-final seconds. Report failures without masking them with slower speech or repetitions; those can be separately labeled retries. Then test silence, Yes/No, Stop while finalizing and retry, background recovery, and offline cached preparation. A full matched-waveform comparison is not claimed: no raw audio was retained or replayed across models.
-
-The preparation display now separates total preparation from model download/cache and loading. For Whisper, it also separates prewarm from load/tokenizer. To investigate its original 125.35-second preparation, select Whisper > Prepare once from its retained cache and report these numbers; no repeated corpus replay needed for this timing check. Do not assume that its first-install total is recurring warm load cost.
-
-Parakeet logs include valid frames, sampled process footprint, process-lifetime RSS peak (not isolated model peak), and thermal state at load/finalization. No 20-minute stability, battery cost, or memory coexistence with the Apple tutor is established by this isolated probe. Use `.build/verification/local-mvp-phase-2/parakeet/result.md` for current build/evidence and capture PID.
-
-### Parakeet checkpoint result
-
-Human mixed-language quality failed: Vietnamese phrases survived but English was badly corrupted. Download/cache 116.62 s; load 20.52 s. Four actual finalizations were fast (0.096-0.532 s) but unusable for the goal. Phone vocabulary/config match the pinned assets; sample/valid-frame counts agree. No app-source change or model switch made after this result. Stop repeating the same Parakeet corpus without a concrete change/hypothesis. Whisper remains the best observed candidate, not yet a full offline/stability acceptance. Capture PID 74017 is stopped. See the Parakeet report for exact outputs and source-versus-conversion/decoder uncertainty.
-
-
-## PhoWhisper CS checkpoint (Phase 2C PENDING HUMAN)
-
-September 14: Phase 2A merge/Core ML parity passed on the same 21 scored scripted WAVs. Phase 2B Release is installed and launched on the connected iPhone 17/iOS 27 under com.kevintruong.mural.dev. See `.build/verification/local-mvp-phase-2/phowhisper/result.md` for exact executable hash, device, install logs, asset manifest, raw parity links and owned capture PID. No phone preparation or speech acceptance claimed yet.
-
-The probe now defaults to **PhoWhisper CS**; other recognizers/caches remain. Open flask > **Speech recognition** > **Speech model: PhoWhisper CS** > **Prepare speech models**. The development-only 3.10 GB FP16 large-v2/LoRA asset is installed separately in `Library/Application Support/PhoWhisperCS/phowhisper-cs-fp16-v1`; no hosting or download path exists. Prepare checks exact file hashes, then warms the GPU encoder and decoder. The displayed cache-verification and prewarm/load timings are separate. Missing/corrupt files need the documented Mac transfer, not repeated Repair download attempts.
-
-Agent verified build/install/launch/logs and that Device Hub is not running. User next waits for **Ready to record**, then uses **Record** and **Send recording** separately for the five phrases in the checkpoint report, preserving the known siêu thị challenge. Report each exact **Finalized recognition · PhoWhisper CS** text and **Send to final** seconds, plus preparation numbers or exact errors. Stop on errors instead of blind retries. No new recordings are needed on Mac.
-
-After feedback/log inspection, request pure Vietnamese, isolated Yes/No, silence, word-search pause, unrelated next turn, Stop/reprepare, background recovery, cached offline relaunch and the explicit 30-second cap. Silence hallucination is unresolved; no quiet-speech rejection heuristic or tutor compensation was added. Mac times do not establish phone latency, memory or thermal behavior. Keep Phase 3 on hold until explicit human gate acceptance.
-
-
-### Latest optimization checkpoint: 4-bit quality blocked, no phone replacement
-
-See `.build/verification/local-mvp-phase-2/phowhisper/pal4-g16-v1/result.md`. The 891.74 MB group-16 4-bit candidate failed saved-corpus parity on 006/011/021. Component FP16 exceptions did not repair all differences; it was not installed. Keep the original FP16 app/assets and do not request another phone replay of the rejected candidate. Initial FP16 five-phrase accuracy was human-accepted (residual siêu thị error), but performance and remaining Phase 2 checks are unaccepted. No log capture is active; old PID 40170 was stopped. Optional ANE has not been attempted. Next is a justified focused precision correction and renewed parity before instrumentation/deployment, not Phase 3.
-
-### Later 6-bit/8-bit checkpoint: both quality blocked
-
-User-authorized 6-bit then 8-bit completed. 6-bit (1.266 GB) retained an incorrect `I went through`; 8-bit (1.656 GB) reintroduced `Em complete từ này`. Both changed the already-wrong seal tea to seoul tea. Neither was deployed; no new microphone checklist or active capture. Evidence: `.build/verification/local-mvp-phase-2/phowhisper/pal6-g16-v1/result.md` and `pal8-g16-v1/result.md`. Retain FP16, stop the completed bit-depth ladder, and review focused precision diagnosis before another candidate. ANE not attempted; Phase 2 remains unpassed.
-
-### Active FP16/GPU timing checkpoint: PENDING HUMAN
-
-User reordered work: profile retained FP16, then bounded ANE encoder, then consider 8-bit per-tensor. Instrumented FP16/GPU build installed/launched; no model/backend change yet. See `.build/verification/local-mvp-phase-2/phowhisper/fp16-gpu-profile-v1/result.md` for identity and exact three-turn matched replay (supermarket, mixed phở, supermarket). Capture PID74650 is retained for asr_ logs; inspect liveness/ownership before cleanup. Core AI trace could not start because Instruments sees phone offline; trace PID74651 exited, do not signal it. Prepare/recognition/component timings still PENDING HUMAN. No ANE placement/speedup or Phase2 acceptance claimed.
-
-## Active comparison: FP16 ANE-capable encoder installed, PENDING HUMAN
-
-Release0.1.0 (1), com.kevintruong.mural.dev, executable SHA-256 `50fbf078e0d4f41c0f3063562f513e180269f66c7602f0cf828ce01c73cb64b4` installed/launched on rediscovered Kevq iPhone17. Only change from GPU timing build is encoder CPU_AND_NE permission instead of CPU_AND_GPU plus truthful configuration log. Same FP16 weights/manifest/pins, tokenizer, decoder and decode options. No actual ANE placement or preparation success established. GPU signed rollback bundle retained at `fp16-gpu-profile-v1/Mural.app`, hash454aac591edb6e8a5a2f9fb37c27bee761dea7d7817db64c154c89c619505c6e.
-
-Next human action: Prepare PhoWhisper CS once with Device Hub closed; keep foreground, wait at most3minutes, then Stop/report if not Ready, no blind retries. If Ready, Record/Send supermarket, mixed phở, supermarket (same exact three phrases in evidence). Report preparation breakdown, exact outputs and all Send-to-final times; stop/report a finalization over60s. Compare GPU70.262s preparation and9.77/4.44/3.74s Send-to-final. ANE memory/thermal/quality/latency PENDING HUMAN; no live capture or working Instruments trace, content-free unified timing logs retained in app. Never silently collect broad device logs (predicate ignored on attached-device collection).
-
-Evidence: `.build/verification/local-mvp-phase-2/phowhisper/fp16-ane-compare-v1/result.md`, build/install/launch/process logs. No compression/export change, subagents or publication. Phase2 UNPASSED, Phase3 on hold; 8-bit per-tensor NOT STARTED.
+FireRed native/runtime/build/provisioning/catalog/host support remains intact. Managed acquisition/recovery passed historically; native resource qualification stopped on a warning and remains blocked. Legacy `DEVICE_PAIR=zh-CN-en` is FireRed-specific, not Breeze acceptance. See [retained support and source map](../../../../docs/asr/chinese/README.md#retained-firered-support) and [qualification tracker](../../../../docs/asr/chinese/simplified-talk-qualification-plan.md). Recheck current routing/contracts and obtain the applicable research handoff before any new expensive run; no automatic retry or warning/thermal override.

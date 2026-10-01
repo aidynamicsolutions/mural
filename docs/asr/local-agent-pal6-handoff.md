@@ -1,5 +1,7 @@
 # Local agent: finish and qualify the PAL6 encoder on iPhone 17
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 You are continuing authorized work on `aidynamicsolutions/mural`, branch `mvp`.
 Read `docs/asr/coreai-pal6-encoder-checkpoint.md` first. The objective is accurate
 English/Vietnamese switching with faster readiness/turns and lower resource use.

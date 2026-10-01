@@ -1,5 +1,7 @@
 # iPhone 17 bilingual ASR: current-model optimization overview
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Updated 2026-09-17 against `f51fb58d7653330abbfabb80eae52fa07485a1c9` on `mvp`.
 
 **Current instructions:** [Core AI 8-bit optimization plan](coreai-8bit-optimization-plan.md), then [local implementation/interview handoff](local-agent-handoff.md). These supersede the old decoder-only sequence and the earlier Qwen-first priority. This documentation change does not install a compressed model, fix memory recovery, or establish any new phone measurements.

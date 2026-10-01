@@ -1,5 +1,9 @@
 # On-device speech memory-pressure UX
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
+Current normal Talk notifications are advisory; only genuine ceiling/thermal/model faults use pause/drain/recovery. See [current safety verification](../../.agents/skills/verify-mural/features/local-conversation.md#readiness-and-safety). The notification-triggered pause policy and evidence below describe September 25, not today's behavior.
+
 Date: 2026-09-25. Qualification branch: `local/resumable-speech-setup-qualification` (remote: `codex/resumable-speech-setup`).
 
 **Status: recovery UX implemented locally and simulator-verified. A real iOS memory warning, native model drain under warning, and physical-device acceptance are not yet verified by this change. This does not establish or fix the underlying memory-pressure cause.**
@@ -49,4 +53,4 @@ Apple advises apps to release memory in response to warnings; warnings are best-
 - Apple, [Responding to memory warnings](https://developer.apple.com/documentation/uikit/responding-to-memory-warnings).
 - Apple, [Responding to low-memory warnings](https://developer.apple.com/documentation/xcode/responding-to-low-memory-warnings).
 - Apple, [Identifying high memory use with Jetsam event reports](https://developer.apple.com/documentation/xcode/identifying-high-memory-use-with-jetsam-event-reports).
-- Related Mural evidence: [`firered-memory-investigation-20260920.md`](chinese/firered-memory-investigation-20260920.md), [`vad-qualification-result-20260919.md`](vad-qualification-result-20260919.md), [`gpu-talk-checkpoint.md`](../../coreai/gpu-talk-checkpoint.md), [`speech-setup-ux.md`](speech-setup-ux.md), and the current paired workflow in [`mvp_plan.md`](../../mvp_plan.md).
+- Related Mural evidence: [`firered-memory-investigation-20260920.md`](chinese/firered-memory-investigation-20260920.md), [`vad-qualification-result-20260919.md`](vad-qualification-result-20260919.md), [`gpu-talk-checkpoint.md`](../coreai/gpu-talk-checkpoint.md), [`speech-setup-ux.md`](speech-setup-ux.md), and the [current paired workflow](../../.agents/skills/verify-mural/features/local-conversation.md#physical-workflow).

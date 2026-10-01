@@ -1,10 +1,12 @@
 # Local speech findings and review handoff
 
+Historical checkpoint/research instructions, not the current task queue. Use [current speech guidance](README.md) and its verification links. Preserve the dated results and failures below; do not reapply old patches, reuse old device authorization or restart completed/rejected experiments merely because a step says “next”.
+
 Date: 2026-09-22. Repository: `aidynamicsolutions/mural`, branch `mvp`.
 
 **Focused cancellation work is complete and owner-accepted; this is not a release approval.** The [accepted cancellation follow-up](speech-setup-ux.md#accepted-cancellation-follow-up) records the final implementation, four passing physical cancellation/retry runs, eight passing UI checks and installed daily build. The owner accepts the observed 15-19 second post-reinstall cancellation drain; further latency tuning is not the next task. Read that closeout for current source/executable identities and limits. Older native timings and UX descriptions below are historical. Remaining work is installer recovery, safety/lifecycle coverage, Taiwan language quality and release provisioning.
 
-Next-agent instructions: [copy-ready review prompt](local-speech-review-prompt.md).
+For new work use the [current verification feature](../../.agents/skills/verify-mural/features/local-conversation.md), not a copied old review prompt.
 
 ## 1. Three independent outcomes
 
