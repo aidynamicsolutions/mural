@@ -41,6 +41,38 @@ FAULTS = re.compile(r"asr_memory_warning(?! stopped=false continuing=true\b)|ios
                     r"OpenAI request attempted|local_reply_failed|model_failed|firered_resource_fault|firered_provision_fault|firered_vad_unavailable")
 
 
+def breeze_trial_contract(arm, root=ROOT):
+    if arm not in ("pal8", "pal4"):
+        raise ValueError("Use explicit Breeze trial pal8 or pal4")
+    pin = (root / "App/BreezePAL4TrialPin.swift").read_bytes()
+    contract = dict(arm=arm, model="breeze-asr25-pal8-v1",
+        manifest="64021fb776ee2ef4cf02c05b2a9dafde0e0700e9bf7d967b4bc5302558b5fdb4",
+        candidate_pin_sha256=hashlib.sha256(pin).hexdigest())
+    if arm == "pal4":
+        source = pin.decode()
+        def field(name, pattern):
+            values = re.findall(r'static let ' + name + r' = "(' + pattern + r')"', source)
+            if len(values) != 1:
+                raise ValueError("PAL4 requires its reviewed compiled-in pin: " + name)
+            return values[0]
+        contract['manifest'] = field('manifestSHA256', r'[0-9a-f]{64}')
+        revision = field('revision', r'[0-9a-f]{40}')
+        contract['model'] = field('identity', r'breeze-asr25-weiren-pal4-[0-9a-f]{12}-[0-9a-f]{12}')
+        if contract['model'] != f"breeze-asr25-weiren-pal4-{revision[:12]}-{contract['manifest'][:12]}":
+            raise ValueError("Candidate pin identity mismatch")
+    return contract
+
+
+def breeze_trial_launch(log, contract, app_hash):
+    # History views can construct idle engines; every marker must still agree exactly.
+    rows = sorted(set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*breeze_trial_launch arm=(\S+) model=(\S+) manifest=(\S+) executable_sha256=(\S+)', log)))
+    pids = set(re.findall(r'Mural\[(\d+)(?::\d+)?\].*local_talk_asr_backend backend=' + re.escape(BACKEND), log))
+    if len(rows) != 1 or pids != {rows[0][0]} or tuple(rows[0][1:]) != (
+            contract['arm'], contract['model'], contract['manifest'], app_hash):
+        raise ValueError("Trial launch must prove the exact compiled arm, manifest, executable and current PID")
+    return rows[0][0]
+
+
 def phase_durations(boundaries, ended):
     """Partition one monotonic clock domain; incomplete runs still retain their phases."""
     names = [name for name, _ in boundaries]
@@ -129,7 +161,7 @@ def consumed_ack_copy(copy_log, test_log, run, index, token):
 
 def breeze_fixture_ids(stage, requested=None):
     if requested:
-        if stage != "breeze-acoustic" or requested not in ("M00A-switch", "F00A-switch", "M00A-english"):
+        if stage != "breeze-acoustic" or requested not in ("M00A-switch", "F00A-switch", "M00A-english", "M00A-english-number", "F89A-mandarin-number", "M00A-short-ok"):
             raise ValueError("One-clip override requires the acoustic stage and an existing reviewed clip")
         return [requested]
     return {"breeze-acoustic": ["M00A-switch"], "breeze-multi": ["F00A-switch", "M00A-english"],
@@ -174,14 +206,14 @@ def validate_breeze_memory_poc(stage, pair, enabled):
         raise ValueError("Memory-warning PoC requires explicit isolated preparation or a Simplified Breeze stage")
 
 
-def validate_request(udid, stage, ready, pair="vi-en"):
+def validate_request(udid, stage, ready, pair="vi-en", trial=False):
     if not re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{16}", udid):
         raise ValueError("DEVICE_UDID must be an explicit freshly discovered physical UDID")
     if stage not in ("prepare", "status", "stop-idle", "baseline", "acoustic", "multi", "cancel", "restore-settings", "pair-check", "resource-check", "resource", "provision") + BREEZE_STAGES:
         raise ValueError("Unknown physical stage")
     if pair not in ("vi-en", "zh-CN-en", "breeze-zh-CN-en"):
         raise ValueError("Unknown physical test pair")
-    if (stage in BREEZE_STAGES) != (pair == "breeze-zh-CN-en"):
+    if (stage in BREEZE_STAGES or (trial and stage == "prepare")) != (pair == "breeze-zh-CN-en"):
         raise ValueError("Breeze requires its explicit ordinary-build stage and pair")
     if pair == "zh-CN-en" and stage not in ("prepare", "pair-check", "resource-check", "resource", "provision"):
         raise ValueError("FireRed requires an explicit model-free, provisioning or resource stage")
@@ -470,7 +502,7 @@ def breeze_fault_log(log, memory_poc=False):
     return "\n".join(lines)
 
 
-def breeze_events(log, expected_count, pair="zh-CN-en", memory_poc=False):
+def breeze_events(log, expected_count, pair="zh-CN-en", memory_poc=False, model="breeze-asr25-pal8-v1"):
     """Fresh real-model evidence, distinct from word accuracy and human listening."""
     if memory_poc and not re.search(r'Mural\[\d+(?::\d+)?\].*breeze_memory_poc enabled=true thermal_stop_retained=true', log):
         raise ValueError("Missing actual diagnostic runtime policy")
@@ -486,7 +518,7 @@ def breeze_events(log, expected_count, pair="zh-CN-en", memory_poc=False):
     selected = re.findall(r'local_talk_model_selected pair=(\S+) model=([^\n]+)', current)
     if len(selected) != 1 or selected[0][0] != pair or not selected[0][1].startswith('Breeze '):
         raise ValueError("Missing single selected Breeze model and frozen pair")
-    if (current.count('asr_memory model=breeze-asr25-pal8-v1 stage=loaded') != 1
+    if (current.count(f'asr_memory model={model} stage=loaded') != 1
             or current.count('breeze_inference_begin ') != expected_count
             or current.count('breeze_decode scope=whisperkit-transcribe-not-ui-send') != expected_count):
         raise ValueError("Missing real Breeze load/inference or duplicate recognizer")
@@ -501,7 +533,7 @@ def breeze_events(log, expected_count, pair="zh-CN-en", memory_poc=False):
         if found < 0:
             raise ValueError('Missing ordered Breeze event: ' + event)
         offset = found + len(event)
-    return {'pid': pid, 'pair': pair, 'model': 'breeze-asr25-pal8-v1', 'inferences': expected_count}
+    return {'pid': pid, 'pair': pair, 'model': model, 'inferences': expected_count}
 
 
 def cancellation_events(log, pid):
@@ -641,9 +673,15 @@ def runtime_test_plan(source, environment):
     return plan
 
 
-def compiler_proof(build_log, identity, receipts, firered=False, memory_poc=False):
+def compiler_proof(build_log, identity, receipts, firered=False, memory_poc=False, trial=False):
     app_hash = identity["artifacts"][APP_EXECUTABLE]
     logs = [(build_log, False)]
+    # A separately saved compiler proof remains valid for identical executable bytes
+    # even if a later, independent runner-signature check failed that preparation.
+    for proof in sorted(EVIDENCE_ROOT.glob("*/compiler-proof.json")):
+        previous = json.loads(proof.read_text())
+        if previous.get("app_sha256") == app_hash:
+            logs.append((Path(previous["log"]), True))
     for receipt in receipts:
         saved = json.loads(receipt.read_text())
         if saved.get("identity", {}).get("artifacts", {}).get(APP_EXECUTABLE) == app_hash:
@@ -660,6 +698,7 @@ def compiler_proof(build_log, identity, receipts, firered=False, memory_poc=Fals
         with path.open() as file:
             for line in file:
                 if ("swiftc -module-name Mural " in line and "-D MURAL_COREAI_TALK" in line
+                        and bool(re.search(r"-D ?MURAL_BREEZE_PAL4_TRIAL\b", line)) == trial
                         and bool(re.search(r"-D ?MURAL_BREEZE_MEMORY_POC\b", line)) == memory_poc
                         and (not firered or re.search(r"-D ?MURAL_FIRERED_RUNTIME\b", line))):
                     compiler = line.strip()
@@ -741,6 +780,92 @@ def breeze_load_profile(log):
     return profiles
 
 
+def export_breeze_trial(evidence):
+    """Project real owned-run observations, not template booleans, into benchmark records."""
+    session = json.loads((evidence / 'session.json').read_text())
+    trial = session['breeze_trial']
+    if not trial or not (evidence / 'breeze-fixtures.json').is_file():
+        return
+    cleanup = json.loads((evidence / 'cleanup.json').read_text())
+    result = json.loads((evidence / 'result.json').read_text())
+    if cleanup.get('cleanup') != 'PASS' or (evidence / 'failure.json').exists():
+        raise ValueError('No successful benchmark from failed or unclean run')
+    prepared = Path(json.loads((evidence / 'prepared-source.json').read_text())['receipt'])
+    identity = json.loads(prepared.read_text())['identity']
+    log = (evidence / 'mural-device.log').read_text()
+    pid = breeze_trial_launch(log, trial, identity['artifacts'][APP_EXECUTABLE])
+    current = '\n'.join(line for line in log.splitlines() if re.search(rf'\bMural\[{pid}(?::\d+)?\]', line))
+    if FAULTS.search(current):
+        raise ValueError('Safety/model fault in benchmark process')
+    fixtures = json.loads((evidence / 'breeze-fixtures.json').read_text())
+    captures = acoustic_events(current, pid, len(fixtures))
+    if len(result['turns']) != len(fixtures):
+        raise ValueError('Missing raw turns for benchmark')
+    # Translate the frozen manifest's descriptive categories to the scoring schema.
+    # Preserve the original metadata; do not infer groups from recognition output.
+    groups = {'Mandarin-English-Mandarin': 'multi-switch',
+              'English-Mandarin-English': 'multi-switch',
+              'Mandarin control with number': 'zh', 'English control': 'en',
+              'English number control': 'en', 'Short response; not Yes/No coverage': 'short'}
+    if any(f['category'] not in groups for f in fixtures):
+        raise ValueError('Unreviewed Breeze fixture category')
+    corpus = {'schema': 'mural.chinese-asr.corpus.v1',
+        'source_manifest_sha256': fixtures[0]['manifest_sha256'],
+        'note': 'Pre-frozen approved acoustic source excerpts; 44.1 kHz playback WAVs, not 16 kHz direct-replay fixtures.',
+        'clips': [dict(id=f['id'], group=groups[f['category']], locale='zh-CN', speaker=f['id'].split('-')[0],
+                       source_category=f['category'], source_wav=f['file'], wav=Path(f['file']).name,
+                       reference=f['reference'], sha256=f['sha256']) for f in fixtures]}
+    write_json(evidence / 'benchmark-corpus.json', corpus)
+    predictions = []
+    for index, (fixture, capture, turn) in enumerate(zip(fixtures, captures, result['turns'])):
+        segment = current.split(f'asr_trial_capture id={capture}', 1)[1].split('asr_trial_capture id=', 1)[0]
+        def one(pattern):
+            rows = re.findall(pattern, segment)
+            if len(rows) != 1:
+                raise ValueError('Missing/duplicate current-turn benchmark metric: ' + pattern)
+            return rows[0]
+        final = one(r'asr_trial_final id=' + re.escape(capture) + r' uptime=[\d.]+ send_to_final_seconds=([\d.]+) captured_seconds=([\d.]+)')
+        seconds = one(r'breeze_trial_transcribe model=' + re.escape(trial['model']) + r' outcome=completed samples=\d+ seconds=([\d.]+) scope=asr-including-vad-not-ui-send')
+        first = one(r'breeze_inference_begin turn=\d+ first_since_prepare=(true|false)')
+        decode = one(r'breeze_decode scope=whisperkit-transcribe-not-ui-send seconds=([\d.]+)')
+        if first != ('true' if index == 0 else 'false'):
+            raise ValueError('Inference position disagrees with captured turn')
+        predictions.append(dict(id=fixture['id'], text=turn['raw'], vad_rejected=False,
+            first_since_prepare=first == 'true', audio_seconds=fixture['duration_seconds'],
+            captured_seconds=float(final[1]), send_to_final_seconds=float(final[0]),
+            asr_including_vad_seconds=float(seconds), decode_seconds=float(decode), native_turn_id=capture))
+    devices = json.loads((evidence / 'devices.json').read_text())['result']['devices']
+    device = next(d['properties'] for d in devices if d.get('properties', {}).get('hardware', {}).get('udid') == session['udid'])
+    install = json.loads((evidence / 'trial-install.json').read_text())
+    footprint = re.findall(r'process_footprint_peak_bytes=(\d+)', current)
+    rss = re.findall(r'process_rss_peak_bytes=(\d+)', current)
+    preparation = re.findall(r'breeze_trial_prepare model=' + re.escape(trial['model']) + r' success=true seconds=([\d.]+)', current)
+    if len(preparation) != 1:
+        raise ValueError('Missing single native preparation')
+    # No assertion of a cold Core ML cache, and no inferred wire/cache/storage bytes.
+    regime = session.get('breeze_cache_regime')
+    benchmark = dict(schema='mural.breeze-ab.run.v1', arm=trial['arm'], physical_device=True,
+        hardware=device['hardware']['productType'], os_build=device['software']['osBuildVersions']['buildVersion']['name'],
+        app_sha256=identity['artifacts'][APP_EXECUTABLE], install_id=install['first_install_run'],
+        runtime_revision='1e2a163736dfa5a198e637ae44c114e1c6d5cc2d', compute='encoder/decoder cpuAndNeuralEngine; frontend cpuAndGPU',
+        vad_policy_sha256=hashlib.sha256((ROOT / 'Core/SpeechPresencePolicy.swift').read_bytes()).hexdigest(),
+        decode_policy_sha256=hashlib.sha256((ROOT / 'App/BreezeEnglishRecognizer.swift').read_bytes()).hexdigest(),
+        corpus_sha256=hashlib.sha256((evidence / 'benchmark-corpus.json').read_bytes()).hexdigest(),
+        audio_manifest_sha256=fixtures[0]['manifest_sha256'], input_mode='acoustic', pair=session['pair'],
+        model_manifest_sha256=trial['manifest'], run_id=evidence.name, process_id=int(pid),
+        process_start_utc=json.loads((evidence / 'capture-process.json').read_text())['started_at'],
+        process_start_scope='Host console launch timestamp, not kernel process birth', evidence_path=str(evidence),
+        cache_regime=regime, cleanup_passed=True, safety_stop=False, measurement_scope='whole-process',
+        preparations=[dict(regime=regime, seconds=float(preparation[0]))],
+        peak_physical_footprint_bytes=max(map(int, footprint)) if footprint else None,
+        peak_rss_bytes=max(map(int, rss)) if rss else None,
+        payload_bytes=None, allocated_model_bytes=None, attributed_cache_bytes=None, wire_bytes=None,
+        peak_install_staging_bytes=None, post_drain_30s_footprint_bytes=None)
+    write_json(evidence / 'benchmark-run.json', dict(schema='mural.chinese-asr.predictions.v1',
+        complete=regime in ('first-artifact-load', 'unchanged-install-warm'), benchmark=benchmark, predictions=predictions,
+        note='Inspect exact native evidence; acoustic success does not imply correct words or human listening. Unknown measurements are not zero.'))
+
+
 def summarize_run(evidence):
     """Local evidence only. Safe after failure or in a later session; never touches a phone."""
     bundle = evidence / "baseline.xcresult"
@@ -795,6 +920,8 @@ def main():
     parser.add_argument("--check-fixture", type=Path, help="Validate a frozen review manifest only; no phone or playback")
     parser.add_argument("--clip", help="Explicit clip ID for --check-fixture")
     parser.add_argument("--report", type=Path, nargs="?", const=Path("latest"), help="Summarize saved evidence (latest by default); no device operations")
+    parser.add_argument('--breeze-trial', choices=('pal8', 'pal4'), default=os.environ.get('DEVICE_BREEZE_TRIAL'),
+                        help='Explicit arm in the isolated trial binary; never changes ordinary defaults')
     args = parser.parse_args()
     if args.check_fixture:
         if not args.clip or args.report:
@@ -814,9 +941,31 @@ def main():
     phases = [("preflight", started)]
     udid = os.environ.get("DEVICE_UDID", "").upper()
     pair = os.environ.get("DEVICE_PAIR", "vi-en")
-    validate_request(udid, args.stage, os.environ.get("DEVICE_READY") == "YES", pair=pair)
+    trial = breeze_trial_contract(args.breeze_trial) if args.breeze_trial else None
+    first_load = os.environ.get('DEVICE_BREEZE_FIRST_LOAD') == 'YES'
+    if first_load and (not trial or trial['arm'] != 'pal4' or args.stage != 'breeze-acoustic'
+                       or os.environ.get('DEVICE_BREEZE_CACHE_REGIME') != 'first-artifact-load'):
+        raise ValueError('Reviewed extended budget is only for explicit PAL4 first-load acoustic qualification')
+    setup_recovery = os.environ.get('DEVICE_BREEZE_RECOVERY_SOURCE')
+    if setup_recovery:
+        prior = Path(setup_recovery).resolve()
+        previous = json.loads((prior / 'session.json').read_text())
+        if (not trial or previous.get('udid') != udid or previous.get('stage') != 'breeze-acoustic'
+                or previous.get('breeze_trial') != trial
+                or not (prior / 'failure.json').is_file()
+                or json.loads((prior / 'cleanup.json').read_text()).get('cleanup') != 'PASS'
+                or 'breeze_asset_verification_end success=false' not in (prior / 'mural-device.log').read_text()):
+            raise ValueError('Setup recovery requires this arm\'s exact cleaned-up asset-preflight failure')
+    end_retained = os.environ.get('DEVICE_BREEZE_END_RETAINED') == 'YES'
+    if end_retained and (not trial or args.stage != 'breeze-check'):
+        raise ValueError('Explicit retained-session recovery requires trial breeze-check')
+    if trial and (pair != 'breeze-zh-CN-en' or args.stage not in ('prepare',) + BREEZE_STAGES):
+        raise ValueError('Trial requires explicit Breeze pair and stage')
+    validate_request(udid, args.stage, os.environ.get("DEVICE_READY") == "YES", pair=pair, trial=bool(trial))
     memory_poc = os.environ.get("DEVICE_BREEZE_MEMORY_POC") == "YES"
     validate_breeze_memory_poc(args.stage, pair, memory_poc)
+    if trial and memory_poc:
+        raise ValueError('PAL4 trial preserves ordinary safety policy, not memory PoC')
     if args.stage == "restore-settings" and not os.environ.get("DEVICE_RESTORE_MEANING"):
         raise ValueError("DEVICE_RESTORE_MEANING must be the recorded original preference, never a guessed default")
     os.chdir(ROOT)
@@ -841,7 +990,8 @@ def main():
         raise ValueError('DEVICE_PROVISION_SOURCE is only valid for explicit provisioning recovery')
     recovery_job = None
     firered = pair == "zh-CN-en" and (args.stage == "prepare" or resource_stage or provision_run)
-    derived = (ROOT / (".build/firered-talk-device-derived-data" if firered else
+    derived = (ROOT / (".build/verification/breeze-pal4/DerivedData" if trial else
+                       ".build/firered-talk-device-derived-data" if firered else
                        ".build/breeze-memory-poc-device-derived-data" if memory_poc else
                        ".build/local-mvp-phase-1-device-derived-data")).resolve()
     derived.mkdir(parents=True, exist_ok=True)
@@ -849,7 +999,8 @@ def main():
     locks.mkdir(parents=True, exist_ok=True)
     playback_run = str(uuid.uuid4()).upper()
     session = dict(pid=os.getpid(), udid=udid, stage=args.stage, app=APP_ID, runner=TEST_ID,
-                   playback_run=playback_run, pair=pair, breeze_memory_poc=memory_poc,
+                   playback_run=playback_run, pair=pair, breeze_memory_poc=memory_poc, breeze_trial=trial, end_retained_authorized=end_retained, setup_recovery=setup_recovery, first_load_budget_authorized=first_load,
+                   breeze_cache_regime=os.environ.get("DEVICE_BREEZE_CACHE_REGIME"),
                    configuration="Release", backend=BACKEND, settings="No changes",
                    started_at=datetime.now(timezone.utc).isoformat(), evidence=str(evidence),
                    runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
@@ -895,6 +1046,10 @@ def main():
                 ["git", "status", "--short", "--branch"], text=True) + subprocess.check_output(["git", "rev-parse", "HEAD"], text=True))
             (evidence / "implementation.diff").write_bytes(subprocess.check_output(["git", "diff"]))
             project = ROOT / "Mural.xcodeproj"
+            if trial and args.stage == "prepare":
+                run_bounded([sys.executable, "scripts/generate_project.py", "--output-directory", str(ROOT / ".build/verification/breeze-pal4/native-project")],
+                            evidence / "generation.log", 30)
+                project = ROOT / ".build/verification/breeze-pal4/native-project/Mural.xcodeproj"
             if firered and args.stage == "prepare":
                 runtime = ROOT / '.build/firered-runtime'
                 if runtime.is_symlink() or not runtime.is_dir() or not (runtime / 'runtime-sha256.txt').is_file():
@@ -909,6 +1064,10 @@ def main():
                     f"MURAL_APP_BUNDLE_IDENTIFIER={APP_ID}", f"MURAL_TEST_BUNDLE_IDENTIFIER={TEST_ID}",
                     "OTHER_SWIFT_FLAGS=$(inherited) -D MURAL_COREAI_TALK", "-allowProvisioningUpdates", "-parallel-testing-enabled", "NO",
                     "-only-testing:MuralUITests/MuralPhysicalDeviceTests/testNativeBaseline"]
+            if trial:
+                base[base.index("OTHER_SWIFT_FLAGS=$(inherited) -D MURAL_COREAI_TALK")] += " -D MURAL_BREEZE_PAL4_TRIAL"
+                base += ["-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
+                         "-clonedSourcePackagesDirPath", str(ROOT / ".build/verification/breeze-pal4/SourcePackages")]
             if memory_poc:
                 base[base.index("OTHER_SWIFT_FLAGS=$(inherited) -D MURAL_COREAI_TALK")] += " -D MURAL_BREEZE_MEMORY_POC"
             if firered or memory_poc:
@@ -926,7 +1085,7 @@ def main():
                 # Compiler proof still requires identical app executable bytes, not a source claim.
                 explicit = os.environ.get("DEVICE_PREPARED")
                 receipts = [Path(explicit)] if explicit else sorted(EVIDENCE_ROOT.glob("*/prepared.json"), reverse=True)
-                proof = compiler_proof(evidence / "build.log", identity, receipts, firered=firered, memory_poc=memory_poc)
+                proof = compiler_proof(evidence / "build.log", identity, receipts, firered=firered, memory_poc=memory_poc, trial=bool(trial))
                 if firered:
                     symbols = subprocess.check_output(["nm", "-gU", str(derived / APP_EXECUTABLE)], text=True, timeout=30)
                     (evidence / "native-symbols.txt").write_text(symbols)
@@ -943,7 +1102,7 @@ def main():
                             raise ValueError(f"Incorrect signed bundle identity: {relative}")
                     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(products / relative)], check=True, timeout=30)
                 write_json(evidence / "prepared.json", {"udid": udid, "identity": identity,
-                    "variant": "firered-coreai" if firered else "breeze-memory-poc-coreai" if memory_poc else "coreai", "derived": str(derived)})
+                    "variant": "breeze-pal4-trial-coreai" if trial else "firered-coreai" if firered else "breeze-memory-poc-coreai" if memory_poc else "coreai", "derived": str(derived)})
                 write_json(evidence / "result.json", {"build": "PASS", "native_control": "NOT RUN", "models": "NOT RUN"})
             elif args.stage in ("status", "stop-idle"):
                 rows = device_json(["device", "info", "processes", "--device", udid, "--search", "Mural"], evidence / "phone-processes.json")["runningProcesses"]
@@ -1035,6 +1194,18 @@ def main():
                 explicit = os.environ.get("DEVICE_PREPARED")
                 receipts = [Path(explicit)] if explicit else sorted(EVIDENCE_ROOT.glob("*/prepared.json"), reverse=True)
                 prepared_path = select_prepared(udid, input_identity(derived, firered=firered), receipts)
+                if trial:
+                    compiler_proof(prepared_path.with_name("build.log"), input_identity(derived), [prepared_path], trial=True)
+                    if breeze_audio:
+                        check = Path(os.environ.get('DEVICE_BREEZE_CHECK', ''))
+                        prior = json.loads((check / 'session.json').read_text())
+                        source = json.loads((check / 'prepared-source.json').read_text())['receipt']
+                        if (prior.get('stage') != 'breeze-check' or prior.get('udid') != udid
+                                or prior.get('breeze_trial') != trial or prior.get('runner_sha256') != session['runner_sha256']
+                                or json.loads((check / 'cleanup.json').read_text()).get('cleanup') != 'PASS'
+                                or json.loads((check / 'result.json').read_text()).get('models') != 'NOT REQUESTED'
+                                or json.loads(Path(source).read_text())['identity'] != json.loads(prepared_path.read_text())['identity']):
+                            raise ValueError('Require matching cleaned-up model-free trial arm check')
                 if memory_poc:
                     compiler_proof(prepared_path.with_name("build.log"), input_identity(derived), [prepared_path], memory_poc=True)
                 if resource_run:
@@ -1073,8 +1244,25 @@ def main():
                     else:
                         write_json(evidence / 'managed-preflight.json', managed_fire_red_inventory(udid, evidence))
                 phases.append(("install", time.monotonic()))
-                run_bounded(["xcrun", "devicectl", "device", "install", "app", "--device", udid,
-                             str(derived / "Build/Products/Release-iphoneos/Mural.app"), "--timeout", "60"], evidence / "install.log", 70)
+                installed_source = os.environ.get('DEVICE_BREEZE_INSTALLED') if trial else None
+                if trial and not installed_source and args.stage != 'breeze-check':
+                    raise ValueError('Install a trial once through breeze-check; retain that install for every arm')
+                if installed_source:
+                    prior = Path(installed_source).resolve()
+                    saved = json.loads((prior / 'trial-install.json').read_text())
+                    if (saved['udid'] != udid or saved['app_sha256'] != input_identity(derived)['artifacts'][APP_EXECUTABLE]
+                            or saved['app_url'] != installed['apps'][0]['url']
+                            or json.loads((prior / 'cleanup.json').read_text()).get('cleanup') != 'PASS'):
+                        raise ValueError('Trial installation identity changed; never silently reinstall between arms')
+                    write_json(evidence / 'trial-install.json', saved)
+                else:
+                    run_bounded(["xcrun", "devicectl", "device", "install", "app", "--device", udid,
+                                 str(derived / "Build/Products/Release-iphoneos/Mural.app"), "--timeout", "60"], evidence / "install.log", 70)
+                    if trial:
+                        current = device_json(['device', 'info', 'apps', '--device', udid, '--bundle-id', APP_ID], evidence / 'trial-installed-app.json')
+                        write_json(evidence / 'trial-install.json', dict(udid=udid,
+                            app_sha256=input_identity(derived)['artifacts'][APP_EXECUTABLE], app_url=current['apps'][0]['url'],
+                            first_install_run=str(evidence)))
                 if resource_stage and time.monotonic() - started > 60:
                     raise ValueError('Preflight/install exceeded the approved 60-second phase')
                 phases.append(("launch_and_backend_gate", time.monotonic()))
@@ -1082,6 +1270,7 @@ def main():
                 capture_file = log.open("w")
                 capture = subprocess.Popen(["xcrun", "devicectl", "device", "process", "launch", "--device", udid,
                                            "--console", "--environment-variables", '{"OS_ACTIVITY_DT_MODE":"YES"}', APP_ID,
+                                           *(["--breeze-trial=" + trial['arm']] if trial else []),
                                            *(["--firered-talk-resource"] if resource_stage else []),
                                            *(["--firered-provision-only"] if provision_run else [])],
                                            stdout=capture_file, stderr=subprocess.STDOUT, start_new_session=True)
@@ -1093,6 +1282,13 @@ def main():
                     if capture.poll() is not None or time.monotonic() > deadline:
                         raise ValueError("Fresh app-only backend log missing; do not start models")
                     time.sleep(0.25)
+                if trial:
+                    trial_deadline = time.monotonic() + 10
+                    while 'breeze_trial_launch ' not in log.read_text():
+                        if capture.poll() is not None or time.monotonic() > trial_deadline:
+                            raise ValueError('Missing compiled trial identity before native tests')
+                        time.sleep(.25)
+                    breeze_trial_launch(log.read_text(), trial, input_identity(derived)['artifacts'][APP_EXECUTABLE])
                 capture_received = None
                 observed_phases = set()
                 probe_sent = False
@@ -1332,6 +1528,11 @@ def main():
                 test_plan.write_bytes(plistlib.dumps(runtime_test_plan(plans[0], {
                     "MURAL_PHYSICAL_E2E": args.stage,
                     "MURAL_PHYSICAL_PAIR": pair,
+                    "MURAL_BREEZE_TRIAL": trial['arm'] if trial else "",
+                    "MURAL_BREEZE_END_RETAINED": "YES" if end_retained else "",
+                    "MURAL_BREEZE_RECOVER_SETUP": "YES" if setup_recovery else "",
+                    "MURAL_BREEZE_PREPARE_SECONDS": "360" if first_load else "200",
+                    "MURAL_BREEZE_MODEL": trial['model'] if trial else "breeze-asr25-pal8-v1",
                     "MURAL_PROVISION_RESUME_JOB": recovery_job or "",
                     "MURAL_RESTORE_MEANING": os.environ.get("DEVICE_RESTORE_MEANING", ""),
                     "MURAL_PLAYBACK_RUN": playback_run,
@@ -1343,7 +1544,7 @@ def main():
                            "-destination-timeout", "30", "-parallel-testing-enabled", "NO",
                            "-only-testing:MuralUITests/MuralPhysicalDeviceTests/" + ("testNativeBreezeDisplay" if breeze_stage else "testNativeBaseline"),
                            "-resultBundlePath", str(bundle), "-test-timeouts-enabled", "YES",
-                                  "-default-test-execution-time-allowance", "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300", "-maximum-test-execution-time-allowance", "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300",
+                                  "-default-test-execution-time-allowance", "480" if first_load else "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300", "-maximum-test-execution-time-allowance", "480" if first_load else "360" if recovery_job else "1500" if provision_run else "720" if resource_run else "300",
                                   "-collect-test-diagnostics", "never", "test-without-building"]
                 pipeline = shlex.join(command) + " 2>&1 | tee " + shlex.quote(str(evidence / "test.log")) + " | xcbeautify --is-ci"
                 test_started = True
@@ -1360,7 +1561,8 @@ def main():
                                 break
                             time.sleep(.25)
                 phases.append(("native_test_command", time.monotonic()))
-                native_budget = (min(420, started + 480 - time.monotonic()) if recovery_job else
+                native_budget = (min(500, started + 540 - time.monotonic()) if first_load else
+                                 min(420, started + 480 - time.monotonic()) if recovery_job else
                                  min(1560, started + 1620 - time.monotonic()) if provision_run else
                                  min(780, started + 900 - time.monotonic()) if resource_run else 420)
                 if native_budget <= 0:
@@ -1387,7 +1589,8 @@ def main():
                         if len(playbacks) != len(fixtures) or any('ack_transferred_monotonic' not in item for item in playbacks):
                             raise ValueError('Breeze playback not completed')
                         actual_pair = 'zh-TW-en' if args.stage == 'breeze-traditional' else 'zh-CN-en'
-                        result['backend'] = breeze_events(log.read_text(), len(fixtures), pair=actual_pair, memory_poc=memory_poc)
+                        result['backend'] = breeze_events(log.read_text(), len(fixtures), pair=actual_pair, memory_poc=memory_poc,
+                            model=trial['model'] if trial else 'breeze-asr25-pal8-v1')
                         result['captures'] = acoustic_events(breeze_fault_log(log.read_text(), memory_poc), result['backend']['pid'], len(fixtures))
                         turns = re.findall(r'^MURAL_DEVICE_BREEZE_TURN (\S+)$', text, re.MULTILINE)
                         if len(turns) != len(fixtures):
@@ -1425,9 +1628,11 @@ def main():
                                       microphone='NOT USED', word_accuracy='NOT RUN', audible_output='Greeting completed, listening unconfirmed')
                         write_json(evidence / 'model-load-profile.json', profiles)
                     else:
-                        if not probe_sent or re.search(r'asr_ready|asr_trial_capture|model_request|firered_native_begin', log.read_text()):
+                        if not probe_sent or (not end_retained and re.search(r'asr_ready|asr_trial_capture|model_request|firered_native_begin', log.read_text())):
                             raise ValueError('Model-free gate lacked nonce or unexpectedly started native work')
-                        result['models'] = 'NOT REQUESTED'
+                        result['models'] = 'NOT QUALIFIED: authorized retained-session recovery' if end_retained else 'NOT REQUESTED'
+                        if end_retained and 'MURAL_DEVICE_RETAINED_SESSION_ENDED' not in text:
+                            raise ValueError('Retained-session End recovery not confirmed')
                         if args.stage == 'breeze-finish':
                             if not all(marker in text for marker in ('MURAL_DEVICE_FINAL_MEANING=Simplified Chinese',
                                                                      'MURAL_DEVICE_BREEZE_NATIVE_DICTIONARY_PASS')):
@@ -1587,6 +1792,12 @@ def main():
         timings["native_timing_error"] = str(error)
         code = 1
     write_json(evidence / "timings.json", timings)
+    if trial and breeze_audio and not code and not cleanup_errors:
+        try:
+            export_breeze_trial(evidence)
+        except (ValueError, KeyError, OSError) as error:
+            write_json(evidence / 'benchmark-export-failure.json', {'error': str(error)})
+            code = 1
     summarize_run(evidence)
     return code or bool(cleanup_errors)
 

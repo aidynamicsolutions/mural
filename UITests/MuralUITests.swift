@@ -1516,9 +1516,24 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         let stage = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_E2E"])
         XCTAssertTrue(["breeze-check", "breeze-acoustic", "breeze-multi", "breeze-traditional", "breeze-history", "breeze-support", "breeze-finish", "breeze-profile-check", "breeze-profile"].contains(stage))
         XCTAssertEqual(ProcessInfo.processInfo.environment["MURAL_PHYSICAL_PAIR"], "breeze-zh-CN-en")
+        let arm = ProcessInfo.processInfo.environment["MURAL_BREEZE_TRIAL"] ?? ""
+        XCTAssertTrue(["", "pal8", "pal4"].contains(arm))
+        let model = ProcessInfo.processInfo.environment["MURAL_BREEZE_MODEL"] ?? "breeze-asr25-pal8-v1"
+        let label = arm == "pal4" ? "Breeze PAL4 (trial)" : "Breeze PAL8"
         let app = XCUIApplication(bundleIdentifier: "com.kevintruong.mural.dev")
+        if !arm.isEmpty { app.launchArguments = ["--breeze-trial=\(arm)"] }
         XCTAssertNotEqual(app.state, .notRunning)
         app.activate(); ownedApp = app; markTiming("activated")
+        if ProcessInfo.processInfo.environment["MURAL_BREEZE_END_RETAINED"] == "YES" {
+            XCTAssertEqual(stage, "breeze-check")
+            // Explicit user authorization only. End archives normally; never inspect/delete personal turns.
+            let end = ownedTalkStopButton(app)
+            try reveal(end, app: app); end.tap()
+            let next = app.buttons["new-conversation"]
+            try wait("exists == true AND enabled == true", next, seconds: 60)
+            try reveal(next, app: app); next.tap()
+            print("MURAL_DEVICE_RETAINED_SESSION_ENDED")
+        }
         XCTAssertTrue(app.staticTexts["conversation-language-pair"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["local-conversation-end"].exists, "Refuse active personal Talk")
         XCTAssertFalse(app.buttons["local-conversation-transcript"].exists, "Refuse retained personal Talk")
@@ -1533,11 +1548,16 @@ final class MuralPhysicalDeviceTests: XCTestCase {
             originalMeaning = "Simplified Chinese" // Explicit final preference from the feature handoff, not test restoration.
         }
         let start = app.buttons["local-conversation-start"]
-        XCTAssertEqual(start.label, "Prepare & start", "Refuse pending or paused personal setup")
+        if ProcessInfo.processInfo.environment["MURAL_BREEZE_RECOVER_SETUP"] == "YES" {
+            // Host binds this exception to the exact owned, cleaned-up asset failure.
+            XCTAssertTrue(["Prepare & start", "Resume setup"].contains(start.label))
+        } else {
+            XCTAssertEqual(start.label, "Prepare & start", "Refuse pending or paused personal setup")
+        }
         let details = app.buttons["On-device details & diagnostics"]
         try reveal(details, app: app); details.tap()
-        XCTAssertTrue(app.staticTexts["local-recognizer"].label.contains("breeze-asr25-pal8-v1"))
-        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(traditional ? "WhisperKit / Core ML" : "Breeze PAL8 · Simplified display"))
+        XCTAssertTrue(app.staticTexts["local-recognizer"].label.contains(model))
+        XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(traditional ? "WhisperKit / Core ML" : "\(label) · Simplified display"))
         details.tap()
         if stage == "breeze-history" {
             let encoded = try XCTUnwrap(ProcessInfo.processInfo.environment["MURAL_BREEZE_HISTORY_BASE64"])
@@ -1565,7 +1585,7 @@ final class MuralPhysicalDeviceTests: XCTestCase {
                 _ = try meaningSetting(app, select: choice)
                 try reveal(details, app: app); details.tap()
                 XCTAssertTrue(app.staticTexts["local-asr-backend"].label.contains(choice == "Vietnamese"
-                    ? "Core AI GPU-preferred encoder + Core ML decoder (staged)" : "Breeze PAL8"))
+                    ? "Core AI GPU-preferred encoder + Core ML decoder (staged)" : label))
                 details.tap()
             }
             try reveal(details, app: app); details.tap()
@@ -1590,7 +1610,10 @@ final class MuralPhysicalDeviceTests: XCTestCase {
         // Measured retained-file Breeze load was 167.76 s despite a receipt hit.
         // A VI-specific 90 s setup wait is not its contract. The existing 300 s
         // XCTest / 420 s host budgets and all fault/recording gates still apply.
-        try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: 200)
+        let preparationBudget = TimeInterval(ProcessInfo.processInfo.environment["MURAL_BREEZE_PREPARE_SECONDS"] ?? "200") ?? 0
+        XCTAssertTrue([200.0, 360.0].contains(preparationBudget))
+        if preparationBudget == 360 { XCTAssertEqual(arm, "pal4") }
+        try wait("exists == true AND enabled == true AND label == 'Record'", record, seconds: preparationBudget)
         XCTAssertFalse(app.buttons["speech-download-confirm"].exists, "Never acquire ASR weights in this verification")
         markTiming("ready")
         if stage == "breeze-profile" {

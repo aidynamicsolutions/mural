@@ -284,7 +284,7 @@ struct TalkView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("ASR backend: \(LocalConversationEngine.backendDescription(for: coordinator.localDiagnosticPair))")
                         .accessibilityIdentifier("local-asr-backend")
-                    Text("\(coordinator.localDiagnosticPair.recognizerID) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
+                    Text("\(LocalConversationEngine.recognizerIdentity(for: coordinator.localDiagnosticPair)) → Apple tutor → English speech. Tap Record only after Mural finishes speaking; tap Send when done.")
                         .accessibilityIdentifier("local-recognizer")
                     Text("Microphone is off except while recording. On-device conversations do not end for inactivity; tap End when you are done.")
                     Text("Speech-presence checks cannot guarantee that recognition is accurate. Review the transcript; reported preparation speed does not qualify a recognizer's language accuracy.")

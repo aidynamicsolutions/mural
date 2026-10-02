@@ -1,0 +1,13 @@
+{
+  "schema": "mural.breeze-pal4-review.v1",
+  "audit_sha256": "",
+  "reviewer": "",
+  "native_evidence_file": "",
+  "native_evidence_sha256": "",
+  "approved_for_device_trial": false,
+  "io_and_cache_contract_reviewed": false,
+  "pal4_bitpacking_reviewed": false,
+  "license_and_lineage_caveat_reviewed": false,
+  "native_mac_load_and_transcribe_passed": false,
+  "note": "Template only. Fill from actual retained evidence, never model-card claims or synthetic host tests."
+}

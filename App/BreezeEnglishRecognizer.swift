@@ -9,7 +9,29 @@ import WhisperKit
 /// Explicit Taiwan Mandarin–English Talk/test recognizer, never an automatic fallback.
 /// The existing audio owner serializes calls and retains this actor through cancellation.
 actor BreezeEnglishRecognizer {
-    static let identity = "breeze-asr25-pal8-v1"
+    static var identity: String {
+        BreezeTrialSelection.requestsPAL4 ? BreezePAL4TrialPin.identity : "breeze-asr25-pal8-v1"
+    }
+    static var displayName: String {
+        BreezeTrialSelection.requestsPAL4 ? "Breeze PAL4 (trial)" : "Breeze PAL8"
+    }
+
+    /// Shared existence-preflight / verified-loader resolver; PAL4 never reads an active pointer.
+    static func assetDirectory() throws -> URL {
+        let selected = try BreezeTrialSelection.parse(ProcessInfo.processInfo.arguments,
+                                                      enabled: BreezeTrialSelection.enabled)
+        if selected == .pal4 {
+            guard BreezePAL4TrialPin.manifestSHA256.count == 64,
+                  BreezePAL4TrialPin.revision.count == 40, BreezePAL4TrialPin.fileCount >= 17,
+                  BreezePAL4TrialPin.identity.range(of: "^breeze-asr25-weiren-pal4-[0-9a-f]{12}-[0-9a-f]{12}$",
+                                                  options: .regularExpression) != nil else {
+                throw Failure("PAL4 trial has no reviewed compiled-in pin. No model loaded.")
+            }
+            return URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(identity)", directoryHint: .isDirectory)
+        }
+        return try LocalSpeechProvisioning.installedDirectory(for: .taiwanMandarinEnglish, component: "support") ??
+            URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(identity)", directoryHint: .isDirectory)
+    }
     private var kit: WhisperKit?
     private var vad: VadManager?
     private var vadMode: SpeechPresencePolicy.Mode = .off
@@ -37,15 +59,34 @@ actor BreezeEnglishRecognizer {
         defer {
             logger.notice("breeze_asset_verification_end success=\(verified, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public)")
         }
-        let expected = SpeechPackagePins.breezeManifest
-        let folder = try LocalSpeechProvisioning.installedDirectory(for: .taiwanMandarinEnglish, component: "support") ??
-            URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(identity)", directoryHint: .isDirectory)
+        let folder = try assetDirectory()
+        let trial = BreezeTrialSelection.requestsPAL4
+        let expected = trial ? BreezePAL4TrialPin.manifestSHA256 : SpeechPackagePins.breezeManifest
+        let revision = trial ? BreezePAL4TrialPin.revision : SpeechPackagePins.breezeRevision
+        let precision = trial ? "pal4" : "pal8"
+        let schema = trial ? "mural.breeze-coreml.trial.v1" : "mural.breeze-coreml.v1"
+        let fileCount = trial ? BreezePAL4TrialPin.fileCount : 27
+        #if MURAL_BREEZE_PAL4_TRIAL
+        logger.notice("breeze_trial_identity model=\(identity, privacy: .public) manifest=\(expected, privacy: .public) revision=\(revision, privacy: .public)")
+        #endif
+        if trial {
+            var ancestor = folder
+            while ancestor.path != URL.applicationSupportDirectory.path {
+                guard try ancestor.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                    throw Failure("PAL4 trial root must not contain symbolic links.")
+                }
+                ancestor.deleteLastPathComponent()
+            }
+            guard try folder.appending(path: "manifest.json").resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+                throw Failure("PAL4 trial manifest must not be a symbolic link.")
+            }
+        }
         let data = try Data(contentsOf: folder.appending(path: "manifest.json"))
         guard digest(data) == expected else { throw Failure("Breeze manifest pin mismatch. No model loaded.") }
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
-        guard manifest.schema == "mural.breeze-coreml.v1", manifest.model == "MediaTek-Research/Breeze-ASR-25",
-              manifest.precision == "pal8", manifest.revision == SpeechPackagePins.breezeRevision,
-              manifest.files.count == 27 else {
+        guard manifest.schema == schema, manifest.model == "MediaTek-Research/Breeze-ASR-25",
+              manifest.precision == precision, manifest.revision == revision,
+              manifest.files.count == fileCount else {
             throw Failure("Wrong Breeze artifact contract.")
         }
         let required = ["config.json", "generation_config.json", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json"]
@@ -53,6 +94,10 @@ actor BreezeEnglishRecognizer {
                 ["coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"].map { "\(name).mlmodelc/\($0)" }
             }
         guard required.allSatisfy({ manifest.files[$0] != nil }) else { throw Failure("Breeze support inventory is incomplete.") }
+        if trial {
+            try BreezeTrialSelection.verifyInventory(at: folder,
+                allowed: Set(manifest.files.keys).union(["manifest.json", "audit.json"]))
+        }
         for (path, entry) in manifest.files {
             try Task.checkCancellation()
             let pieces = path.split(separator: "/", omittingEmptySubsequences: false)
@@ -90,6 +135,13 @@ actor BreezeEnglishRecognizer {
     func prepare(directory: URL) async throws {
         guard !busy, kit == nil else { throw Failure("Breeze is busy or already prepared.") }
         busy = true; defer { busy = false }
+        #if MURAL_BREEZE_PAL4_TRIAL
+        let trialStarted = ProcessInfo.processInfo.systemUptime
+        var trialPrepared = false
+        defer {
+            logger.notice("breeze_trial_prepare model=\(Self.identity, privacy: .public) success=\(trialPrepared, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - trialStarted, privacy: .public)")
+        }
+        #endif
         struct Model: Decodable {
             let model_type: String; let num_mel_bins: Int; let d_model: Int
             let encoder_layers: Int; let decoder_layers: Int; let vocab_size: Int
@@ -166,6 +218,9 @@ actor BreezeEnglishRecognizer {
             try Task.checkCancellation()
             vad = detector; kit = loaded
             inferenceCount = 0
+            #if MURAL_BREEZE_PAL4_TRIAL
+            trialPrepared = true
+            #endif
             VietnameseEnglishRecognizer.logMemory(stage: "loaded", model: Self.identity)
         } catch {
             await loaded.unloadModels()
@@ -182,6 +237,14 @@ actor BreezeEnglishRecognizer {
         try Task.checkCancellation()
         guard !samples.isEmpty else { return "" }
         busy = true; defer { busy = false }
+        #if MURAL_BREEZE_PAL4_TRIAL
+        let trialStarted = ProcessInfo.processInfo.systemUptime
+        var trialOutcome = "failed-or-cancelled"
+        defer {
+            logger.notice("breeze_trial_transcribe model=\(Self.identity, privacy: .public) outcome=\(trialOutcome, privacy: .public) samples=\(samples.count, privacy: .public) seconds=\(ProcessInfo.processInfo.systemUptime - trialStarted, privacy: .public) scope=asr-including-vad-not-ui-send")
+            VietnameseEnglishRecognizer.logMemory(stage: "trial-transcribe-return", model: Self.identity)
+        }
+        #endif
         if vadMode != .off, let vad {
             do {
                 var state = VadStreamState.initial()
@@ -196,7 +259,12 @@ actor BreezeEnglishRecognizer {
                 }
                 let rejected = evidence.rejects(in: vadMode)
                 logger.notice("breeze_vad mode=\(self.vadMode.rawValue, privacy: .public) samples=\(samples.count, privacy: .public) complete=\(evidence.complete, privacy: .public) score=\(evidence.speechScore, privacy: .public) rejected=\(rejected, privacy: .public) trimming=false")
-                if rejected { return "" }
+                if rejected {
+                    #if MURAL_BREEZE_PAL4_TRIAL
+                    trialOutcome = "vad-rejected"
+                    #endif
+                    return ""
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -220,6 +288,9 @@ actor BreezeEnglishRecognizer {
         try Task.checkCancellation()
         logger.notice("breeze_decode scope=whisperkit-transcribe-not-ui-send seconds=\(ProcessInfo.processInfo.systemUptime - started, privacy: .public) windows=\(results.count, privacy: .public)")
         VietnameseEnglishRecognizer.logMemory(stage: "finalized", model: Self.identity)
+        #if MURAL_BREEZE_PAL4_TRIAL
+        trialOutcome = "completed"
+        #endif
         return results.map(\.text).joined(separator: " ")
     }
 

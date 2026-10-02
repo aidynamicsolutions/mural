@@ -438,3 +438,10 @@ Private evidence: .build/verification/breeze-simplified-20260930-122221/. Correc
 builds and host checks passed; the new scrolling regression, Mandarin-dominant F00A clip,
 lookup/Help, durable reopen/edit and Traditional native confirmation are pending. No
 quantization, model re-export, broad soak, push or OS thermal override occurred.
+
+
+## October 2: isolated PAL4 loading measurement
+
+See [the PAL4 loading checkpoint](asr/chinese/breeze-pal4-loading-checkpoint.md) for identities and retained failures. Same signed install, fresh processes, unchanged caches: native warm load was PAL8 3.102 s versus PAL4 3.202 s; ASR preparation was 3.453 s versus 3.516 s. Both load intervals were nominal thermal state. Initial native work (PAL8 156.14 s load; PAL4 269.14 s canceled prewarm) was unpaired and must not be compared with warm preparation. Smaller files do not imply less Core ML specialization work; candidate graph topology differs. Build time is separate. Whole acoustic workflows including cleanup took 122.94 s and 66.05 s, but different generated replies and later thermal state make those unsuitable as model speedup measurements.
+
+One matched English-number pair was correct; a subsequent PAL4 repeat was inaccurate. The BA partner never entered XCTest because the shared host limiter hit process-inspection EPERM and invalidated nested admission. Preserve that original failure, do not replay automatically. Independent recovery confirmed no owned phone/host work and recovered only the owned limiter job. Model-free exporter schema regression was reproduced and repaired without changing raw evidence or frozen references. Further matched runs, mixed speech, listening, profiler, cache/storage and lifecycle coverage remain unqualified. No default promotion, baseline asset replacement or new app slot.

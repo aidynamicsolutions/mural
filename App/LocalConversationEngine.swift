@@ -543,6 +543,14 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
     override init() {
         super.init()
         logger.notice("local_talk_asr_backend backend=\(Self.conversationASRBackend, privacy: .public)")
+        #if MURAL_BREEZE_PAL4_TRIAL
+        if let arm = try? BreezeTrialSelection.parse(ProcessInfo.processInfo.arguments, enabled: true),
+           let executable = Bundle.main.executableURL, let bytes = try? Data(contentsOf: executable, options: .mappedIfSafe) {
+            let manifest = arm == .pal4 ? BreezePAL4TrialPin.manifestSHA256 : SpeechPackagePins.breezeManifest
+            let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            logger.notice("breeze_trial_launch arm=\(arm.rawValue, privacy: .public) model=\(BreezeEnglishRecognizer.identity, privacy: .public) manifest=\(manifest, privacy: .public) executable_sha256=\(hash, privacy: .public)")
+        }
+        #endif
         #if MURAL_BREEZE_MEMORY_POC && !targetEnvironment(simulator)
         logger.notice("breeze_memory_poc enabled=true thermal_stop_retained=true")
         #endif
@@ -771,11 +779,15 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
         }
     }
 
+    static func recognizerIdentity(for pair: LocalSpeechPair) -> String {
+        pair == .vietnameseEnglish ? pair.recognizerID : BreezeEnglishRecognizer.identity
+    }
+
     static func backendDescription(for pair: LocalSpeechPair) -> String {
         switch pair {
         case .vietnameseEnglish: return conversationASRBackend
-        case .taiwanMandarinEnglish: return "Breeze PAL8 · WhisperKit / Core ML"
-        case .mainlandMandarinEnglish: return "Breeze PAL8 · Simplified display · raw recognition retained"
+        case .taiwanMandarinEnglish: return "\(BreezeEnglishRecognizer.displayName) · WhisperKit / Core ML"
+        case .mainlandMandarinEnglish: return "\(BreezeEnglishRecognizer.displayName) · Simplified display · raw recognition retained"
         }
     }
 
@@ -793,8 +805,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
                   ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else { throw SpeechPackageError.incompatible }
             // Same location and full-verification owner as existing Traditional Chinese.
             // Never touch active-zh-CN-en.json or load the retained FireRed package.
-            let folder = try LocalSpeechProvisioning.installedDirectory(for: .taiwanMandarinEnglish, component: "support") ??
-                URL.applicationSupportDirectory.appending(path: "BreezeASR25/\(BreezeEnglishRecognizer.identity)")
+            let folder = try BreezeEnglishRecognizer.assetDirectory()
             return manager.fileExists(atPath: folder.appending(path: "manifest.json").path)
         }
         if let folder = try LocalSpeechProvisioning.installedDirectory(for: pair, component: "support") {
@@ -858,7 +869,7 @@ extension CancellableWhisperModel: TextDecoding where Model: TextDecoding {
             try Task.checkCancellation()
             guard !thermalStopped else { throw LocalTTSError.phoneTooWarm }
             // Retain the existing guard with either voice; it does not qualify FireRed's memory use.
-            startTTSConversationMonitor(model: pair.recognizerID)
+            startTTSConversationMonitor(model: Self.recognizerIdentity(for: pair))
         }
         submittedAt = nil; sendToPlaybackSeconds = nil
         await ttsCleanup?.value
